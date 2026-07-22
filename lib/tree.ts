@@ -42,6 +42,15 @@ export function buildTree(filePaths: string[]): TreeNode[] {
   return root.children ?? []
 }
 
+/**
+ * Every diagram-file path at or under a node — the node itself when it's a file,
+ * or all leaf files beneath it when it's a directory. Used to delete a folder.
+ */
+export function collectFilePaths(node: TreeNode): string[] {
+  if (node.type === 'file') return [node.path]
+  return (node.children ?? []).flatMap(collectFilePaths)
+}
+
 function sortTree(node: TreeNode): void {
   if (!node.children) return
   node.children.sort((a, b) => {

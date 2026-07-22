@@ -1,12 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ChevronRight,
   FolderGit2,
   History,
   PanelLeft,
   Plus,
+  RefreshCw,
   Save,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -18,6 +19,7 @@ import AuthButton from './AuthButton'
 import RepoPicker from './RepoPicker'
 import FileTree from './FileTree'
 import ConflictModal from './ConflictModal'
+import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
 import { Button } from '@/components/ui/button'
@@ -33,16 +35,18 @@ import {
   SCRATCH_DOC_ID,
 } from '@/lib/storage'
 import { DEFAULT_THEME_ID } from '@/lib/themes'
-import { isDiagramFile } from '@/lib/tree'
+import { buildTree, collectFilePaths, isDiagramFile } from '@/lib/tree'
+import { cn } from '@/lib/utils'
 import {
   listTree,
   readFile,
   readFileAtRef,
   listFileCommits,
   commitFile,
+  deletePaths,
   type TreeResult,
 } from '@/app/actions/github'
-import type { AppConfig, FileCommit, Repo, SessionUser } from '@/lib/types'
+import type { AppConfig, FileCommit, Repo, SessionUser, TreeNode } from '@/lib/types'
 
 export interface AppShellProps {
   user: SessionUser | null
@@ -75,6 +79,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     bakeThemeOnExport: true,
   })
   const [hydrated, setHydrated] = useState(false)
+  const [isMac, setIsMac] = useState(false)
 
   const [text, setText] = useState(SAMPLE)
   const [baseline, setBaseline] = useState(SAMPLE)
@@ -88,6 +93,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [saving, setSaving] = useState(false)
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflictBusy, setConflictBusy] = useState(false)
+
+  const [deleteTarget, setDeleteTarget] = useState<TreeNode | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
@@ -111,6 +120,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const baseName = openPath
     ? (openPath.split('/').pop() ?? 'diagram').replace(/\.(md|mmd|mermaid)$/i, '')
     : 'diagram'
+
+  // A just-created file has no sha and isn't in the fetched tree yet; splice its
+  // path in so it shows in the sidebar (flagged unsaved) before the first commit.
+  const pendingPath = repo && openPath && loadedSha === null ? openPath : null
+  const dirtyPath = dirty && openPath ? openPath : null
+  const displayNodes = useMemo(() => {
+    const base = tree?.tree ?? []
+    if (!pendingPath) return base
+    const paths = base.flatMap(collectFilePaths)
+    if (!paths.includes(pendingPath)) paths.push(pendingPath)
+    return buildTree(paths)
+  }, [tree, pendingPath])
 
   const refreshTree = useCallback(async (target: { owner: string; name: string }) => {
     setTree(null)
@@ -214,6 +235,55 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
   }, [repo, openPrompt])
 
+  // Reset the editor to a fresh scratch doc — used when the file being edited is
+  // deleted out from under it. Baseline is left empty (not equal to the text) so
+  // the doc reads as unsaved and Save is enabled, prompting for a new path.
+  const detachEditor = useCallback(() => {
+    setOpenPath((prev) => {
+      if (prev) clearDraft(docId)
+      return null
+    })
+    setLoadedSha(null)
+    setBaseline('')
+    setText(NEW_TEMPLATE)
+  }, [docId])
+
+  const requestDelete = useCallback((node: TreeNode) => {
+    setDeleteTarget(node)
+    setDeleteOpen(true)
+  }, [])
+
+  const confirmDelete = useCallback(async () => {
+    if (!repo || !deleteTarget) return
+    const paths = collectFilePaths(deleteTarget)
+    const affectsOpen = !!openPath && paths.includes(openPath)
+    // A never-committed file (the pending new one) only exists locally — there is
+    // nothing on GitHub to remove, so skip the API for it.
+    const committed = paths.filter((p) => p !== pendingPath)
+    if (committed.length === 0) {
+      if (affectsOpen) detachEditor()
+      setDeleteOpen(false)
+      setDeleteTarget(null)
+      return
+    }
+    setDeleteBusy(true)
+    const res = await deletePaths(repo.owner, repo.name, committed)
+    setDeleteBusy(false)
+    if (!res.ok) {
+      toast.error(res.error.message)
+      return
+    }
+    toast.success(
+      res.data.deleted === 1
+        ? `Deleted ${committed[0]}`
+        : `Deleted ${res.data.deleted} files`,
+    )
+    setDeleteOpen(false)
+    setDeleteTarget(null)
+    if (affectsOpen) detachEditor()
+    void refreshTree(repo)
+  }, [repo, deleteTarget, pendingPath, openPath, detachEditor, refreshTree])
+
   const commitCurrent = useCallback(
     async (path: string, sha: string | undefined, content: string) => {
       if (!repo) return
@@ -254,6 +324,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     void commitCurrent(openPath, loadedSha ?? undefined, text)
   }, [repo, dirty, saving, openPath, loadedSha, text, commitCurrent, openPrompt])
+
+  // Detect the platform for the correct modifier label (⌘ vs Ctrl).
+  useEffect(() => {
+    setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
+  }, [])
+
+  // Keyboard shortcuts: ⌘/Ctrl+S saves, ⌘/Ctrl+N starts a new diagram. Only when
+  // GitHub repo features are active (the sidebar/save flows require a repo).
+  useEffect(() => {
+    if (!githubEnabled) return
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      const key = e.key.toLowerCase()
+      if (key === 's') {
+        e.preventDefault()
+        onSave()
+      } else if (key === 'n') {
+        e.preventDefault()
+        newDiagram()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [githubEnabled, onSave, newDiagram])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
@@ -351,6 +445,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const onThemeChange = useCallback((id: string) => updateConfig({ themeId: id }), [updateConfig])
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
   const showSidebar = githubEnabled && !!repo && sidebarOpen
+  const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
+  const newHint = isMac ? '⌘ N' : 'Ctrl + N'
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -387,8 +483,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <span className="text-xs text-muted-foreground">
                 {dirty ? '● Unsaved' : 'Saved'}
               </span>
-              <Button size="sm" onClick={onSave} disabled={!canSave}>
+              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Save (${saveHint})`}>
                 <Save /> {saving ? 'Saving…' : 'Save'}
+                <kbd className="ml-1 rounded border border-current/30 px-1 text-[10px] leading-relaxed font-medium opacity-70">
+                  {saveHint}
+                </kbd>
               </Button>
               {openPath && repo ? (
                 <Button size="sm" variant="ghost" onClick={openHistory}>
@@ -416,9 +515,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
           <aside className="flex w-64 flex-none flex-col overflow-hidden border-r bg-sidebar">
             <div className="flex items-center justify-between px-3 py-2.5">
               <span className="truncate text-sm font-medium">{repo?.name}</span>
-              <Button size="icon-xs" variant="ghost" onClick={newDiagram} title="New diagram">
-                <Plus />
-              </Button>
+              <div className="flex items-center gap-0.5">
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  onClick={() => repo && void refreshTree(repo)}
+                  disabled={!repo || tree === null}
+                  title="Refresh files"
+                >
+                  <RefreshCw className={cn(tree === null && 'animate-spin')} />
+                </Button>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  onClick={newDiagram}
+                  title={`New diagram (${newHint})`}
+                >
+                  <Plus />
+                </Button>
+              </div>
             </div>
             <Separator />
             <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -432,7 +547,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
               ) : tree === null ? (
                 <p className="p-2 text-sm text-muted-foreground">Loading files…</p>
               ) : (
-                <FileTree nodes={tree.tree} activePath={openPath} onOpenFile={openFile} />
+                <FileTree
+                  nodes={displayNodes}
+                  activePath={openPath}
+                  dirtyPath={dirtyPath}
+                  onOpenFile={openFile}
+                  onDelete={requestDelete}
+                />
               )}
             </div>
           </aside>
@@ -493,6 +614,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       {prompt ? (
         <PromptModal open={promptOpen} onOpenChange={setPromptOpen} {...prompt} />
       ) : null}
+
+      <DeleteModal
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        target={deleteTarget}
+        fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
+        busy={deleteBusy}
+        onConfirm={confirmDelete}
+      />
 
       {openPath ? (
         <HistoryPanel

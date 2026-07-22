@@ -58,7 +58,10 @@ export default function HistoryPanel({
 }: HistoryPanelProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-4xl">
+      <SheetContent
+        side="right"
+        className="w-full gap-0 p-0 data-[side=right]:sm:max-w-4xl"
+      >
         <SheetHeader className="border-b">
           <SheetTitle>Version history</SheetTitle>
           <SheetDescription className="font-mono text-xs">{path}</SheetDescription>

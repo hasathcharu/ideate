@@ -121,7 +121,12 @@ export async function listTree(
       .filter(isDiagramFile)
     return ok({ tree: buildTree(filePaths), truncated: Boolean(data.truncated) })
   } catch (error) {
-    return err(mapError(error))
+    // An empty repo (no commits / no `main` branch yet) 404s here. That isn't an
+    // error for the browser — it just means there are no files yet, so surface it
+    // as an empty tree and let the sidebar show its empty state.
+    const mapped = mapError(error)
+    if (mapped.kind === 'not_found') return ok({ tree: [], truncated: false })
+    return err(mapped)
   }
 }
 
@@ -195,6 +200,53 @@ export async function listFileCommits(
   } catch (error) {
     return err(mapError(error))
   }
+}
+
+/**
+ * Delete = commit a removal. Removes each path from `main`, one commit per file
+ * (the file's current blob sha is fetched immediately before deletion). Used for
+ * both a single file (`paths` of length 1) and a directory (every diagram file
+ * beneath it). Missing paths are skipped so a partially-stale tree still cleans
+ * up. Uses only the high-level contents API — no git-data ref rewriting.
+ */
+export async function deletePaths(
+  owner: string,
+  repo: string,
+  paths: string[],
+): Promise<ActionResult<{ deleted: number }>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    let deleted = 0
+    for (const path of paths) {
+      const sha = await getFileSha(octokit, owner, repo, path)
+      if (!sha) continue
+      await octokit.repos.deleteFile({
+        owner,
+        repo,
+        path,
+        message: `Delete ${path} via keep-mermaid`,
+        sha,
+        branch: MAIN_BRANCH,
+      })
+      deleted += 1
+    }
+    return ok({ deleted })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** Current blob sha of a file on main, or null if it isn't a plain file. */
+async function getFileSha(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+): Promise<string | null> {
+  const { data } = await octokit.repos.getContent({ owner, repo, path, ref: MAIN_BRANCH })
+  if (Array.isArray(data) || data.type !== 'file') return null
+  return data.sha
 }
 
 /**

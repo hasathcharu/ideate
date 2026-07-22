@@ -59,7 +59,13 @@ async function withResolvedSvg<T>(
   host.style.cssText =
     'position:fixed;left:-99999px;top:0;width:0;height:0;overflow:hidden;'
   // Base palette lives on the host so the SVG's derived color-mix resolves.
-  Object.assign(host.style, colorsToCssVars(colors))
+  // NOTE: custom properties must go through setProperty — assigning them onto
+  // the CSSStyleDeclaration (e.g. Object.assign / host.style['--x']=…) is a
+  // silent no-op, which would leave --mm-bg/--mm-fg unset and collapse every
+  // fg-derived color to its initial (black) in the export.
+  for (const [prop, value] of Object.entries(colorsToCssVars(colors))) {
+    host.style.setProperty(prop, value)
+  }
   host.innerHTML = raw
   document.body.appendChild(host)
 

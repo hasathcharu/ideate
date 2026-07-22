@@ -2,8 +2,19 @@
 
 import { useEffect, useRef } from 'react'
 import { EditorState, Compartment } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { EditorView, keymap, type Panel } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
+import {
+  search,
+  getSearchQuery,
+  setSearchQuery,
+  SearchQuery,
+  findNext,
+  findPrevious,
+  replaceNext,
+  replaceAll,
+  closeSearchPanel,
+} from '@codemirror/search'
 import { indentWithTab } from '@codemirror/commands'
 import {
   StreamLanguage,
@@ -67,6 +78,180 @@ function highlightStyle(dark: boolean): HighlightStyle {
   ])
 }
 
+/* Inline icons for the custom search panel (CodeMirror DOM is not React, so we
+ * hand-build small SVGs rather than use lucide components). */
+const ARROW_UP =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12.5V4M4 7.5 8 3.5l4 4"/></svg>'
+const ARROW_DOWN =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5V12M4 8.5l4 4 4-4"/></svg>'
+const CLOSE_X =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
+
+/**
+ * A VSCode-styled search / replace panel. Replaces CodeMirror's default checkbox
+ * options with icon toggles (Aa / ab̲ / .*), uses up/down arrows for previous /
+ * next, drops the "all" (select-all-matches) button, and capitalizes the
+ * Replace / Replace All actions.
+ */
+function createSearchPanel(view: EditorView): Panel {
+  const query = () => getSearchQuery(view.state)
+
+  const commit = (patch: Partial<ConstructorParameters<typeof SearchQuery>[0]>) => {
+    const q = query()
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: q.search,
+          replace: q.replace,
+          caseSensitive: q.caseSensitive,
+          wholeWord: q.wholeWord,
+          regexp: q.regexp,
+          ...patch,
+        }),
+      ),
+    })
+  }
+
+  const searchField = document.createElement('input')
+  searchField.className = 'cm-textfield'
+  searchField.placeholder = 'Find'
+  searchField.setAttribute('main-field', 'true')
+  searchField.setAttribute('aria-label', 'Find')
+  searchField.value = query().search
+  searchField.addEventListener('input', () => commit({ search: searchField.value }))
+
+  const replaceField = document.createElement('input')
+  replaceField.className = 'cm-textfield'
+  replaceField.placeholder = 'Replace'
+  replaceField.setAttribute('aria-label', 'Replace')
+  replaceField.value = query().replace
+  replaceField.addEventListener('input', () => commit({ replace: replaceField.value }))
+
+  const toggles: Array<() => void> = []
+  function makeToggle(
+    html: string,
+    title: string,
+    get: () => boolean,
+    set: (v: boolean) => void,
+  ): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'cm-search-toggle'
+    b.title = title
+    b.setAttribute('aria-label', title)
+    b.innerHTML = html
+    const sync = () => b.setAttribute('aria-pressed', String(get()))
+    sync()
+    toggles.push(sync)
+    b.addEventListener('click', () => {
+      set(!get())
+      sync()
+      searchField.focus()
+    })
+    return b
+  }
+
+  function iconButton(html: string, title: string, run: () => void): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'cm-search-nav'
+    b.title = title
+    b.setAttribute('aria-label', title)
+    b.innerHTML = html
+    b.addEventListener('click', () => run())
+    return b
+  }
+
+  function textButton(label: string, run: () => void): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className = 'cm-button'
+    b.textContent = label
+    b.addEventListener('click', () => run())
+    return b
+  }
+
+  const caseToggle = makeToggle(
+    'Aa',
+    'Match Case',
+    () => query().caseSensitive,
+    (v) => commit({ caseSensitive: v }),
+  )
+  const wordToggle = makeToggle(
+    '<u>ab</u>',
+    'Match Whole Word',
+    () => query().wholeWord,
+    (v) => commit({ wholeWord: v }),
+  )
+  const regexToggle = makeToggle(
+    '.*',
+    'Use Regular Expression',
+    () => query().regexp,
+    (v) => commit({ regexp: v }),
+  )
+
+  const prevBtn = iconButton(ARROW_UP, 'Previous Match', () => findPrevious(view))
+  const nextBtn = iconButton(ARROW_DOWN, 'Next Match', () => findNext(view))
+  const closeBtn = iconButton(CLOSE_X, 'Close', () => {
+    closeSearchPanel(view)
+    view.focus()
+  })
+  closeBtn.classList.add('cm-search-close')
+
+  const searchRow = document.createElement('div')
+  searchRow.className = 'cm-search-row'
+  searchRow.append(
+    searchField,
+    caseToggle,
+    wordToggle,
+    regexToggle,
+    prevBtn,
+    nextBtn,
+    closeBtn,
+  )
+
+  const replaceRow = document.createElement('div')
+  replaceRow.className = 'cm-search-row'
+  replaceRow.append(
+    replaceField,
+    textButton('Replace', () => replaceNext(view)),
+    textButton('Replace All', () => replaceAll(view)),
+  )
+
+  const dom = document.createElement('div')
+  dom.className = 'cm-search'
+  dom.onkeydown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeSearchPanel(view)
+      view.focus()
+    } else if (e.key === 'Enter' && e.target === searchField) {
+      e.preventDefault()
+      if (e.shiftKey) findPrevious(view)
+      else findNext(view)
+    } else if (e.key === 'Enter' && e.target === replaceField) {
+      e.preventDefault()
+      replaceNext(view)
+    }
+  }
+  dom.append(searchRow, replaceRow)
+
+  return {
+    dom,
+    top: true,
+    update(update) {
+      const q = getSearchQuery(update.state)
+      if (document.activeElement !== searchField && searchField.value !== q.search) {
+        searchField.value = q.search
+      }
+      if (document.activeElement !== replaceField && replaceField.value !== q.replace) {
+        replaceField.value = q.replace
+      }
+      for (const sync of toggles) sync()
+    },
+  }
+}
+
 function editorTheme(dark: boolean) {
   // Colors reference the shadcn design tokens (driven from the active diagram
   // theme), so the editor surface matches the rest of the site.
@@ -100,6 +285,84 @@ function editorTheme(dark: boolean) {
         {
           backgroundColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
         },
+      // Search / replace panel (⌘F): custom VSCode-styled panel themed with the
+      // app's design tokens instead of CodeMirror's default light chrome.
+      '.cm-panels': {
+        backgroundColor: 'var(--popover)',
+        color: 'var(--popover-foreground)',
+      },
+      '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border)' },
+      '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--border)' },
+      '.cm-panel.cm-search': {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+        padding: '8px 10px',
+        fontSize: '12px',
+      },
+      '.cm-search-row': { display: 'flex', alignItems: 'center', gap: '4px' },
+      '.cm-search-row .cm-textfield': { flex: '1 1 auto', minWidth: '0' },
+      '.cm-textfield': {
+        backgroundColor: 'var(--input)',
+        color: 'var(--foreground)',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '4px 8px',
+        fontSize: '12px',
+      },
+      '.cm-textfield:focus': { outline: 'none', borderColor: 'var(--ring)' },
+      '.cm-search-toggle': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: '22px',
+        height: '22px',
+        padding: '0 4px',
+        fontSize: '12px',
+        fontFamily:
+          "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)",
+        lineHeight: '1',
+        color: 'var(--muted-foreground)',
+        background: 'transparent',
+        border: '1px solid transparent',
+        borderRadius: '4px',
+        cursor: 'pointer',
+      },
+      '.cm-search-toggle:hover': { backgroundColor: 'var(--accent)' },
+      '.cm-search-toggle[aria-pressed=true]': {
+        color: 'var(--foreground)',
+        backgroundColor: 'color-mix(in srgb, var(--primary) 25%, transparent)',
+        borderColor: 'color-mix(in srgb, var(--primary) 45%, transparent)',
+      },
+      '.cm-search-nav': {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '22px',
+        height: '22px',
+        padding: '0',
+        color: 'var(--muted-foreground)',
+        background: 'transparent',
+        border: '1px solid transparent',
+        borderRadius: '4px',
+        cursor: 'pointer',
+      },
+      '.cm-search-nav:hover': {
+        backgroundColor: 'var(--accent)',
+        color: 'var(--foreground)',
+      },
+      '.cm-search-close': { marginLeft: 'auto' },
+      '.cm-button': {
+        backgroundColor: 'var(--secondary)',
+        backgroundImage: 'none',
+        color: 'var(--secondary-foreground)',
+        border: '1px solid var(--border)',
+        borderRadius: '6px',
+        padding: '4px 10px',
+        fontSize: '12px',
+        cursor: 'pointer',
+      },
+      '.cm-button:hover': { backgroundColor: 'var(--accent)' },
     },
     { dark },
   )
@@ -130,6 +393,7 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
         doc: value,
         extensions: [
           basicSetup,
+          search({ top: true, createPanel: createSearchPanel }),
           keymap.of([indentWithTab]),
           mermaidLanguage,
           themeCompartment.current.of(editorTheme(dark)),

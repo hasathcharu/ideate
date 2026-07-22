@@ -50,7 +50,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Connect a repository</DialogTitle>
           <DialogDescription>
@@ -91,7 +91,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
                     </span>
                     <Badge variant="outline" className="shrink-0 gap-1">
                       {repo.private ? <Lock className="size-3" /> : null}
-                      {repo.private ? 'private' : 'public'}
+                      {repo.private ? 'Private' : 'Public'}
                     </Badge>
                   </button>
                 </li>

@@ -116,6 +116,12 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Tailwind v4 resets buttons to the default cursor; restore the pointer on
+     every enabled button (native + shadcn) and button-role element. */
+  button:not(:disabled),
+  [role='button']:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 /* CodeMirror fills its pane and inherits the themed surface. */
