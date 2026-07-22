@@ -47,34 +47,25 @@ const mermaidLanguage = StreamLanguage.define<unknown>({
   },
 })
 
-function highlightStyle(dark: boolean): HighlightStyle {
-  const c = dark
-    ? {
-        keyword: '#c678dd',
-        comment: '#7f848e',
-        string: '#98c379',
-        operator: '#56b6c2',
-        atom: '#d19a66',
-        number: '#d19a66',
-        variable: '#abb2bf',
-      }
-    : {
-        keyword: '#a626a4',
-        comment: '#a0a1a7',
-        string: '#50a14f',
-        operator: '#0184bc',
-        atom: '#986801',
-        number: '#986801',
-        variable: '#383a42',
-      }
+/**
+ * Syntax colors derived from the active theme's CSS variables (set on :root by
+ * `useChromeTheme`), so highlighting tracks the selected diagram theme rather
+ * than a fixed palette. The themed palette is essentially accent (`--primary`) +
+ * `--foreground` + `--muted-foreground`, so this is an accent-weighted scheme
+ * rather than many independent hues — but it always conforms to the theme.
+ */
+function highlightStyle(): HighlightStyle {
+  const accent = 'var(--primary)'
+  // Blend the accent toward the foreground for secondary token colors.
+  const blend = (pct: number) => `color-mix(in oklab, var(--primary) ${pct}%, var(--foreground))`
   return HighlightStyle.define([
-    { tag: t.keyword, color: c.keyword, fontWeight: '600' },
-    { tag: t.comment, color: c.comment, fontStyle: 'italic' },
-    { tag: t.string, color: c.string },
-    { tag: t.operator, color: c.operator },
-    { tag: [t.atom, t.bool], color: c.atom },
-    { tag: t.number, color: c.number },
-    { tag: t.variableName, color: c.variable },
+    { tag: t.keyword, color: accent, fontWeight: '600' },
+    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
+    { tag: t.string, color: blend(55) },
+    { tag: t.operator, color: accent },
+    { tag: [t.atom, t.bool], color: blend(40) },
+    { tag: t.number, color: blend(40) },
+    { tag: t.variableName, color: 'var(--foreground)' },
   ])
 }
 
@@ -398,7 +389,7 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
           mermaidLanguage,
           themeCompartment.current.of(editorTheme(dark)),
           highlightCompartment.current.of(
-            syntaxHighlighting(highlightStyle(dark)),
+            syntaxHighlighting(highlightStyle()),
           ),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
@@ -430,17 +421,14 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
     })
   }, [value])
 
-  // React to light/dark switches without remounting.
+  // React to light/dark switches without remounting. The highlight style is
+  // CSS-variable based (tracks the theme live via :root), so only the editor
+  // theme — which carries CodeMirror's own `dark` flag — needs reconfiguring.
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
     view.dispatch({
-      effects: [
-        themeCompartment.current.reconfigure(editorTheme(dark)),
-        highlightCompartment.current.reconfigure(
-          syntaxHighlighting(highlightStyle(dark)),
-        ),
-      ],
+      effects: themeCompartment.current.reconfigure(editorTheme(dark)),
     })
   }, [dark])
 

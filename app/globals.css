@@ -125,12 +125,38 @@
 }
 
 /* CodeMirror fills its pane and inherits the themed surface. */
+.editor-host {
+  height: 100%;
+  min-height: 0;
+}
 .cm-editor {
   height: 100%;
   background: transparent;
 }
 .cm-editor .cm-scroller {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  /* Firefox: thin thumb, no track color. */
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
+}
+/* WebKit: transparent track, thin rounded thumb (inset via a transparent border). */
+.cm-editor .cm-scroller::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+.cm-editor .cm-scroller::-webkit-scrollbar-track,
+.cm-editor .cm-scroller::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.cm-editor .cm-scroller::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.cm-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--foreground) 38%, transparent);
 }
 
 /* Live preview: the diagram SVG scales to fit its container. */
@@ -140,4 +166,23 @@
 .preview-svg svg {
   max-width: 100%;
   height: auto;
+}
+
+/* Zoomable canvas: the diagram is drawn at natural size and positioned by a
+   transform, so the fit-to-container caps above must not apply. */
+.preview-zoom {
+  touch-action: none;
+}
+.preview-zoom .preview-svg,
+.preview-zoom .preview-svg svg {
+  max-width: none;
+}
+.preview-zoom .preview-svg svg {
+  height: auto;
+  display: block;
+}
+/* The zoomed diagram fills the viewport; browsers show black by default. */
+.preview-zoom:fullscreen {
+  width: 100vw;
+  height: 100vh;
 }

@@ -1,5 +1,6 @@
 import { renderMermaidSVG, type DiagramColors, type RenderOptions } from 'beautiful-mermaid'
 import { mixSrgb, parseColor, toHex } from './color'
+import { enhanceSequenceSVG } from './sequence'
 
 /**
  * beautiful-mermaid emits an SVG whose element colors reference internal
@@ -30,9 +31,11 @@ const LIVE_OPTIONS: RenderOptions = {
   transparent: true,
 }
 
-/** Render the theme-agnostic SVG (colors come from inherited CSS variables). */
+/** Render the theme-agnostic SVG (colors come from inherited CSS variables).
+ *  Sequence diagrams are post-processed to widen label spacing and mirror the
+ *  participants to the bottom (see lib/sequence.ts). */
 export function renderThemeableSVG(text: string): string {
-  return renderMermaidSVG(text, LIVE_OPTIONS)
+  return enhanceSequenceSVG(renderMermaidSVG(text, LIVE_OPTIONS))
 }
 
 export interface RenderResult {

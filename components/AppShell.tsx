@@ -330,17 +330,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
   }, [])
 
-  // Keyboard shortcuts: ⌘/Ctrl+S saves, ⌘/Ctrl+N starts a new diagram. Only when
-  // GitHub repo features are active (the sidebar/save flows require a repo).
+  // Keyboard shortcuts (only when GitHub repo features are active): ⌘/Ctrl+S
+  // saves; ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because
+  // browsers reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it.
+  // `e.code` (physical key) is used so macOS Option+N (a dead key) still matches.
   useEffect(() => {
     if (!githubEnabled) return
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-      const key = e.key.toLowerCase()
-      if (key === 's') {
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (e.code === 'KeyS' && !e.altKey) {
         e.preventDefault()
         onSave()
-      } else if (key === 'n') {
+      } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
       }
@@ -446,7 +447,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
   const showSidebar = githubEnabled && !!repo && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
-  const newHint = isMac ? '⌘ N' : 'Ctrl + N'
+  const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
