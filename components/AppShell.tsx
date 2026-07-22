@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
   FolderGit2,
@@ -79,9 +79,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
     repo: null,
     themeId: DEFAULT_THEME_ID,
     bakeThemeOnExport: true,
+    splitRatio: 0.5,
   })
   const [hydrated, setHydrated] = useState(false)
   const [isMac, setIsMac] = useState(false)
+
+  // Live editor/preview split ratio (persisted to config on drag end).
+  const [editorRatio, setEditorRatio] = useState(0.5)
+  const paneRowRef = useRef<HTMLDivElement>(null)
 
   const [text, setText] = useState(SAMPLE)
   const [baseline, setBaseline] = useState(SAMPLE)
@@ -147,6 +152,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   useEffect(() => {
     const stored = loadConfig()
     setConfig(stored)
+    setEditorRatio(stored.splitRatio)
     const draft = loadDraft(SCRATCH_DOC_ID)
     if (draft && draft.content !== SAMPLE) {
       setText(draft.content)
@@ -178,6 +184,55 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return next
     })
   }, [])
+
+  const MIN_RATIO = 0.2
+  const MAX_RATIO = 0.8
+
+  const startDividerDrag = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      const row = paneRowRef.current
+      if (!row) return
+      const onMove = (ev: PointerEvent) => {
+        const rect = row.getBoundingClientRect()
+        if (rect.width === 0) return
+        const raw = (ev.clientX - rect.left) / rect.width
+        setEditorRatio(Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw)))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setEditorRatio((r) => {
+          updateConfig({ splitRatio: r })
+          return r
+        })
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [updateConfig],
+  )
+
+  const onDividerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 0.1 : 0.02
+      let delta = 0
+      if (e.key === 'ArrowLeft') delta = -step
+      else if (e.key === 'ArrowRight') delta = step
+      else return
+      e.preventDefault()
+      setEditorRatio((r) => {
+        const next = Math.min(MAX_RATIO, Math.max(MIN_RATIO, r + delta))
+        updateConfig({ splitRatio: next })
+        return next
+      })
+    },
+    [updateConfig],
+  )
 
   const openPrompt = useCallback((spec: PromptSpec) => {
     setPrompt(spec)
@@ -650,11 +705,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
             )}
           </div>
 
-          <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_1px_minmax(0,1fr)]">
+          <div
+            ref={paneRowRef}
+            className="grid min-h-0 flex-1"
+            style={{
+              gridTemplateColumns: `minmax(0,${editorRatio}fr) 6px minmax(0,${1 - editorRatio}fr)`,
+            }}
+          >
             <section className="min-h-0 overflow-auto" aria-label="Editor">
               <Editor value={text} onChange={setText} dark={dark} />
             </section>
-            <div className="bg-border" role="separator" aria-orientation="vertical" />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize editor and preview"
+              aria-valuemin={20}
+              aria-valuemax={80}
+              aria-valuenow={Math.round(editorRatio * 100)}
+              tabIndex={0}
+              onPointerDown={startDividerDrag}
+              onKeyDown={onDividerKeyDown}
+              className="group flex cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
+            >
+              <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+            </div>
             <section className="min-h-0 overflow-auto" aria-label="Preview">
               <Preview text={debouncedText} colors={colors} />
             </section>

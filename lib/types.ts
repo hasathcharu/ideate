@@ -35,6 +35,8 @@ export interface AppConfig {
   repo: { owner: string; name: string } | null
   themeId: string
   bakeThemeOnExport: boolean
+  /** Editor pane width as a fraction (0–1) of the editor/preview split. */
+  splitRatio: number
 }
 
 /** A node in the repository file tree. */

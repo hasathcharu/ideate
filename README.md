@@ -1,4 +1,4 @@
-# keep-mermaid
+# SketchMade
 
 A web-based Mermaid diagram editor where **your own GitHub repository is the
 database**. There is no application database. You sign in with GitHub, connect a

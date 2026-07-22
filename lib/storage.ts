@@ -26,6 +26,7 @@ const DEFAULT_CONFIG: AppConfig = {
   repo: null,
   themeId: DEFAULT_THEME_ID,
   bakeThemeOnExport: true,
+  splitRatio: 0.5,
 }
 
 export function loadConfig(): AppConfig {

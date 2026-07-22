@@ -28,6 +28,43 @@ const COLOR_ATTRS: Array<{ attr: string; cssProp: 'fill' | 'stroke' | 'stopColor
   { attr: 'color', cssProp: 'color' },
 ]
 
+/**
+ * Element types that actually paint. Some diagrams (notably xychart) color their
+ * text/bars/lines exclusively through `<style>` class rules — `.xychart-title {
+ * fill: var(--_text) }` — with no per-element color attribute. Those rules are
+ * discarded by `cleanStyleBlock`, so we must first read the browser-computed
+ * fill/stroke off these shapes and inline it. Restricting to painting tags avoids
+ * slapping a default black fill onto structural wrappers (`<g>`, `<svg>`).
+ */
+const PAINT_TAGS = new Set([
+  'path',
+  'rect',
+  'circle',
+  'ellipse',
+  'line',
+  'polygon',
+  'polyline',
+  'text',
+  'tspan',
+  'stop',
+])
+
+/**
+ * Non-color presentation properties the same class rules set (bar/line widths,
+ * grid-dot and line-shadow opacity, dash patterns). Lost with the style block
+ * unless inlined, which would leave hairline strokes and full-opacity dots in the
+ * export. Inlined verbatim (units stripped) since they carry no CSS variables.
+ */
+const GEOMETRY_PROPS = [
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'stroke-dasharray',
+  'opacity',
+  'fill-opacity',
+  'stroke-opacity',
+] as const
+
 export interface StandaloneSvg {
   /** The fully self-contained SVG markup (literal colors, no external refs). */
   markup: string
@@ -92,7 +129,14 @@ async function withResolvedSvg<T>(
   }
 }
 
-/** Replace every `var(...)`-based color attribute with its computed literal. */
+/**
+ * Inline every color that resolves live in the browser but wouldn't survive in a
+ * standalone file: colors referenced through a `var(...)` attribute (every
+ * diagram type) AND colors applied purely via `<style>` class rules on painting
+ * shapes/text (xychart), which the subsequent `cleanStyleBlock` would discard.
+ * Also inlines the non-color presentation props those rules set so geometry and
+ * opacity are preserved.
+ */
 function inlineComputedColors(svg: SVGSVGElement, colors: DiagramColors): void {
   const fallback = resolveThemeVariables(colors)
   const elements = [svg, ...Array.from(svg.querySelectorAll('*'))] as Element[]
@@ -101,18 +145,35 @@ function inlineComputedColors(svg: SVGSVGElement, colors: DiagramColors): void {
       el instanceof SVGElement || el instanceof HTMLElement
         ? getComputedStyle(el)
         : null
+    const paints = PAINT_TAGS.has(el.tagName.toLowerCase())
+
     for (const { attr, cssProp } of COLOR_ATTRS) {
       const value = el.getAttribute(attr)
-      if (!value || !value.includes('var(')) continue
-      const resolved = computed?.[cssProp]
+      const viaVar = !!value && value.includes('var(')
+      // Class-rule fills/strokes only need harvesting on shapes/text; stop-color
+      // and `color` still travel through var() attributes when present.
+      const viaClass = paints && (attr === 'fill' || attr === 'stroke')
+      if (!viaVar && !viaClass) continue
+
+      const resolved = computed?.[cssProp]?.trim()
       if (resolved && resolved !== '' && resolved !== 'rgba(0, 0, 0, 0)') {
         // Normalize to #rrggbb. getComputedStyle may return rgb()/rgba() or a
         // newer color syntax; svg2pdf (PDF export) only reliably parses hex, so
-        // hex keeps SVG, PNG and PDF consistent.
+        // hex keeps SVG, PNG and PDF consistent. Non-colors (e.g. `none`,
+        // `url(#…)`) pass through untouched.
         const rgb = parseColor(resolved)
         el.setAttribute(attr, rgb ? toHex(rgb) : resolved)
-      } else {
+      } else if (viaVar) {
         el.setAttribute(attr, resolveViaFallback(value, fallback))
+      }
+    }
+
+    if (paints && computed) {
+      for (const prop of GEOMETRY_PROPS) {
+        const resolved = computed.getPropertyValue(prop).trim()
+        if (resolved && resolved !== 'none') {
+          el.setAttribute(prop, resolved.replace(/px/g, ''))
+        }
       }
     }
   }
