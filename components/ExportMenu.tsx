@@ -7,14 +7,13 @@ import type { DiagramColors } from 'beautiful-mermaid'
 import {
   copyPNG,
   copySVG,
-  exportPDF,
   exportPNG,
   exportSVG,
 } from '@/lib/export'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -103,13 +102,13 @@ export default function ExportMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel>Export diagram</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={includeBackground}
-          onCheckedChange={(v) => onToggleBackground(Boolean(v))}
-          onSelect={(e) => e.preventDefault()}
-        >
-          Bake in theme background
-        </DropdownMenuCheckboxItem>
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+          <span className="text-sm">With Background</span>
+          <Switch
+            checked={includeBackground}
+            onCheckedChange={(v) => onToggleBackground(Boolean(v))}
+          />
+        </div>
         <DropdownMenuSeparator />
         {colors ? (
           <>
@@ -124,11 +123,6 @@ export default function ExportMenu({
               format="PNG"
               onDownload={() => exportPNG(text, colors, `${name}.png`, includeBackground)}
               onCopy={() => copyPNG(text, colors, includeBackground)}
-            />
-            <Row
-              label="PDF (vector)"
-              format="PDF"
-              onDownload={() => exportPDF(text, colors, `${name}.pdf`, includeBackground)}
             />
           </>
         ) : null}

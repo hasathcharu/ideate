@@ -64,7 +64,7 @@ components/
 lib/
   session.server.ts         server-only token reader (import 'server-only')
   mermaid.ts                render + colorsToCssVars (SVG) + colorsToChromeVars (shadcn tokens)
-  export.ts                 shared "resolve theme → standalone SVG" + SVG/PNG/PDF + copy
+  export.ts                 shared "resolve theme → standalone SVG" + SVG/PNG + copy
   color.ts                  sRGB color-mix math (fallback for export inlining)
   themes.ts                 theme registry (built-in + lazy Shiki)
   tree.ts, storage.ts, hooks.ts, types.ts
@@ -90,11 +90,11 @@ at CSS variables and set those variables on the container — theme switches are
 pure CSS update, no re-render (`Preview.tsx`, `lib/mermaid.ts`).
 
 For **export**, CSS variables and `color-mix` do not travel with a downloaded
-file (and svg2pdf understands neither), so `lib/export.ts` mounts the SVG
-offscreen with the theme applied, reads each element's browser-**computed** color
-via `getComputedStyle`, and inlines the literal value onto the attribute. The JS
-`color-mix` reproduction in `lib/color.ts` / `resolveThemeVariables` is a fallback
-only. All three exporters share this single resolve step.
+file, so `lib/export.ts` mounts the SVG offscreen with the theme applied, reads
+each element's browser-**computed** color via `getComputedStyle`, and inlines the
+literal value onto the attribute. The JS `color-mix` reproduction in
+`lib/color.ts` / `resolveThemeVariables` is a fallback only. Both exporters
+(SVG / PNG) share this single resolve step.
 
 ## Conventions
 

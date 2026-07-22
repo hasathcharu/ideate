@@ -3,21 +3,20 @@ import { colorsToCssVars, renderThemeableSVG, resolveThemeVariables } from './me
 import { parseColor, toHex } from './color'
 
 /**
- * Export pipeline. All three exporters (SVG / PNG / PDF) reuse a single
+ * Export pipeline. Both exporters (SVG / PNG) reuse a single
  * "resolve theme into a standalone SVG" step.
  *
  * Why this is needed (the classic gotcha): beautiful-mermaid colors elements
  * with CSS custom properties derived via `color-mix()`. Those resolve live in
- * the browser from properties set on a parent, but a *downloaded* file — or
- * svg2pdf, which understands neither CSS variables nor color-mix — has no such
- * parent, so it renders colorless. We therefore render offscreen with the theme
- * applied, read each element's browser-*computed* color, and inline the literal
- * value onto the element. The browser is the source of truth; a hand-rolled
- * color-mix reproduction (lib/mermaid.ts) is used only as a fallback.
+ * the browser from properties set on a parent, but a *downloaded* file has no
+ * such parent, so it renders colorless. We therefore render offscreen with the
+ * theme applied, read each element's browser-*computed* color, and inline the
+ * literal value onto the element. The browser is the source of truth; a
+ * hand-rolled color-mix reproduction (lib/mermaid.ts) is used only as a fallback.
  */
 
-/** A web-safe stack used for exports: renders identically offline, in canvas,
- *  and in svg2pdf without needing to embed or fetch a webfont. */
+/** A web-safe stack used for exports: renders identically offline and in canvas
+ *  without needing to embed or fetch a webfont. */
 const EXPORT_FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
 
@@ -80,8 +79,8 @@ interface ResolveOptions {
 /**
  * Render the diagram, mount it offscreen with `colors` applied, and inline every
  * computed color so the result stands alone. Runs a caller-supplied function
- * with the *attached, resolved* SVG element (needed by svg2pdf, which measures
- * layout via the live DOM), then always cleans up.
+ * with the *attached, resolved* SVG element (needed so computed styles and
+ * layout can be read from the live DOM), then always cleans up.
  */
 async function withResolvedSvg<T>(
   text: string,
@@ -94,10 +93,8 @@ async function withResolvedSvg<T>(
 
   const host = document.createElement('div')
   host.setAttribute('aria-hidden', 'true')
-  // Mount far offscreen but at NATURAL size — NOT clipped to 0×0. svg2pdf reads
-  // stroke geometry from the live DOM (getBBox/CTM); a 0×0 clipped host makes
-  // stroked shapes (boxes, lines) collapse to nothing in the PDF while text
-  // (positioned by x/y) survives. Full layout keeps vector strokes intact.
+  // Mount far offscreen but at NATURAL size — NOT clipped to 0×0, so getBBox/CTM
+  // report real geometry and computed styles resolve against a laid-out tree.
   host.style.cssText = 'position:fixed;left:-99999px;top:0;pointer-events:none;'
   // Base palette lives on the host so the SVG's derived color-mix resolves.
   // NOTE: custom properties must go through setProperty — assigning them onto
@@ -157,12 +154,11 @@ function inlineComputedColors(svg: SVGSVGElement, colors: DiagramColors): void {
 
       const resolved = computed?.[cssProp]?.trim()
       if (resolved && resolved !== '' && resolved !== 'rgba(0, 0, 0, 0)') {
-        // Normalize to #rrggbb. getComputedStyle may return rgb()/rgba() or a
-        // newer color syntax; svg2pdf (PDF export) only reliably parses hex, so
-        // hex keeps SVG, PNG and PDF consistent. Non-colors (e.g. `none`,
-        // `url(#…)`) pass through untouched.
-        const rgb = parseColor(resolved)
-        el.setAttribute(attr, rgb ? toHex(rgb) : resolved)
+        // Reduce to a concrete, standalone-safe color. getComputedStyle can hand
+        // back modern syntax the exported file's viewer may not resolve —
+        // notably `color-mix()` (xychart bar fills) — which then paints black.
+        // Non-colors (`none`, `url(#…)`) return null and pass through untouched.
+        el.setAttribute(attr, toConcreteColor(resolved) ?? resolved)
       } else if (viaVar) {
         el.setAttribute(attr, resolveViaFallback(value, fallback))
       }
@@ -179,6 +175,37 @@ function inlineComputedColors(svg: SVGSVGElement, colors: DiagramColors): void {
   }
 }
 
+let normalizeCtx: CanvasRenderingContext2D | null | undefined
+
+/**
+ * Collapse any browser-computed color string into a concrete, standalone-safe
+ * value (`#rrggbb` or `rgba(...)`). The canvas 2D context resolves every CSS
+ * color the browser understands — rgb/rgba, hex, `color-mix()`, `oklab/oklch`,
+ * `color()` — down to a literal, so nothing that needs a live document (a CSS
+ * variable, a `color-mix`) leaks into the exported file and renders black.
+ * Returns null for non-colors (`none`, `url(#…)`) and anything unparseable.
+ */
+function toConcreteColor(input: string): string | null {
+  const s = input.trim()
+  if (!s || s === 'none' || s.startsWith('url(')) return null
+  if (normalizeCtx === undefined) {
+    normalizeCtx = document.createElement('canvas').getContext('2d')
+  }
+  if (normalizeCtx) {
+    // A value the canvas rejects leaves fillStyle untouched, so probe against
+    // two different sentinels: equal results mean the input parsed cleanly.
+    normalizeCtx.fillStyle = '#000000'
+    normalizeCtx.fillStyle = s
+    const a = normalizeCtx.fillStyle
+    normalizeCtx.fillStyle = '#ffffff'
+    normalizeCtx.fillStyle = s
+    if (a === normalizeCtx.fillStyle) return a
+  }
+  // Fallback parser (drops alpha) — still better than a value that can't resolve.
+  const rgb = parseColor(s)
+  return rgb ? toHex(rgb) : null
+}
+
 /** Resolve a raw `var(--name, fallback)` string using the JS color map. */
 function resolveViaFallback(value: string, map: Record<string, string>): string {
   const match = value.match(/var\((--[\w-]+)/)
@@ -193,7 +220,7 @@ function cleanStyleBlock(svg: SVGSVGElement): void {
   if (style) {
     style.textContent = `text { font-family: ${EXPORT_FONT_STACK}; }`
   }
-  // Also set font on text nodes directly so var-unaware renderers (svg2pdf) obey.
+  // Also set font on text nodes directly so var-unaware renderers obey.
   svg.querySelectorAll('text, tspan').forEach((t) => {
     if (!t.getAttribute('font-family')) t.setAttribute('font-family', EXPORT_FONT_STACK)
   })
@@ -322,30 +349,4 @@ export async function copyPNG(
 ): Promise<void> {
   const blob = await renderPngBlob(text, colors, paintBackground)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
-}
-
-/**
- * PDF export — true vector via svg2pdf. The offscreen SVG is mounted at natural
- * size (see withResolvedSvg) so svg2pdf can measure stroke geometry and keep
- * entity boxes / relationship lines, and every color is inlined as literal hex
- * beforehand (svg2pdf understands neither CSS variables nor color-mix).
- */
-export async function exportPDF(
-  text: string,
-  colors: DiagramColors,
-  filename: string,
-  paintBackground: boolean,
-): Promise<void> {
-  const [{ jsPDF }, svg2pdfMod] = await Promise.all([import('jspdf'), import('svg2pdf.js')])
-  const svg2pdf = svg2pdfMod.svg2pdf
-
-  await withResolvedSvg(text, colors, { paintBackground }, async (svg, { width, height }) => {
-    const pdf = new jsPDF({
-      unit: 'pt',
-      format: [width, height],
-      orientation: width >= height ? 'landscape' : 'portrait',
-    })
-    await svg2pdf(svg, pdf, { x: 0, y: 0, width, height })
-    pdf.save(filename)
-  })
 }

@@ -3,7 +3,7 @@
 A web-based Mermaid diagram editor where **your own GitHub repository is the
 database**. There is no application database. You sign in with GitHub, connect a
 repo, edit diagrams in a split-pane editor with a live themed preview, export to
-PNG/SVG/PDF, and commit your work straight to the repo. Every diagram's commit
+PNG/SVG, and commit your work straight to the repo. Every diagram's commit
 history doubles as its version history.
 
 ## Mental model
@@ -19,8 +19,8 @@ history doubles as its version history.
   preview (flowchart, state, sequence, class, ER, XY chart).
 - **Theme switching** across `beautiful-mermaid`'s built-in themes plus VS Code /
   Shiki themes — applied live via CSS custom properties (no re-render).
-- **Export** to SVG, PNG (high-DPI raster) and PDF (true vector), with the theme
-  colors resolved and inlined so downloads are never colorless.
+- **Export** to SVG and PNG (high-DPI raster), with the theme colors resolved
+  and inlined so downloads are never colorless.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   directly to `main`.
 - **Conflict handling**: if the file moved on GitHub since you loaded it, choose
@@ -31,8 +31,7 @@ history doubles as its version history.
 ## Tech stack
 
 Next.js (App Router, TypeScript strict) · Auth.js v5 (GitHub OAuth) ·
-beautiful-mermaid · CodeMirror 6 · @octokit/rest (server-side only) ·
-jsPDF + svg2pdf.js · Shiki.
+beautiful-mermaid · CodeMirror 6 · @octokit/rest (server-side only) · Shiki.
 
 > This app **cannot** be a static export — authentication and all GitHub I/O run
 > in server actions, so it needs a server runtime (Vercel / Cloudflare Pages /

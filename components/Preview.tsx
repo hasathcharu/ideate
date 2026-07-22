@@ -39,6 +39,7 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
   // Rendered once per source change; theme switches never re-render — they only
   // change the CSS custom properties on the wrapper below.
   const result = useMemo(() => (mounted ? renderPreview(text) : null), [text, mounted])
+  const isEmpty = !text.trim()
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
@@ -257,6 +258,10 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
             </Button>
           </div>
         </>
+      ) : isEmpty ? (
+        <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+          Start typing on the left to see your diagram here.
+        </div>
       ) : (
         <div className="flex h-full items-center justify-center p-6">
           <div className="max-w-md text-sm text-destructive">

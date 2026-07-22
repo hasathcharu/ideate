@@ -145,22 +145,51 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setTree(null)
     setTreeError(null)
     const res = await listTree(target.owner, target.name)
-    if (res.ok) setTree(res.data)
-    else setTreeError(res.error.message)
+    if (res.ok) {
+      setTree(res.data)
+      return res.data
+    }
+    setTreeError(res.error.message)
+    return null
+  }, [])
+
+  // Editor/canvas state for a freshly-opened repo: an empty repo (no diagram
+  // files yet) gets a starter example to edit; a repo that already has files
+  // opens blank so the user picks one from the tree.
+  const showRepoStartState = useCallback((treeData: TreeResult) => {
+    const hasFiles = treeData.tree.flatMap(collectFilePaths).length > 0
+    setOpenPath(null)
+    setLoadedSha(null)
+    const content = hasFiles ? '' : SAMPLE
+    setText(content)
+    setBaseline(content)
   }, [])
 
   useEffect(() => {
     const stored = loadConfig()
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
+    setHydrated(true)
+
+    // A non-empty scratch draft is unsaved working-copy work — restore it across
+    // reloads rather than clobbering it with the start state.
     const draft = loadDraft(SCRATCH_DOC_ID)
-    if (draft && draft.content !== SAMPLE) {
-      setText(draft.content)
+    const restorable = draft && draft.content.trim().length > 0 ? draft.content : null
+
+    if (githubEnabled && stored.repo) {
+      void refreshTree(stored.repo).then((data) => {
+        if (restorable !== null) {
+          setText(restorable)
+          setBaseline('')
+        } else if (data) {
+          showRepoStartState(data)
+        }
+      })
+    } else if (restorable !== null && restorable !== SAMPLE) {
+      setText(restorable)
       setBaseline(SAMPLE)
     }
-    setHydrated(true)
-    if (githubEnabled && stored.repo) void refreshTree(stored.repo)
-  }, [githubEnabled, refreshTree])
+  }, [githubEnabled, refreshTree, showRepoStartState])
 
   useEffect(() => {
     if (!hydrated) return
@@ -245,9 +274,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setRepoPickerOpen(false)
       setOpenPath(null)
       setLoadedSha(null)
-      void refreshTree({ owner: r.owner, name: r.name })
+      void refreshTree({ owner: r.owner, name: r.name }).then((data) => {
+        if (data) showRepoStartState(data)
+      })
     },
-    [updateConfig, refreshTree],
+    [updateConfig, refreshTree, showRepoStartState],
   )
 
   const openFile = useCallback(

@@ -15,7 +15,7 @@ import { GithubIcon } from '@/components/icons'
 import { useChromeTheme } from '@/lib/hooks'
 import { APP_NAME } from '@/lib/config'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import Preview from './Preview'
 
 const CONCEPT = `flowchart LR
@@ -24,16 +24,16 @@ const CONCEPT = `flowchart LR
 `
 
 const FEATURES = [
-  { icon: Palette, title: 'Live themed preview', body: '15 built-in themes plus VS Code / Shiki themes — the whole app recolors instantly.' },
-  { icon: Download, title: 'Export anywhere', body: 'SVG, high-DPI PNG, and true-vector PDF — copy to clipboard or download.' },
-  { icon: GitCommitHorizontal, title: 'Commit to GitHub', body: 'Saving is a commit to main. No app database — your repo is the source of truth.' },
-  { icon: History, title: 'Version history', body: 'Browse a file’s commits, preview any version, recover or fork it.' },
+  { icon: Palette, title: 'Live themed preview', body: 'Recolor the whole app with built-in and VS Code / Shiki themes.' },
+  { icon: Download, title: 'Export', body: 'Download or copy as SVG or high-DPI PNG.' },
+  { icon: GitCommitHorizontal, title: 'Commit to GitHub', body: 'Save commits straight to main — no separate database.' },
+  { icon: History, title: 'Version history', body: 'Preview any past commit and recover or fork it.' },
 ]
 
 export default function Landing({ signedIn }: { signedIn: boolean }) {
-  // Landing uses a fixed dark theme so the chrome matches the hero diagram.
-  const theme = THEMES['tokyo-night'] ?? null
-  useChromeTheme(theme, true)
+  // Landing uses a fixed light theme so the chrome matches the hero diagram.
+  const theme = THEMES['github-light'] ?? null
+  useChromeTheme(theme, false)
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -51,58 +51,36 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
       <main className="mx-auto max-w-6xl px-6 pb-24">
         <section className="grid items-center gap-10 py-12 md:grid-cols-2 md:py-20">
           <div>
-            <p className="mb-4 inline-flex rounded-full border px-3 py-1 text-xs text-muted-foreground">
-              Mermaid editor · GitHub-as-database
-            </p>
             <h1 className="text-4xl font-bold tracking-tight md:text-5xl">
-              Your GitHub repo is the database.
+              Draw Mermaid diagrams. Commit them to GitHub.
             </h1>
             <p className="mt-4 max-w-md text-muted-foreground">
-              Edit Mermaid diagrams with a live themed preview, export to SVG/PNG/PDF, and
-              commit straight to your repo. Every commit doubles as version history.
+              A diagram editor with a live themed preview that saves straight to your
+              repo — every commit is a version you can revisit.
             </p>
-            <div className="mt-8 grid gap-4 sm:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Pencil className="size-4" /> Local mode
-                  </CardTitle>
-                  <CardDescription>
-                    Start drawing instantly. Edits live in your browser — no account needed.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button asChild variant="secondary" className="w-full">
-                    <Link href="/editor?mode=local">Start drawing</Link>
+            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              {signedIn ? (
+                <Button asChild size="lg">
+                  <Link href="/editor">
+                    Open editor <ArrowRight />
+                  </Link>
+                </Button>
+              ) : (
+                <form action={loginWithGitHub}>
+                  <Button type="submit" size="lg">
+                    <GithubIcon /> Sign in with GitHub
                   </Button>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <GithubIcon className="size-4" /> GitHub repo mode
-                  </CardTitle>
-                  <CardDescription>
-                    Use a repository as your database. Commit to <code>main</code>; every
-                    commit is a version.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {signedIn ? (
-                    <Button asChild className="w-full">
-                      <Link href="/editor">Open editor</Link>
-                    </Button>
-                  ) : (
-                    <form action={loginWithGitHub}>
-                      <Button type="submit" className="w-full">
-                        <GithubIcon /> Sign in with GitHub
-                      </Button>
-                    </form>
-                  )}
-                </CardContent>
-              </Card>
+                </form>
+              )}
+              <Button asChild size="lg" variant="secondary">
+                <Link href="/editor?mode=local">
+                  <Pencil /> Try it locally
+                </Link>
+              </Button>
             </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Local mode runs in your browser — no account needed.
+            </p>
           </div>
 
           <div className="rounded-xl border bg-card p-2 shadow-2xl">

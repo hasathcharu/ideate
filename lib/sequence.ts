@@ -84,6 +84,17 @@ function shiftY(block: string, dy: number): string {
   )
 }
 
+/** Shift every x coordinate (`x`, `x1`, `x2`, `cx`) in a block by `dx`. The
+ *  leading `\s` keeps `rx`/`ry`/`width` untouched, so a shifted box stays the
+ *  same size — it only translates. */
+function shiftX(block: string, dx: number): string {
+  return block.replace(
+    /(\s)(x1|x2|cx|x)="([-\d.eE+]+)"/g,
+    (_m, sp: string, name: string, v: string) =>
+      `${sp}${name}="${round(parseFloat(v) + dx)}"`,
+  )
+}
+
 type XMap = (x: number) => number
 
 /** Remap the x of every "x,y" pair in a comma-paired `points="…"`. */
@@ -255,7 +266,6 @@ function transform(svg: string): string {
   const shift = Math.max(0, leftExtra)
   const newX = [oldX[0]! + shift]
   for (let i = 1; i < n; i++) newX[i] = newX[i - 1]! + gaps[i - 1]!
-  const changed = shift > 0 || newX.some((x, i) => Math.abs(x - oldX[i]!) > 0.01)
 
   // Piecewise-linear map old-x → new-x (identity slope beyond the ends).
   const f: XMap = (x) => {
@@ -271,20 +281,76 @@ function transform(svg: string): string {
     return x
   }
 
-  let out = svg
-  if (changed) {
-    // Protect <defs> (arrow markers use a different points format) and <style>.
-    const defs = out.match(/<defs>[\s\S]*?<\/defs>/)?.[0]
-    const style = out.match(/<style>[\s\S]*?<\/style>/)?.[0]
-    if (defs) out = out.replace(defs, ' DEFS ')
-    if (style) out = out.replace(style, ' STYLE ')
-    out = out.replace(
-      /<(rect|line|polyline|polygon|circle|text|tspan)\b[^>]*?>/g,
-      (tag) => remapTag(tag, f),
-    )
-    if (defs) out = out.replace(' DEFS ', defs)
-    if (style) out = out.replace(' STYLE ', style)
+  // Recenter an actor box on its new lifeline: a rigid x-shift (keeps the box's
+  // own width — remapping each edge through `f` would stretch it, since the two
+  // edges can fall in different segments of the piecewise map).
+  const recenterActor = (block: string): string => {
+    const idx = indexOf.get(block.match(/data-id="([^"]*)"/)?.[1] ?? '')
+    if (idx == null) return block
+    return shiftX(block, newX[idx]! - oldX[idx]!)
   }
+
+  // Re-fit a note box to its *measured* label width. The upstream box is sized
+  // from a character estimate that under-counts, so long notes overflow. Its new
+  // center is the original text center run through `f` (position-agnostic — works
+  // for `over`, `right of` and `left of`); a multi-actor `over` note is also kept
+  // wide enough to span the actors it covers. Its two polygons are the folded
+  // body and the corner triangle.
+  const refitNote = (block: string): string => {
+    const origX = parseFloat(block.match(/<text\b[^>]*\sx="([-\d.eE+]+)"/)?.[1] ?? '')
+    if (!isFinite(origX)) return block
+    const center = f(origX)
+    const ids = (block.match(/data-actors="([^"]*)"/)?.[1] ?? '')
+      .split(',')
+      .map((id) => indexOf.get(id.trim()))
+      .filter((i): i is number => i != null)
+    const span = ids.length ? newX[Math.max(...ids)]! - newX[Math.min(...ids)]! : 0
+    const text = block.match(/<text\b[^>]*>([\s\S]*?)<\/text>/)?.[1] ?? ''
+    const width = Math.max(measureText(text, 11) + NOTE_PAD * 2, span + NOTE_PAD * 2)
+
+    const bodyStr = block.match(/<polygon points="([^"]*)"/)?.[1]
+    if (!bodyStr) return block
+    const pts = bodyStr.trim().split(/\s+/).map((p) => p.split(',').map(Number))
+    const top = pts[0]?.[1]
+    const bottom = pts[3]?.[1]
+    const fold = pts[2] && pts[0] ? pts[2][1]! - pts[0][1]! : 0
+    if (top == null || bottom == null) return block
+
+    const nl = center - width / 2
+    const nr = center + width / 2
+    const bodyPts = `${round(nl)},${top} ${round(nr - fold)},${top} ${round(nr)},${round(top + fold)} ${round(nr)},${bottom} ${round(nl)},${bottom}`
+    const foldPts = `${round(nr - fold)},${top} ${round(nr)},${round(top + fold)} ${round(nr - fold)},${round(top + fold)}`
+
+    let k = 0
+    return block
+      .replace(/points="[^"]*"/g, () => `points="${k++ === 0 ? bodyPts : foldPts}"`)
+      .replace(/(<t(?:ext|span)[^>]*\sx=")[-\d.eE+]+(")/g, `$1${round(center)}$2`)
+  }
+
+  // Apply the x-remap to lifelines / messages / activations / frames, while
+  // protecting regions the per-edge remap must NOT touch: <defs> and <style>
+  // (different coordinate systems) and actor/note groups (rigid content handled
+  // by recenterActor / refitNote). Notes are re-fit unconditionally, so this
+  // corrects an under-sized note box even when no lifeline moved.
+  let out = svg
+  const stash: string[] = []
+  const protect = (re: RegExp) =>
+    (out = out.replace(re, (m) => ` \x00${stash.push(m) - 1}\x00 `))
+  protect(/<defs>[\s\S]*?<\/defs>/)
+  protect(/<style>[\s\S]*?<\/style>/)
+  protect(/<g class="actor"[\s\S]*?<\/g>/g)
+  protect(/<g class="note"[\s\S]*?<\/g>/g)
+  out = out.replace(
+    /<(rect|line|polyline|polygon|circle|text|tspan)\b[^>]*?>/g,
+    (tag) => remapTag(tag, f),
+  )
+
+  out = out.replace(/\x00(\d+)\x00/g, (_m, n: string) => {
+    const block = stash[Number(n)]!
+    if (block.startsWith('<g class="actor"')) return recenterActor(block)
+    if (block.startsWith('<g class="note"')) return refitNote(block)
+    return block
+  })
 
   // --- 2. Mirror actors to the bottom --------------------------------------
   const firstRect = actorGroups[0]?.match(/<rect[^>]*\/?>/)?.[0]
