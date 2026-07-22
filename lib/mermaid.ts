@@ -1,6 +1,7 @@
 import { renderMermaidSVG, type DiagramColors, type RenderOptions } from 'beautiful-mermaid'
 import { mixSrgb, parseColor, toHex } from './color'
 import { enhanceSequenceSVG } from './sequence'
+import { smoothEdges } from './edges'
 
 /**
  * beautiful-mermaid emits an SVG whose element colors reference internal
@@ -32,10 +33,11 @@ const LIVE_OPTIONS: RenderOptions = {
 }
 
 /** Render the theme-agnostic SVG (colors come from inherited CSS variables).
- *  Sequence diagrams are post-processed to widen label spacing and mirror the
- *  participants to the bottom (see lib/sequence.ts). */
+ *  Post-processing: sequence diagrams get widened label spacing + mirrored
+ *  participants (lib/sequence.ts); flowchart/state edges get their orthogonal
+ *  corners rounded (lib/edges.ts). */
 export function renderThemeableSVG(text: string): string {
-  return enhanceSequenceSVG(renderMermaidSVG(text, LIVE_OPTIONS))
+  return smoothEdges(enhanceSequenceSVG(renderMermaidSVG(text, LIVE_OPTIONS)))
 }
 
 export interface RenderResult {
@@ -82,10 +84,25 @@ export function colorsToCssVars(colors: DiagramColors): Record<string, string> {
     '--mm-bg': colors.bg,
     '--mm-fg': colors.fg,
   }
+  // On dark themes the derived edge-label color (`--muted` → `--_text-muted`,
+  // only ~40% toward fg by default) is too dim. Push it further toward the
+  // foreground for legible secondary text; leave light themes untouched.
+  const boostedMuted = darkMutedOverride(colors)
   for (const key of OPTIONAL_ROLES) {
-    out[`--${key}`] = colors[key] ?? 'initial'
+    if (key === 'muted' && boostedMuted) out['--muted'] = boostedMuted
+    else out[`--${key}`] = colors[key] ?? 'initial'
   }
   return out
+}
+
+/** A higher-contrast muted color for dark backgrounds, or null to keep default. */
+function darkMutedOverride(colors: DiagramColors): string | null {
+  const fg = parseColor(colors.fg)
+  const bg = parseColor(colors.bg)
+  if (!fg || !bg) return null
+  const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255
+  if (luminance >= 0.5) return null // light theme — leave as-is
+  return toHex(mixSrgb(fg, bg, 68))
 }
 
 /**

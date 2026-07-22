@@ -13,6 +13,7 @@ import {
 import { loginWithGitHub } from '@/app/actions/auth'
 import { GithubIcon } from '@/components/icons'
 import { useChromeTheme } from '@/lib/hooks'
+import { APP_NAME } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import Preview from './Preview'
@@ -38,7 +39,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
     <div className="min-h-screen bg-background text-foreground">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="flex items-center gap-2 font-semibold">
-          <span className="text-lg text-primary">◇</span> keep-mermaid
+          <span className="text-lg text-primary">◇</span> {APP_NAME}
         </div>
         <Button asChild variant="ghost" size="sm">
           <Link href={signedIn ? '/editor' : '/editor?mode=local'}>

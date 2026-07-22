@@ -35,6 +35,7 @@ import {
   SCRATCH_DOC_ID,
 } from '@/lib/storage'
 import { DEFAULT_THEME_ID } from '@/lib/themes'
+import { APP_NAME } from '@/lib/config'
 import { buildTree, collectFilePaths, isDiagramFile } from '@/lib/tree'
 import { cn } from '@/lib/utils'
 import {
@@ -44,6 +45,7 @@ import {
   listFileCommits,
   commitFile,
   deletePaths,
+  renameFile,
   type TreeResult,
 } from '@/app/actions/github'
 import type { AppConfig, FileCommit, Repo, SessionUser, TreeNode } from '@/lib/types'
@@ -117,9 +119,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const dirty = text !== baseline
   const docId =
     repo && openPath ? docIdForFile(repo.owner, repo.name, openPath) : SCRATCH_DOC_ID
-  const baseName = openPath
-    ? (openPath.split('/').pop() ?? 'diagram').replace(/\.(md|mmd|mermaid)$/i, '')
-    : 'diagram'
+  // Export/download file name: the open file's name (folder + extension stripped).
+  // Falls back to "diagram" only when nothing is open (local mode / fresh scratch).
+  const baseName =
+    (openPath ? (openPath.split('/').pop() ?? '').replace(/\.[^./]+$/, '') : '') || 'diagram'
 
   // A just-created file has no sha and isn't in the fetched tree yet; splice its
   // path in so it shows in the sidebar (flagged unsaved) before the first commit.
@@ -210,30 +213,76 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
-  const newDiagram = useCallback(() => {
-    if (!repo) {
-      setOpenPath(null)
-      setLoadedSha(null)
-      setBaseline(NEW_TEMPLATE)
-      setText(NEW_TEMPLATE)
-      return
-    }
-    openPrompt({
-      title: 'New diagram',
-      description: 'Create a new diagram file on main.',
-      label: 'File path',
-      defaultValue: 'diagrams/untitled.mmd',
-      submitLabel: 'Start editing',
-      validate: validatePath,
-      onSubmit: (path) => {
-        setPromptOpen(false)
-        setOpenPath(path)
+  const newDiagram = useCallback(
+    (dirPath?: string) => {
+      if (!repo) {
+        setOpenPath(null)
         setLoadedSha(null)
-        setBaseline('')
+        setBaseline(NEW_TEMPLATE)
         setText(NEW_TEMPLATE)
-      },
-    })
-  }, [repo, openPrompt])
+        return
+      }
+      // Root-level create defaults to the repo root (no forced `diagrams/`);
+      // a folder's "+" prefills that folder. Either way the user can type any
+      // repo-relative path.
+      const defaultValue = dirPath ? `${dirPath}/untitled.mmd` : 'untitled.mmd'
+      openPrompt({
+        title: 'New diagram',
+        description: 'Create a new diagram file on main.',
+        label: 'File path',
+        defaultValue,
+        submitLabel: 'Start editing',
+        validate: validatePath,
+        onSubmit: (path) => {
+          setPromptOpen(false)
+          setOpenPath(path)
+          setLoadedSha(null)
+          setBaseline('')
+          setText(NEW_TEMPLATE)
+        },
+      })
+    },
+    [repo, openPrompt],
+  )
+
+  const requestRename = useCallback(
+    (node: TreeNode) => {
+      if (!repo || node.type !== 'file') return
+      openPrompt({
+        title: 'Rename file',
+        description: 'Move or rename this file on main. Git history is preserved as a rename.',
+        label: 'New path',
+        defaultValue: node.path,
+        submitLabel: 'Rename',
+        validate: validatePath,
+        onSubmit: async (newPath) => {
+          if (newPath === node.path) {
+            setPromptOpen(false)
+            return
+          }
+          const res = await renameFile(repo.owner, repo.name, node.path, newPath)
+          if (!res.ok) {
+            toast.error(res.error.message)
+            return
+          }
+          setPromptOpen(false)
+          // Carry any uncommitted draft over to the new path.
+          const oldId = docIdForFile(repo.owner, repo.name, node.path)
+          const newId = docIdForFile(repo.owner, repo.name, newPath)
+          const draft = loadDraft(oldId)
+          if (draft) saveDraft(newId, draft.content)
+          clearDraft(oldId)
+          if (openPath === node.path) {
+            setOpenPath(newPath)
+            setLoadedSha(res.data.sha)
+          }
+          toast.success(`Renamed to ${newPath}`)
+          void refreshTree(repo)
+        },
+      })
+    },
+    [repo, openPrompt, openPath, refreshTree],
+  )
 
   // Reset the editor to a fresh scratch doc — used when the file being edited is
   // deleted out from under it. Baseline is left empty (not equal to the text) so
@@ -312,7 +361,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         title: 'Save to repository',
         description: 'Choose a path on main for this diagram.',
         label: 'File path',
-        defaultValue: 'diagrams/untitled.mmd',
+        defaultValue: 'untitled.mmd',
         submitLabel: 'Save',
         validate: validatePath,
         onSubmit: (path) => {
@@ -389,6 +438,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
     clearDraft(docId)
   }, [repo, openPath, docId])
 
+  const selectVersion = useCallback(
+    async (commit: FileCommit) => {
+      if (!repo) return
+      setSelectedSha(commit.sha)
+      setVersionLoading(true)
+      setVersionContent(null)
+      // Use the path the file had at that commit (may differ across renames).
+      const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
+      setVersionLoading(false)
+      if (res.ok) setVersionContent(res.data)
+      else setHistoryError(res.error.message)
+    },
+    [repo],
+  )
+
   const openHistory = useCallback(async () => {
     if (!repo || !openPath) return
     setHistoryOpen(true)
@@ -397,23 +461,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setSelectedSha(null)
     setVersionContent(null)
     const res = await listFileCommits(repo.owner, repo.name, openPath)
-    if (res.ok) setCommits(res.data)
-    else setHistoryError(res.error.message)
-  }, [repo, openPath])
-
-  const selectVersion = useCallback(
-    async (sha: string) => {
-      if (!repo || !openPath) return
-      setSelectedSha(sha)
-      setVersionLoading(true)
-      setVersionContent(null)
-      const res = await readFileAtRef(repo.owner, repo.name, openPath, sha)
-      setVersionLoading(false)
-      if (res.ok) setVersionContent(res.data)
-      else setHistoryError(res.error.message)
-    },
-    [repo, openPath],
-  )
+    if (res.ok) {
+      setCommits(res.data)
+      // Preselect the latest version (commits are newest-first).
+      if (res.data[0]) void selectVersion(res.data[0])
+    } else {
+      setHistoryError(res.error.message)
+    }
+  }, [repo, openPath, selectVersion])
 
   const onRecover = useCallback(() => {
     if (versionContent === null) return
@@ -430,7 +485,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       title: 'Create new diagram from this version',
       description: 'Save this version’s content as a separate new file.',
       label: 'New file path',
-      defaultValue: 'diagrams/copy.mmd',
+      defaultValue: 'copy.mmd',
       submitLabel: 'Start editing',
       validate: validatePath,
       onSubmit: (path) => {
@@ -464,7 +519,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             </Button>
           ) : null}
           <span className="text-lg text-primary">◇</span>
-          <span className="text-[15px] font-semibold">keep-mermaid</span>
+          <span className="text-[15px] font-semibold">{APP_NAME}</span>
           {githubEnabled ? (
             <Button
               size="sm"
@@ -529,8 +584,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <Button
                   size="icon-xs"
                   variant="ghost"
-                  onClick={newDiagram}
-                  title={`New diagram (${newHint})`}
+                  onClick={() => newDiagram()}
+                  title={`New diagram at root (${newHint})`}
                 >
                   <Plus />
                 </Button>
@@ -554,8 +609,22 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   dirtyPath={dirtyPath}
                   onOpenFile={openFile}
                   onDelete={requestDelete}
+                  onNewFile={(dir) => newDiagram(dir)}
+                  onRename={requestRename}
                 />
               )}
+            </div>
+            <Separator />
+            <div className="flex-none px-3 py-2 text-xs text-muted-foreground">
+              Made by{' '}
+              <a
+                href="https://hasathcharu.com"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-medium text-foreground hover:text-primary hover:underline"
+              >
+                Hasathcharu
+              </a>
             </div>
           </aside>
         ) : null}

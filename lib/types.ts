@@ -59,6 +59,9 @@ export interface FileCommit {
   message: string
   author: string
   date: string
+  /** The file's path at this commit — differs from the current path across
+   *  renames, so version previews read the correct historical path. */
+  path: string
 }
 
 /** Discriminated result type for server actions so the client can branch on

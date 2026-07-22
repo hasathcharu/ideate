@@ -1,5 +1,6 @@
 import type { DiagramColors } from 'beautiful-mermaid'
 import { colorsToCssVars, renderThemeableSVG, resolveThemeVariables } from './mermaid'
+import { parseColor, toHex } from './color'
 
 /**
  * Export pipeline. All three exporters (SVG / PNG / PDF) reuse a single
@@ -56,8 +57,11 @@ async function withResolvedSvg<T>(
 
   const host = document.createElement('div')
   host.setAttribute('aria-hidden', 'true')
-  host.style.cssText =
-    'position:fixed;left:-99999px;top:0;width:0;height:0;overflow:hidden;'
+  // Mount far offscreen but at NATURAL size — NOT clipped to 0×0. svg2pdf reads
+  // stroke geometry from the live DOM (getBBox/CTM); a 0×0 clipped host makes
+  // stroked shapes (boxes, lines) collapse to nothing in the PDF while text
+  // (positioned by x/y) survives. Full layout keeps vector strokes intact.
+  host.style.cssText = 'position:fixed;left:-99999px;top:0;pointer-events:none;'
   // Base palette lives on the host so the SVG's derived color-mix resolves.
   // NOTE: custom properties must go through setProperty — assigning them onto
   // the CSSStyleDeclaration (e.g. Object.assign / host.style['--x']=…) is a
@@ -102,7 +106,11 @@ function inlineComputedColors(svg: SVGSVGElement, colors: DiagramColors): void {
       if (!value || !value.includes('var(')) continue
       const resolved = computed?.[cssProp]
       if (resolved && resolved !== '' && resolved !== 'rgba(0, 0, 0, 0)') {
-        el.setAttribute(attr, resolved)
+        // Normalize to #rrggbb. getComputedStyle may return rgb()/rgba() or a
+        // newer color syntax; svg2pdf (PDF export) only reliably parses hex, so
+        // hex keeps SVG, PNG and PDF consistent.
+        const rgb = parseColor(resolved)
+        el.setAttribute(attr, rgb ? toHex(rgb) : resolved)
       } else {
         el.setAttribute(attr, resolveViaFallback(value, fallback))
       }
@@ -255,16 +263,19 @@ export async function copyPNG(
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
 
+/**
+ * PDF export — true vector via svg2pdf. The offscreen SVG is mounted at natural
+ * size (see withResolvedSvg) so svg2pdf can measure stroke geometry and keep
+ * entity boxes / relationship lines, and every color is inlined as literal hex
+ * beforehand (svg2pdf understands neither CSS variables nor color-mix).
+ */
 export async function exportPDF(
   text: string,
   colors: DiagramColors,
   filename: string,
   paintBackground: boolean,
 ): Promise<void> {
-  const [{ jsPDF }, svg2pdfMod] = await Promise.all([
-    import('jspdf'),
-    import('svg2pdf.js'),
-  ])
+  const [{ jsPDF }, svg2pdfMod] = await Promise.all([import('jspdf'), import('svg2pdf.js')])
   const svg2pdf = svg2pdfMod.svg2pdf
 
   await withResolvedSvg(text, colors, { paintBackground }, async (svg, { width, height }) => {

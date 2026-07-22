@@ -24,7 +24,7 @@ export interface HistoryPanelProps {
   versionContent: string | null
   versionLoading: boolean
   colors: DiagramColors | null
-  onSelect: (sha: string) => void
+  onSelect: (commit: FileCommit) => void
   onRecover: () => void
   onFork: () => void
 }
@@ -82,7 +82,7 @@ export default function HistoryPanel({
                 <button
                   key={c.sha}
                   type="button"
-                  onClick={() => onSelect(c.sha)}
+                  onClick={() => onSelect(c)}
                   className={cn(
                     'rounded-md border border-transparent p-2.5 text-left hover:bg-accent',
                     selectedSha === c.sha && 'border-primary bg-primary/10',
@@ -92,6 +92,11 @@ export default function HistoryPanel({
                   <div className="text-xs text-muted-foreground">
                     {c.author} · {formatDate(c.date)} · {c.sha.slice(0, 7)}
                   </div>
+                  {c.path !== path ? (
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/80">
+                      ↳ was <code>{c.path}</code>
+                    </div>
+                  ) : null}
                 </button>
               ))
             )}

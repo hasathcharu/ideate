@@ -1,31 +1,66 @@
 /**
  * Post-processing for beautiful-mermaid *sequence* diagrams.
  *
- * The upstream renderer has two gaps we fix here, purely by rewriting its (very
- * cleanly annotated) SVG output — no DOM or canvas, so this is deterministic and
- * safe to run during SSR:
+ * The upstream renderer spaces lifelines by participant-box width only (ignoring
+ * message / note label widths) and never mirrors participants to the bottom. We
+ * fix both by rewriting its (cleanly annotated) SVG:
  *
- *  1. **Labels bleed out.** Lifelines are spaced by participant-box width only,
- *     not by message-label width, so long labels overflow their arrows. We widen
- *     the gaps between lifelines so every message's arrow span can hold its
- *     label (what stock Mermaid does). The canvas grows to match — fine, since
- *     the preview pans/zooms and has fit-to-screen.
+ *  1. **Reflow x** so every message arrow and note is wide enough for its label.
+ *     Label widths are *measured* (canvas `measureText` in the browser; a
+ *     deterministic estimate during SSR). New lifeline positions define a
+ *     piecewise-linear map applied to every content x-coordinate, so lifelines,
+ *     messages, self-loops, notes and loop/alt frames all move and resize
+ *     together — no element type is left behind.
  *
- *  2. **Actors only at the top.** Stock Mermaid mirrors participants at the
- *     bottom too. We clone each actor box to the foot of the lifelines.
+ *  2. **Mirror actors** to the foot of the lifelines (as stock Mermaid does).
  *
- * Anything unexpected → return the input unchanged (diagram still renders).
+ * Everything is a deterministic string rewrite (SSR-safe). Any failure returns
+ * the input unchanged so the diagram still renders.
  */
 
-/** Extra horizontal breathing room on each side of a message label. */
-const LABEL_PAD = 16
-/** Room a self-message loop + label needs to the right of its lifeline. */
-const SELF_EXTRA = 52
-/** Approx label width per character at a given font size (Inter, slightly high
- *  so we err toward more spacing rather than residual bleed). */
-const CHAR_WIDTH_FACTOR = 0.55
+const LABEL_PAD = 20 // breathing room each side of a message label
+const NOTE_PAD = 16 // breathing room each side of a note label
+const SELF_LOOP = 36 // width a self-message loop occupies before its label
 
 const round = (n: number) => Math.round(n * 1000) / 1000
+
+/* ------------------------------------------------------------------ */
+/* Text measurement                                                    */
+/* ------------------------------------------------------------------ */
+
+let measureCtx: CanvasRenderingContext2D | null | undefined
+
+function decodeLabel(raw: string): string {
+  return raw
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+}
+
+/** Width of `text` at the given font — real measurement in the browser. */
+function measureText(text: string, fontPx: number, weight = 400): number {
+  const label = decodeLabel(text)
+  if (measureCtx === undefined) {
+    measureCtx =
+      typeof document !== 'undefined'
+        ? document.createElement('canvas').getContext('2d')
+        : null
+  }
+  if (measureCtx) {
+    measureCtx.font = `${weight} ${fontPx}px Inter, system-ui, sans-serif`
+    return measureCtx.measureText(label).width
+  }
+  // SSR fallback: rough estimate (the client re-measures on mount).
+  return label.length * fontPx * 0.55
+}
+
+/* ------------------------------------------------------------------ */
+/* Attribute / coordinate helpers                                      */
+/* ------------------------------------------------------------------ */
 
 /** Read a numeric attribute (space-delimited, so `x` never matches `rx`/`dy`). */
 function getAttr(tag: string, name: string): number {
@@ -33,7 +68,6 @@ function getAttr(tag: string, name: string): number {
   return m ? parseFloat(m[1]!) : NaN
 }
 
-/** Set a numeric attribute, preserving the delimiter before it. */
 function setAttr(tag: string, name: string, value: number): string {
   return tag.replace(
     new RegExp(`((?:^|\\s)${name}=")[-\\d.eE+]+(")`),
@@ -41,48 +75,79 @@ function setAttr(tag: string, name: string, value: number): string {
   )
 }
 
-/** Shift every `y=` coordinate in a block by `dy` (used to mirror actors). */
+/** Shift every y coordinate (`y`, `y1`, `y2`, `cy`) in a block by `dy`. */
 function shiftY(block: string, dy: number): string {
   return block.replace(
-    /(\s)y="([-\d.eE+]+)"/g,
-    (_m, sp: string, v: string) => `${sp}y="${round(parseFloat(v) + dy)}"`,
-  )
-}
-
-/** Shift every x coordinate (`x`, `x1`, `x2`) in a block by `dx`. */
-function shiftX(block: string, dx: number): string {
-  return block.replace(
-    /(\s)(x1|x2|x)="([-\d.eE+]+)"/g,
+    /(\s)(y1|y2|cy|y)="([-\d.eE+]+)"/g,
     (_m, sp: string, name: string, v: string) =>
-      `${sp}${name}="${round(parseFloat(v) + dx)}"`,
+      `${sp}${name}="${round(parseFloat(v) + dy)}"`,
   )
 }
 
-/** Shift the x of every "x,y" pair in `points="…"` (self-loop polylines). */
-function shiftPointsX(block: string, dx: number): string {
-  return block.replace(/points="([^"]*)"/g, (_m, pts: string) => {
-    const shifted = pts
-      .trim()
-      .split(/\s+/)
-      .map((pair) => {
-        const [x, y] = pair.split(',')
-        return `${round(parseFloat(x!) + dx)},${y}`
-      })
-      .join(' ')
-    return `points="${shifted}"`
-  })
+type XMap = (x: number) => number
+
+/** Remap the x of every "x,y" pair in a comma-paired `points="…"`. */
+function remapPoints(pointsAttr: string, f: XMap): string {
+  return pointsAttr
+    .trim()
+    .split(/\s+/)
+    .map((pair) => {
+      const [x, y] = pair.split(',')
+      if (y === undefined) return pair // not comma-paired; leave alone
+      return `${round(f(parseFloat(x!)))},${y}`
+    })
+    .join(' ')
 }
 
-/** Rough single-line label width — good enough to size gaps (we add padding). */
-function labelWidth(rawLabel: string, fontSize: number): number {
-  const text = rawLabel
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-  return text.length * fontSize * CHAR_WIDTH_FACTOR
+/** Apply the x-map to a single content tag according to its element type. */
+function remapTag(tag: string, f: XMap): string {
+  const name = tag.match(/^<(\w+)/)?.[1]
+  if (!name) return tag
+  switch (name) {
+    case 'rect': {
+      const x = getAttr(tag, 'x')
+      const w = getAttr(tag, 'width')
+      let out = tag
+      if (isFinite(x)) {
+        const nx = f(x)
+        out = setAttr(out, 'x', nx)
+        if (isFinite(w)) out = setAttr(out, 'width', f(x + w) - nx)
+      }
+      return out
+    }
+    case 'line': {
+      let out = tag
+      if (isFinite(getAttr(tag, 'x1'))) out = setAttr(out, 'x1', f(getAttr(tag, 'x1')))
+      if (isFinite(getAttr(tag, 'x2'))) out = setAttr(out, 'x2', f(getAttr(tag, 'x2')))
+      return out
+    }
+    case 'polyline':
+    case 'polygon': {
+      const m = tag.match(/points="([^"]*)"/)
+      if (!m) return tag
+      return tag.replace(/points="[^"]*"/, `points="${remapPoints(m[1]!, f)}"`)
+    }
+    case 'circle':
+      return isFinite(getAttr(tag, 'cx')) ? setAttr(tag, 'cx', f(getAttr(tag, 'cx'))) : tag
+    case 'text':
+    case 'tspan':
+      return isFinite(getAttr(tag, 'x')) ? setAttr(tag, 'x', f(getAttr(tag, 'x'))) : tag
+    default:
+      return tag
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Transform                                                           */
+/* ------------------------------------------------------------------ */
+
+export function enhanceSequenceSVG(svg: string): string {
+  if (!svg.includes('class="lifeline"')) return svg
+  try {
+    return transform(svg)
+  } catch {
+    return svg
+  }
 }
 
 interface Actor {
@@ -91,37 +156,24 @@ interface Actor {
   halfWidth: number
 }
 
-export function enhanceSequenceSVG(svg: string): string {
-  // Fast bail-out for non-sequence diagrams.
-  if (!svg.includes('class="lifeline"')) return svg
-
-  try {
-    return transform(svg)
-  } catch {
-    return svg
-  }
-}
-
 function transform(svg: string): string {
-  const rootMatch = svg.match(/<svg\b[^>]*>/)
-  if (!rootMatch) return svg
-  const rootTag = rootMatch[0]
+  const rootTag = svg.match(/<svg\b[^>]*>/)?.[0]
+  if (!rootTag) return svg
   const width = getAttr(rootTag, 'width')
   const height = getAttr(rootTag, 'height')
   if (!isFinite(width) || !isFinite(height)) return svg
 
   const lifelineTags = svg.match(/<line class="lifeline"[^>]*\/?>/g) ?? []
   const actorGroups = svg.match(/<g class="actor"[\s\S]*?<\/g>/g) ?? []
-  const messageGroups = svg.match(/<g class="message"[\s\S]*?<\/g>/g) ?? []
   if (lifelineTags.length === 0 || actorGroups.length === 0) return svg
 
-  // Actors ordered left-to-right by lifeline x.
   const actors: Actor[] = lifelineTags
     .map((tag) => {
       const id = tag.match(/data-actor="([^"]*)"/)?.[1] ?? ''
       const x = getAttr(tag, 'x1')
-      const group = actorGroups.find((g) => g.includes(`data-id="${id}"`))
-      const rect = group?.match(/<rect[^>]*\/?>/)?.[0]
+      const rect = actorGroups
+        .find((g) => g.includes(`data-id="${id}"`))
+        ?.match(/<rect[^>]*\/?>/)?.[0]
       const halfWidth = rect ? getAttr(rect, 'width') / 2 : 0
       return { id, x, halfWidth }
     })
@@ -129,117 +181,109 @@ function transform(svg: string): string {
     .sort((a, b) => a.x - b.x)
 
   const n = actors.length
+  if (n === 0) return svg
   const indexOf = new Map(actors.map((a, i) => [a.id, i]))
+  const oldX = actors.map((a) => a.x)
 
-  // --- 1. Reflow x so message labels fit their arrow spans -----------------
-  // Only for plain message diagrams: notes and loop/alt "block" frames span
-  // lifelines and would be left misaligned by a naive reflow, so we skip
-  // widening (labels there may still overflow) but still mirror actors below.
-  const canReflow =
-    n >= 2 && !svg.includes('class="note"') && !svg.includes('class="block"')
+  // --- 1. Compute required lifeline gaps -----------------------------------
+  const gaps: number[] = []
+  for (let i = 0; i < n - 1; i++) gaps.push(oldX[i + 1]! - oldX[i]!)
 
-  let newX = actors.map((a) => a.x)
-  let delta = actors.map(() => 0)
-  let newWidth = width
+  const reqs: Array<{ p: number; q: number; need: number }> = []
+  let leftExtra = 0
+  let rightExtra = 0
+  const wantGap = (i: number, need: number) => {
+    if (i >= 0 && i < n - 1) reqs.push({ p: i, q: i + 1, need })
+  }
 
-  if (canReflow) {
-    const gaps: number[] = []
-    for (let i = 0; i < n - 1; i++) gaps.push(actors[i + 1]!.x - actors[i]!.x)
+  // Messages.
+  for (const grp of svg.match(/<g class="message"[\s\S]*?<\/g>/g) ?? []) {
+    const from = indexOf.get(grp.match(/data-from="([^"]*)"/)?.[1] ?? '')
+    const to = indexOf.get(grp.match(/data-to="([^"]*)"/)?.[1] ?? '')
+    if (from == null || to == null) continue
+    const w = measureText(grp.match(/data-label="([^"]*)"/)?.[1] ?? '', 11)
+    if (grp.includes('data-self="true"')) {
+      const need = w + SELF_LOOP + LABEL_PAD
+      if (from < n - 1) wantGap(from, need)
+      else rightExtra = Math.max(rightExtra, need)
+    } else {
+      const p = Math.min(from, to)
+      const q = Math.max(from, to)
+      if (q > p) reqs.push({ p, q, need: w + LABEL_PAD * 2 })
+    }
+  }
 
-    const requirements: Array<{ p: number; q: number; need: number }> = []
-    let rightExtra = 0
-    for (const grp of messageGroups) {
-      const fromId = grp.match(/data-from="([^"]*)"/)?.[1]
-      const toId = grp.match(/data-to="([^"]*)"/)?.[1]
-      const label = grp.match(/data-label="([^"]*)"/)?.[1] ?? ''
-      const self = grp.includes('data-self="true"')
-      if (fromId == null || toId == null) continue
-      const from = indexOf.get(fromId)
-      const to = indexOf.get(toId)
-      if (from == null || to == null) continue
-      const w = labelWidth(label, 11)
-      if (self) {
-        if (from < n - 1) requirements.push({ p: from, q: from + 1, need: w + SELF_EXTRA })
-        else rightExtra = Math.max(rightExtra, w + SELF_EXTRA)
-      } else {
-        const p = Math.min(from, to)
-        const q = Math.max(from, to)
-        if (q > p) requirements.push({ p, q, need: w + LABEL_PAD * 2 })
+  // Notes (over one or more actors).
+  for (const grp of svg.match(/<g class="note"[\s\S]*?<\/g>/g) ?? []) {
+    const ids = (grp.match(/data-actors="([^"]*)"/)?.[1] ?? '')
+      .split(',')
+      .map((id) => indexOf.get(id.trim()))
+      .filter((i): i is number => i != null)
+    if (ids.length === 0) continue
+    const p = Math.min(...ids)
+    const q = Math.max(...ids)
+    const text = grp.match(/<text\b[^>]*>([\s\S]*?)<\/text>/)?.[1] ?? ''
+    const w = measureText(text, 11)
+    if (q > p) {
+      reqs.push({ p, q, need: w + NOTE_PAD * 2 })
+    } else {
+      const half = w / 2 + NOTE_PAD
+      wantGap(p - 1, half)
+      wantGap(p, half)
+      if (p === 0) leftExtra = Math.max(leftExtra, half - (oldX[0]! - actors[0]!.halfWidth))
+      if (p === n - 1) rightExtra = Math.max(rightExtra, half)
+    }
+  }
+
+  // Relax gaps: only ever widen (keeps box spacing valid), a few passes so
+  // multi-actor spans settle.
+  const spanSum = (p: number, q: number) => {
+    let s = 0
+    for (let i = p; i < q; i++) s += gaps[i]!
+    return s
+  }
+  for (let pass = 0; pass < 3; pass++) {
+    for (const { p, q, need } of reqs) {
+      const cur = spanSum(p, q)
+      if (cur < need) {
+        const per = (need - cur) / (q - p)
+        for (let i = p; i < q; i++) gaps[i]! += per
       }
     }
+  }
 
-    // Relaxation: only ever *widen* gaps (keeps box spacing valid), a few passes
-    // so multi-actor spans settle.
-    const spanSum = (p: number, q: number) => {
-      let s = 0
-      for (let i = p; i < q; i++) s += gaps[i]!
-      return s
-    }
-    for (let pass = 0; pass < 3; pass++) {
-      for (const { p, q, need } of requirements) {
-        const cur = spanSum(p, q)
-        if (cur < need) {
-          const per = (need - cur) / (q - p)
-          for (let i = p; i < q; i++) gaps[i]! += per
-        }
+  const shift = Math.max(0, leftExtra)
+  const newX = [oldX[0]! + shift]
+  for (let i = 1; i < n; i++) newX[i] = newX[i - 1]! + gaps[i - 1]!
+  const changed = shift > 0 || newX.some((x, i) => Math.abs(x - oldX[i]!) > 0.01)
+
+  // Piecewise-linear map old-x → new-x (identity slope beyond the ends).
+  const f: XMap = (x) => {
+    if (n === 1) return x + (newX[0]! - oldX[0]!)
+    if (x <= oldX[0]!) return newX[0]! + (x - oldX[0]!)
+    if (x >= oldX[n - 1]!) return newX[n - 1]! + (x - oldX[n - 1]!)
+    for (let i = 0; i < n - 1; i++) {
+      if (x <= oldX[i + 1]!) {
+        const span = oldX[i + 1]! - oldX[i]! || 1
+        return newX[i]! + ((x - oldX[i]!) / span) * (newX[i + 1]! - newX[i]!)
       }
     }
-
-    newX = [actors[0]!.x]
-    for (let i = 1; i < n; i++) newX[i] = newX[i - 1]! + gaps[i - 1]!
-    delta = actors.map((a, i) => newX[i]! - a.x)
-
-    // Right padding preserved from the original layout.
-    const origRight = Math.max(...actors.map((a) => a.x + a.halfWidth))
-    const rightPad = width - origRight
-    const newRight = Math.max(...actors.map((a, i) => newX[i]! + a.halfWidth))
-    newWidth = newRight + rightPad + rightExtra
+    return x
   }
 
   let out = svg
-
-  // Lifelines → new x.
-  for (const tag of lifelineTags) {
-    const id = tag.match(/data-actor="([^"]*)"/)?.[1] ?? ''
-    const i = indexOf.get(id)
-    if (i == null) continue
-    const moved = setAttr(setAttr(tag, 'x1', newX[i]!), 'x2', newX[i]!)
-    out = out.replace(tag, moved)
-  }
-
-  // Actor boxes → shift by their delta.
-  for (const grp of actorGroups) {
-    const id = grp.match(/data-id="([^"]*)"/)?.[1] ?? ''
-    const i = indexOf.get(id)
-    if (i == null) continue
-    out = out.replace(grp, shiftX(grp, delta[i]!))
-  }
-
-  // Messages → self loops shift; straight arrows get repositioned endpoints.
-  for (const grp of messageGroups) {
-    const fromId = grp.match(/data-from="([^"]*)"/)?.[1] ?? ''
-    const toId = grp.match(/data-to="([^"]*)"/)?.[1] ?? ''
-    const from = indexOf.get(fromId)
-    const to = indexOf.get(toId)
-    if (from == null || to == null) continue
-    if (grp.includes('data-self="true"')) {
-      // Self loops carry their geometry in a <polyline points="…"> plus a
-      // <text x="…">, so shift both by the actor's delta.
-      out = out.replace(grp, shiftPointsX(shiftX(grp, delta[from]!), delta[from]!))
-      continue
-    }
-    const lineTag = grp.match(/<line\b[^>]*\/?>/)?.[0]
-    const textTag = grp.match(/<text\b[^>]*>[\s\S]*?<\/text>/)?.[0]
-    let moved = grp
-    if (lineTag) {
-      const newLine = setAttr(setAttr(lineTag, 'x1', newX[from]!), 'x2', newX[to]!)
-      moved = moved.replace(lineTag, newLine)
-    }
-    if (textTag) {
-      const mid = (newX[from]! + newX[to]!) / 2
-      moved = moved.replace(textTag, setAttr(textTag, 'x', mid))
-    }
-    out = out.replace(grp, moved)
+  if (changed) {
+    // Protect <defs> (arrow markers use a different points format) and <style>.
+    const defs = out.match(/<defs>[\s\S]*?<\/defs>/)?.[0]
+    const style = out.match(/<style>[\s\S]*?<\/style>/)?.[0]
+    if (defs) out = out.replace(defs, ' DEFS ')
+    if (style) out = out.replace(style, ' STYLE ')
+    out = out.replace(
+      /<(rect|line|polyline|polygon|circle|text|tspan)\b[^>]*?>/g,
+      (tag) => remapTag(tag, f),
+    )
+    if (defs) out = out.replace(' DEFS ', defs)
+    if (style) out = out.replace(' STYLE ', style)
   }
 
   // --- 2. Mirror actors to the bottom --------------------------------------
@@ -249,9 +293,8 @@ function transform(svg: string): string {
   const bottomY = Math.max(...lifelineTags.map((t) => getAttr(t, 'y2')))
 
   let newHeight = height
-  if (isFinite(topRectY) && isFinite(boxHeight) && isFinite(bottomY)) {
+  if (isFinite(topRectY) && isFinite(boxHeight) && isFinite(bottomY) && bottomY > topRectY) {
     const dy = bottomY - topRectY
-    // Re-read the (already x-shifted) actor groups from `out` and mirror them.
     const shifted = out.match(/<g class="actor"[\s\S]*?<\/g>/g) ?? []
     const mirrored = shifted
       .map((g) => shiftY(g, dy).replace('class="actor"', 'class="actor actor-mirror"'))
@@ -260,7 +303,11 @@ function transform(svg: string): string {
     newHeight = height + boxHeight
   }
 
-  // Resize the canvas for the new width/height.
+  // --- Resize canvas -------------------------------------------------------
+  const origRight = Math.max(...actors.map((a) => a.x + a.halfWidth))
+  const rightPad = width - origRight
+  const newWidth = f(origRight) + rightPad + rightExtra
+
   let newRoot = setAttr(setAttr(rootTag, 'width', newWidth), 'height', newHeight)
   newRoot = newRoot.replace(
     /viewBox="[^"]*"/,

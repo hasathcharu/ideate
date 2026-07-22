@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, FileCode, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileCode, Pencil, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TreeNode } from '@/lib/types'
 
@@ -12,6 +12,9 @@ export interface FileTreeProps {
   dirtyPath: string | null
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
+  /** Create a new file inside this directory (path prefilled). */
+  onNewFile: (dirPath: string) => void
+  onRename: (node: TreeNode) => void
 }
 
 export default function FileTree({
@@ -20,6 +23,8 @@ export default function FileTree({
   dirtyPath,
   onOpenFile,
   onDelete,
+  onNewFile,
+  onRename,
 }: FileTreeProps) {
   if (nodes.length === 0) {
     return (
@@ -40,6 +45,8 @@ export default function FileTree({
           dirtyPath={dirtyPath}
           onOpenFile={onOpenFile}
           onDelete={onDelete}
+          onNewFile={onNewFile}
+          onRename={onRename}
         />
       ))}
     </ul>
@@ -53,9 +60,13 @@ interface ItemProps {
   dirtyPath: string | null
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
+  onNewFile: (dirPath: string) => void
+  onRename: (node: TreeNode) => void
 }
 
-function TreeItem({ node, depth, activePath, dirtyPath, onOpenFile, onDelete }: ItemProps) {
+function TreeItem(props: ItemProps) {
+  const { node, depth, activePath, dirtyPath, onOpenFile, onDelete, onNewFile, onRename } =
+    props
   const [open, setOpen] = useState(true)
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
@@ -79,20 +90,24 @@ function TreeItem({ node, depth, activePath, dirtyPath, onOpenFile, onDelete }: 
             <span className="truncate">{node.name}</span>
           </button>
           {dirty ? <UnsavedDot /> : null}
-          <DeleteButton node={node} onDelete={onDelete} />
+          <IconAction
+            title={`New file in ${node.name}`}
+            onClick={() => onNewFile(node.path)}
+          >
+            <Plus className="size-3.5" />
+          </IconAction>
+          <IconAction
+            title={`Delete folder ${node.name}`}
+            danger
+            onClick={() => onDelete(node)}
+          >
+            <Trash2 className="size-3.5" />
+          </IconAction>
         </div>
         {open && node.children ? (
           <ul>
             {node.children.map((child) => (
-              <TreeItem
-                key={child.path}
-                node={child}
-                depth={depth + 1}
-                activePath={activePath}
-                dirtyPath={dirtyPath}
-                onOpenFile={onOpenFile}
-                onDelete={onDelete}
-              />
+              <TreeItem key={child.path} {...props} node={child} depth={depth + 1} />
             ))}
           </ul>
         ) : null}
@@ -121,13 +136,18 @@ function TreeItem({ node, depth, activePath, dirtyPath, onOpenFile, onDelete }: 
           <span className="truncate">{node.name}</span>
         </button>
         {dirty ? <UnsavedDot /> : null}
-        <DeleteButton node={node} onDelete={onDelete} />
+        <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
+          <Pencil className="size-3.5" />
+        </IconAction>
+        <IconAction title={`Delete ${node.name}`} danger onClick={() => onDelete(node)}>
+          <Trash2 className="size-3.5" />
+        </IconAction>
       </div>
     </li>
   )
 }
 
-/** Amber dot marking unsaved changes; hidden on hover to reveal the delete button. */
+/** Amber dot marking unsaved changes; hidden on hover to reveal the actions. */
 function UnsavedDot() {
   return (
     <span
@@ -138,24 +158,32 @@ function UnsavedDot() {
   )
 }
 
-function DeleteButton({
-  node,
-  onDelete,
+function IconAction({
+  title,
+  onClick,
+  danger,
+  children,
 }: {
-  node: TreeNode
-  onDelete: (node: TreeNode) => void
+  title: string
+  onClick: () => void
+  danger?: boolean
+  children: React.ReactNode
 }) {
   return (
     <button
       type="button"
-      className="mr-1 flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:bg-destructive/15 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-      title={node.type === 'dir' ? `Delete folder ${node.name}` : `Delete ${node.name}`}
+      className={cn(
+        'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition last:mr-1 hover:bg-accent-foreground/10 focus-visible:opacity-100 group-hover:opacity-100',
+        danger && 'hover:bg-destructive/15 hover:text-destructive',
+      )}
+      title={title}
+      aria-label={title}
       onClick={(e) => {
         e.stopPropagation()
-        onDelete(node)
+        onClick()
       }}
     >
-      <Trash2 className="size-3.5" />
+      {children}
     </button>
   )
 }

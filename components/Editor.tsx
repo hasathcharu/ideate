@@ -263,14 +263,14 @@ function editorTheme(dark: boolean) {
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--primary)' },
       '.cm-gutters': {
         border: 'none',
-        background: 'transparent',
+        backgroundColor: 'var(--secondary)',
         color: 'var(--muted-foreground)',
       },
       '.cm-activeLine': {
         backgroundColor: 'color-mix(in srgb, var(--foreground) 6%, transparent)',
       },
       '.cm-activeLineGutter': {
-        backgroundColor: 'color-mix(in srgb, var(--foreground) 6%, transparent)',
+        backgroundColor: 'color-mix(in srgb, var(--foreground) 18%, transparent)',
       },
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
         {

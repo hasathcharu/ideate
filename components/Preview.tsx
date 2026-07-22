@@ -29,9 +29,16 @@ function clampScale(s: number): number {
 }
 
 export default function Preview({ text, colors, paintBackground = true }: PreviewProps) {
+  // The preview is client-only (per the architecture): rendering it during SSR
+  // would both violate that and mis-measure sequence-diagram labels (text
+  // measurement needs the browser). Gate on mount so the SVG is only built once
+  // `document` — and canvas text metrics — are available.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+
   // Rendered once per source change; theme switches never re-render — they only
   // change the CSS custom properties on the wrapper below.
-  const result = useMemo(() => renderPreview(text), [text])
+  const result = useMemo(() => (mounted ? renderPreview(text) : null), [text, mounted])
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
@@ -82,9 +89,10 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
       const bb = svg.getBoundingClientRect()
       naturalRef.current = { w: bb.width, h: bb.height }
     }
-    // Auto-fit only until the user takes control, so editing the diagram doesn't
-    // yank the view back on every re-render.
-    if (!interactedRef.current) fit()
+    // Fit to screen whenever the diagram changes (fresh render). `fit()` clears
+    // the interacted flag, so a subsequent resize won't refit until the user
+    // pans/zooms again.
+    fit()
   }, [result, fit])
 
   // Refit on viewport resize, but only while the user hasn't taken control.
@@ -190,7 +198,7 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
       className="preview-zoom relative h-full w-full overflow-hidden"
       style={wrapperStyle}
     >
-      {result.ok ? (
+      {!result ? null : result.ok ? (
         <>
           <div
             className="absolute inset-0 cursor-grab active:cursor-grabbing"

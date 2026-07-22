@@ -2,6 +2,7 @@
 
 import { Octokit } from '@octokit/rest'
 import { getGitHubToken } from '@/lib/session.server'
+import { APP_NAME } from '@/lib/config'
 import { buildTree, isDiagramFile } from '@/lib/tree'
 import type {
   ActionError,
@@ -174,7 +175,15 @@ export async function readFileAtRef(
   }
 }
 
-/** Version history — commits touching a path on main, newest first. */
+/**
+ * Version history — commits touching a path on main, newest first.
+ *
+ * The REST commits API does not follow renames, so after a rename the pre-rename
+ * history would be orphaned. We reconstruct it: for each path segment we list its
+ * commits, then inspect the earliest one — if it renamed the file into this path
+ * (GitHub reports `previous_filename`), we hop to that older path and continue.
+ * Each commit carries the `path` it had at that point so previews read correctly.
+ */
 export async function listFileCommits(
   owner: string,
   repo: string,
@@ -183,23 +192,71 @@ export async function listFileCommits(
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    const { data } = await octokit.repos.listCommits({
-      owner,
-      repo,
-      path,
-      sha: MAIN_BRANCH,
-      per_page: 100,
-    })
-    const commits: FileCommit[] = data.map((c) => ({
-      sha: c.sha,
-      message: c.commit.message.split('\n')[0] ?? c.commit.message,
-      author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
-      date: c.commit.author?.date ?? '',
-    }))
+    const commits: FileCommit[] = []
+    const seen = new Set<string>()
+    let currentPath: string | null = path
+
+    // Bounded hops guard against pathological/looping rename chains.
+    for (let hop = 0; hop < 20; hop++) {
+      const segPath: string | null = currentPath
+      if (!segPath) break
+      const segment = await commitsTouchingPath(octokit, owner, repo, segPath)
+      if (segment.length === 0) break
+
+      for (const c of segment) {
+        if (seen.has(c.sha)) continue
+        seen.add(c.sha)
+        commits.push({ ...c, path: segPath })
+      }
+
+      // Did the earliest commit for this path rename the file into it?
+      const earliest = segment[segment.length - 1]!
+      currentPath = await renamedFromPath(octokit, owner, repo, earliest.sha, segPath)
+    }
+
+    // Newest first across the whole (possibly multi-path) chain.
+    commits.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
     return ok(commits)
   } catch (error) {
     return err(mapError(error))
   }
+}
+
+/** Commits touching `path` on main (newest first), without the current path. */
+async function commitsTouchingPath(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+): Promise<Array<Omit<FileCommit, 'path'>>> {
+  const { data } = await octokit.repos.listCommits({
+    owner,
+    repo,
+    path,
+    sha: MAIN_BRANCH,
+    per_page: 100,
+  })
+  return data.map((c) => ({
+    sha: c.sha,
+    message: c.commit.message.split('\n')[0] ?? c.commit.message,
+    author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
+    date: c.commit.author?.date ?? '',
+  }))
+}
+
+/** If commit `sha` renamed a file into `path`, the file's previous path, else null. */
+async function renamedFromPath(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  sha: string,
+  path: string,
+): Promise<string | null> {
+  const { data } = await octokit.repos.getCommit({ owner, repo, ref: sha })
+  const renamed = data.files?.find(
+    (f) => f.filename === path && f.status === 'renamed' && f.previous_filename,
+  )
+  return renamed?.previous_filename ?? null
 }
 
 /**
@@ -225,13 +282,77 @@ export async function deletePaths(
         owner,
         repo,
         path,
-        message: `Delete ${path} via keep-mermaid`,
+        message: `Delete ${path} via ${APP_NAME}`,
         sha,
         branch: MAIN_BRANCH,
       })
       deleted += 1
     }
     return ok({ deleted })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/**
+ * Rename (move) a file on main. To keep Git history intact this is done as a
+ * single commit that removes the old path and adds the *same blob* at the new
+ * path — Git's rename detection then links the two (100% similarity), rather
+ * than the orphaned history a delete-then-create (two commits) would produce.
+ *
+ * This uses the git-data API to build one tree + commit, then fast-forwards the
+ * branch ref (force: false). That is a normal ref advance, not the ref-rewrite /
+ * force-push that the overwrite-on-conflict flow forbids.
+ */
+export async function renameFile(
+  owner: string,
+  repo: string,
+  oldPath: string,
+  newPath: string,
+): Promise<ActionResult<FileContent>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  if (oldPath === newPath) return err({ kind: 'unknown', message: 'The path is unchanged.' })
+  try {
+    // Old file blob (sha + content) — reused verbatim at the new path.
+    const current = await octokit.repos.getContent({ owner, repo, path: oldPath, ref: MAIN_BRANCH })
+    if (Array.isArray(current.data) || current.data.type !== 'file' || typeof current.data.content !== 'string') {
+      return err({ kind: 'not_found', message: 'That path is not a file.', status: 404 })
+    }
+    const blobSha = current.data.sha
+    const content = decodeBase64(current.data.content)
+
+    const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${MAIN_BRANCH}` })
+    const parentSha = ref.data.object.sha
+    const parentCommit = await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })
+
+    const tree = await octokit.git.createTree({
+      owner,
+      repo,
+      base_tree: parentCommit.data.tree.sha,
+      tree: [
+        { path: oldPath, mode: '100644', type: 'blob', sha: null }, // remove old
+        { path: newPath, mode: '100644', type: 'blob', sha: blobSha }, // add same blob
+      ],
+    })
+
+    const commit = await octokit.git.createCommit({
+      owner,
+      repo,
+      message: `Rename ${oldPath} → ${newPath} via ${APP_NAME}`,
+      tree: tree.data.sha,
+      parents: [parentSha],
+    })
+
+    await octokit.git.updateRef({
+      owner,
+      repo,
+      ref: `heads/${MAIN_BRANCH}`,
+      sha: commit.data.sha,
+      force: false,
+    })
+
+    return ok({ path: newPath, content, sha: blobSha })
   } catch (error) {
     return err(mapError(error))
   }
@@ -266,7 +387,7 @@ export async function commitFile(
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    const message = `${sha ? 'Update' : 'Create'} ${path} via keep-mermaid`
+    const message = `${sha ? 'Update' : 'Create'} ${path} via ${APP_NAME}`
     const { data } = await octokit.repos.createOrUpdateFileContents({
       owner,
       repo,
