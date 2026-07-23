@@ -99,6 +99,7 @@ const NEW_TEMPLATE = `flowchart LR
 // palette matches no preset (e.g. hand-edited themeVariables).
 const NONE_THEME = '__none__'
 const CUSTOM_THEME = '__custom__'
+const HISTORY_PAGE_SIZE = 30
 
 /** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
 function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
@@ -159,7 +160,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [configOpen, setConfigOpen] = useState(false)
 
   const [historyOpen, setHistoryOpen] = useState(false)
+  // Path segment currently displayed — starts at the open file's path, but moves
+  // to an older path once the user chooses to view history before a rename.
+  const [historyPath, setHistoryPath] = useState<string | null>(null)
+  const [historyPathStack, setHistoryPathStack] = useState<string[]>([])
   const [commits, setCommits] = useState<FileCommit[] | null>(null)
+  const [historyPage, setHistoryPage] = useState(1)
+  const [hasMoreCommits, setHasMoreCommits] = useState(false)
+  const [loadingMoreCommits, setLoadingMoreCommits] = useState(false)
+  const [renamedFrom, setRenamedFrom] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [versionContent, setVersionContent] = useState<string | null>(null)
@@ -758,22 +767,79 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
+  const HISTORY_PAGE_SIZE = 30
+
+  // Loads one page of history for `path`; `append` decides whether it extends the
+  // current list (Load more) or replaces it (first load / jump to another path).
+  const loadHistoryPage = useCallback(
+    async (path: string, page: number, append: boolean) => {
+      if (!repo) return
+      const res = await listFileCommits(
+        repo.owner,
+        repo.name,
+        path,
+        repo.branch,
+        page,
+        HISTORY_PAGE_SIZE,
+      )
+      if (!res.ok) {
+        setHistoryError(res.error.message)
+        return
+      }
+      setCommits((prev) => (append && prev ? [...prev, ...res.data.commits] : res.data.commits))
+      setHistoryPage(page)
+      setHasMoreCommits(res.data.hasMore)
+      setRenamedFrom(res.data.renamedFrom)
+      // Preselect the latest version on a fresh load only.
+      if (!append && res.data.commits[0]) void selectVersion(res.data.commits[0])
+    },
+    [repo, selectVersion],
+  )
+
   const openHistory = useCallback(async () => {
     if (!repo || !openPath) return
     setHistoryOpen(true)
+    setHistoryPath(openPath)
+    setHistoryPathStack([])
     setCommits(null)
     setHistoryError(null)
     setSelectedSha(null)
     setVersionContent(null)
-    const res = await listFileCommits(repo.owner, repo.name, openPath, repo.branch)
-    if (res.ok) {
-      setCommits(res.data)
-      // Preselect the latest version (commits are newest-first).
-      if (res.data[0]) void selectVersion(res.data[0])
-    } else {
-      setHistoryError(res.error.message)
-    }
-  }, [repo, openPath, selectVersion])
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    await loadHistoryPage(openPath, 1, false)
+  }, [repo, openPath, loadHistoryPage])
+
+  const loadMoreCommits = useCallback(async () => {
+    if (!historyPath || loadingMoreCommits) return
+    setLoadingMoreCommits(true)
+    await loadHistoryPage(historyPath, historyPage + 1, true)
+    setLoadingMoreCommits(false)
+  }, [historyPath, historyPage, loadingMoreCommits, loadHistoryPage])
+
+  const viewHistoryBeforeRename = useCallback(async () => {
+    if (!historyPath || !renamedFrom) return
+    setHistoryPathStack((prev) => [...prev, historyPath])
+    setHistoryPath(renamedFrom)
+    setCommits(null)
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    setHistoryError(null)
+    await loadHistoryPage(renamedFrom, 1, false)
+  }, [historyPath, renamedFrom, loadHistoryPage])
+
+  const goBackHistory = useCallback(async () => {
+    if (historyPathStack.length === 0) return
+    const next = historyPathStack.slice(0, -1)
+    const target = historyPathStack[historyPathStack.length - 1]!
+    setHistoryPathStack(next)
+    setHistoryPath(target)
+    setCommits(null)
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    setHistoryError(null)
+    await loadHistoryPage(target, 1, false)
+  }, [historyPathStack, loadHistoryPage])
 
   const onRecover = useCallback(() => {
     if (versionContent === null) return
@@ -1194,13 +1260,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
           open={historyOpen}
           onOpenChange={setHistoryOpen}
           path={openPath}
+          historyPath={historyPath ?? openPath}
           commits={commits}
           error={historyError}
+          hasMore={hasMoreCommits}
+          loadingMore={loadingMoreCommits}
+          renamedFrom={renamedFrom}
+          canGoBack={historyPathStack.length > 0}
           selectedSha={selectedSha}
           versionContent={versionContent}
           versionLoading={versionLoading}
           config={appliedConfig}
           onSelect={selectVersion}
+          onLoadMore={loadMoreCommits}
+          onViewBeforeRename={viewHistoryBeforeRename}
+          onBack={goBackHistory}
           onRecover={onRecover}
           onFork={onFork}
         />
