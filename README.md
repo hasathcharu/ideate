@@ -2,7 +2,7 @@
 
 A web-based Mermaid diagram editor where **your own GitHub repository is the
 database**. There is no application database. You sign in with GitHub, connect a
-repo, edit diagrams in a split-pane editor with a live themed preview, export to
+repo, edit diagrams in a split-pane editor with a live preview, export to
 PNG/SVG, and commit your work straight to the repo. Every diagram's commit
 history doubles as its version history.
 
@@ -15,12 +15,10 @@ history doubles as its version history.
 
 ## Features
 
-- Split-pane **CodeMirror 6** editor with a live [`beautiful-mermaid`](https://www.npmjs.com/package/beautiful-mermaid)
-  preview (flowchart, state, sequence, class, ER, XY chart).
-- **Theme switching** across `beautiful-mermaid`'s built-in themes plus VS Code /
-  Shiki themes — applied live via CSS custom properties (no re-render).
-- **Export** to SVG and PNG (high-DPI raster), with the theme colors resolved
-  and inlined so downloads are never colorless.
+- Split-pane **CodeMirror 6** editor with a live [`mermaid`](https://mermaid.js.org/)
+  preview supporting every diagram type mermaid renders.
+- **Export** to SVG and PNG (high-DPI raster) — mermaid bakes literal colors into
+  the SVG, so downloads stand alone.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   directly to `main`.
 - **Conflict handling**: if the file moved on GitHub since you loaded it, choose
@@ -31,7 +29,7 @@ history doubles as its version history.
 ## Tech stack
 
 Next.js (App Router, TypeScript strict) · Auth.js v5 (GitHub OAuth) ·
-beautiful-mermaid · CodeMirror 6 · @octokit/rest (server-side only) · Shiki.
+mermaid · CodeMirror 6 · @octokit/rest (server-side only).
 
 > This app **cannot** be a static export — authentication and all GitHub I/O run
 > in server actions, so it needs a server runtime (Vercel / Cloudflare Pages /

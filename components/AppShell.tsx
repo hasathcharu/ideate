@@ -13,7 +13,6 @@ import {
 import { toast } from 'sonner'
 import Editor from './Editor'
 import Preview from './Preview'
-import ThemeSelect from './ThemeSelect'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
 import RepoPicker from './RepoPicker'
@@ -24,7 +23,7 @@ import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { useChromeTheme, useDebouncedValue, useResolvedTheme } from '@/lib/hooks'
+import { useDebouncedValue } from '@/lib/hooks'
 import {
   loadConfig,
   saveConfig,
@@ -34,7 +33,6 @@ import {
   docIdForFile,
   SCRATCH_DOC_ID,
 } from '@/lib/storage'
-import { DEFAULT_THEME_ID } from '@/lib/themes'
 import { APP_NAME } from '@/lib/config'
 import { buildTree, collectFilePaths, isDiagramFile } from '@/lib/tree'
 import { cn } from '@/lib/utils'
@@ -77,8 +75,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
-    themeId: DEFAULT_THEME_ID,
-    bakeThemeOnExport: true,
+    exportBackground: true,
     splitRatio: 0.5,
   })
   const [hydrated, setHydrated] = useState(false)
@@ -117,8 +114,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [versionLoading, setVersionLoading] = useState(false)
 
   const debouncedText = useDebouncedValue(text, 350)
-  const { colors, dark, loading } = useResolvedTheme(config.themeId)
-  useChromeTheme(colors, dark)
 
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
@@ -584,7 +579,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
   }, [versionContent, repo, openPrompt])
 
-  const onThemeChange = useCallback((id: string) => updateConfig({ themeId: id }), [updateConfig])
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
   const showSidebar = githubEnabled && !!repo && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
@@ -639,13 +633,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <Separator orientation="vertical" className="h-6" />
             </>
           ) : null}
-          <ThemeSelect value={config.themeId} onChange={onThemeChange} loading={loading} />
           <ExportMenu
             text={debouncedText}
-            colors={colors}
             baseName={baseName}
-            includeBackground={config.bakeThemeOnExport}
-            onToggleBackground={(v) => updateConfig({ bakeThemeOnExport: v })}
+            includeBackground={config.exportBackground}
+            onToggleBackground={(v) => updateConfig({ exportBackground: v })}
           />
           <Separator orientation="vertical" className="h-6" />
           <AuthButton user={user} />
@@ -744,7 +736,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             }}
           >
             <section className="min-h-0 overflow-auto" aria-label="Editor">
-              <Editor value={text} onChange={setText} dark={dark} />
+              <Editor value={text} onChange={setText} dark={false} />
             </section>
             <div
               role="separator"
@@ -761,7 +753,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
             </div>
             <section className="min-h-0 overflow-auto" aria-label="Preview">
-              <Preview text={debouncedText} colors={colors} />
+              <Preview text={debouncedText} />
             </section>
           </div>
         </main>
@@ -809,7 +801,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
           selectedSha={selectedSha}
           versionContent={versionContent}
           versionLoading={versionLoading}
-          colors={colors}
           onSelect={selectVersion}
           onRecover={onRecover}
           onFork={onFork}

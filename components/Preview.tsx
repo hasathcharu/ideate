@@ -1,16 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
-import type { DiagramColors } from 'beautiful-mermaid'
-import { renderPreview, colorsToCssVars } from '@/lib/mermaid'
+import { renderPreview, type RenderError, type RenderResult } from '@/lib/mermaid'
 import { Button } from '@/components/ui/button'
 
 export interface PreviewProps {
   text: string
-  colors: DiagramColors | null
-  /** Paint the theme background behind the diagram (vs. transparent). */
+  /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground?: boolean
 }
 
@@ -28,17 +26,26 @@ function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
 }
 
-export default function Preview({ text, colors, paintBackground = true }: PreviewProps) {
-  // The preview is client-only (per the architecture): rendering it during SSR
-  // would both violate that and mis-measure sequence-diagram labels (text
-  // measurement needs the browser). Gate on mount so the SVG is only built once
-  // `document` — and canvas text metrics — are available.
+export default function Preview({ text, paintBackground = true }: PreviewProps) {
+  // The preview is client-only (per the architecture): mermaid measures text
+  // against the live DOM, so it can only run in the browser. Gate on mount so
+  // the SVG is only built once `document` is available.
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // Rendered once per source change; theme switches never re-render — they only
-  // change the CSS custom properties on the wrapper below.
-  const result = useMemo(() => (mounted ? renderPreview(text) : null), [text, mounted])
+  // mermaid renders asynchronously; keep the latest result in state and ignore
+  // any in-flight render that a newer source change has superseded.
+  const [result, setResult] = useState<RenderResult | RenderError | null>(null)
+  useEffect(() => {
+    if (!mounted) return
+    let cancelled = false
+    void renderPreview(text).then((r) => {
+      if (!cancelled) setResult(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [text, mounted])
   const isEmpty = !text.trim()
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
@@ -55,10 +62,8 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
   const viewRef = useRef(view)
   viewRef.current = view
 
-  const styleVars = colors ? colorsToCssVars(colors) : {}
   const wrapperStyle: CSSProperties = {
-    ...(styleVars as CSSProperties),
-    background: paintBackground && colors ? colors.bg : 'transparent',
+    background: paintBackground ? '#ffffff' : 'transparent',
   }
 
   /** Center the diagram and scale it to fit the viewport (never upscaling). */
@@ -82,14 +87,24 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
   useLayoutEffect(() => {
     const svg = svgHostRef.current?.querySelector('svg')
     if (!svg) return
-    const wAttr = parseFloat(svg.getAttribute('width') ?? '')
-    const hAttr = parseFloat(svg.getAttribute('height') ?? '')
-    if (wAttr && hAttr) {
-      naturalRef.current = { w: wAttr, h: hAttr }
-    } else {
-      const bb = svg.getBoundingClientRect()
-      naturalRef.current = { w: bb.width, h: bb.height }
+    // mermaid emits width="100%" + a viewBox; pin the intrinsic pixel size so the
+    // zoom transform positions the diagram at natural size rather than 0-width.
+    const vb = svg.viewBox?.baseVal
+    let w = parseFloat(svg.getAttribute('width') ?? '')
+    let h = parseFloat(svg.getAttribute('height') ?? '')
+    if ((!w || !h) && vb && vb.width && vb.height) {
+      w = vb.width
+      h = vb.height
     }
+    if (!w || !h) {
+      const bb = svg.getBoundingClientRect()
+      w = bb.width
+      h = bb.height
+    }
+    svg.setAttribute('width', String(w))
+    svg.setAttribute('height', String(h))
+    svg.style.maxWidth = 'none'
+    naturalRef.current = { w, h }
     // Fit to screen whenever the diagram changes (fresh render). `fit()` clears
     // the interacted flag, so a subsequent resize won't refit until the user
     // pans/zooms again.

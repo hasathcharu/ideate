@@ -1,17 +1,3 @@
-import type { DiagramColors } from 'beautiful-mermaid'
-
-/** A selectable theme in the UI. Built-in themes resolve synchronously; Shiki
- *  themes are loaded on demand and mapped through `fromShikiTheme()`. */
-export interface ThemeOption {
-  id: string
-  label: string
-  kind: 'builtin' | 'shiki'
-  /** Whether the theme reads as dark — used only to pick a sensible editor look. */
-  dark: boolean
-}
-
-export type { DiagramColors }
-
 /** Identifies which document a localStorage draft belongs to. */
 export type DocId = string
 
@@ -33,8 +19,8 @@ export interface Repo {
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
   repo: { owner: string; name: string } | null
-  themeId: string
-  bakeThemeOnExport: boolean
+  /** Paint a solid background behind exported diagrams (vs. transparent). */
+  exportBackground: boolean
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
 }

@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { DiagramColors } from 'beautiful-mermaid'
 import {
   copyPNG,
   copySVG,
@@ -22,7 +21,6 @@ import {
 
 export interface ExportMenuProps {
   text: string
-  colors: DiagramColors | null
   baseName: string
   includeBackground: boolean
   onToggleBackground: (value: boolean) => void
@@ -30,16 +28,14 @@ export interface ExportMenuProps {
 
 export default function ExportMenu({
   text,
-  colors,
   baseName,
   includeBackground,
   onToggleBackground,
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
-  const disabled = !colors || !text.trim()
+  const disabled = !text.trim()
 
   const run = async (key: string, label: string, fn: () => Promise<void>) => {
-    if (!colors) return
     setBusy(key)
     try {
       await fn()
@@ -110,22 +106,18 @@ export default function ExportMenu({
           />
         </div>
         <DropdownMenuSeparator />
-        {colors ? (
-          <>
-            <Row
-              label="SVG"
-              format="SVG"
-              onDownload={() => exportSVG(text, colors, `${name}.svg`, includeBackground)}
-              onCopy={() => copySVG(text, colors, includeBackground)}
-            />
-            <Row
-              label="PNG"
-              format="PNG"
-              onDownload={() => exportPNG(text, colors, `${name}.png`, includeBackground)}
-              onCopy={() => copyPNG(text, colors, includeBackground)}
-            />
-          </>
-        ) : null}
+        <Row
+          label="SVG"
+          format="SVG"
+          onDownload={() => exportSVG(text, `${name}.svg`, includeBackground)}
+          onCopy={() => copySVG(text, includeBackground)}
+        />
+        <Row
+          label="PNG"
+          format="PNG"
+          onDownload={() => exportPNG(text, `${name}.png`, includeBackground)}
+          onCopy={() => copyPNG(text, includeBackground)}
+        />
       </DropdownMenuContent>
     </DropdownMenu>
   )

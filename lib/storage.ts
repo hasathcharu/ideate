@@ -1,5 +1,4 @@
 import type { AppConfig } from './types'
-import { DEFAULT_THEME_ID } from './themes'
 
 /**
  * localStorage is the WORKING COPY: uncommitted drafts + app config only.
@@ -24,8 +23,7 @@ function hasStorage(): boolean {
 
 const DEFAULT_CONFIG: AppConfig = {
   repo: null,
-  themeId: DEFAULT_THEME_ID,
-  bakeThemeOnExport: true,
+  exportBackground: true,
   splitRatio: 0.5,
 }
 

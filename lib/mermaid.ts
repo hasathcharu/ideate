@@ -1,43 +1,51 @@
-import { renderMermaidSVG, type DiagramColors, type RenderOptions } from 'beautiful-mermaid'
-import { mixSrgb, parseColor, toHex } from './color'
-import { enhanceSequenceSVG } from './sequence'
-import { smoothEdges } from './edges'
+import mermaid from 'mermaid'
 
 /**
- * beautiful-mermaid emits an SVG whose element colors reference internal
- * CSS custom properties (`--_line`, `--_node-fill`, …). Those are derived in the
- * SVG's `<style>` block from a small base palette (`--bg`, `--fg`, and optional
- * `--line`/`--accent`/`--muted`/`--surface`/`--border`) via `color-mix()`.
+ * Diagram rendering via the official `mermaid` library.
  *
- * For the LIVE preview we render once with the base palette pointed at CSS
- * variables and set those variables on the container — so switching themes is a
- * pure CSS update with no re-render.
- *
- * For EXPORT we must turn those variables into literal colors (see lib/export.ts),
- * which is why the color-mix derivations are reproduced faithfully below.
+ * mermaid is browser-only (it measures text against the live DOM), so every
+ * entry point here is async and must run client-side. Colors are baked into the
+ * SVG at render time from mermaid's built-in `default` theme — there is no
+ * CSS-variable theme layer anymore, which is why the exported SVG stands alone
+ * with no extra color inlining (see lib/export.ts).
  */
 
-/**
- * Render options that make the SVG read its palette from inherited CSS vars.
- *
- * IMPORTANT: the outer variable names (`--mm-bg`/`--mm-fg`) must DIFFER from the
- * SVG's own internal `--bg`/`--fg`. The renderer emits `style="--bg:var(--mm-bg)"`
- * on the <svg>; if we reused `--bg` here it would become `--bg:var(--bg)`, a
- * self-reference cycle that CSS treats as invalid — collapsing node fills and
- * node text to black. Distinct names keep the reference pointing at the parent.
- */
-const LIVE_OPTIONS: RenderOptions = {
-  bg: 'var(--mm-bg)',
-  fg: 'var(--mm-fg)',
-  transparent: true,
+let initialized = false
+
+function ensureInitialized(): void {
+  if (initialized) return
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'default',
+    // `strict` still renders `<br/>` line breaks in labels; it just forbids raw
+    // HTML/scripts. Safe default for arbitrary user diagrams.
+    securityLevel: 'strict',
+    // Pure-SVG labels (no <foreignObject>/HTML) so exports rasterize cleanly and
+    // stand alone; `basis` gives smooth curved edges out of the box.
+    flowchart: { htmlLabels: false, curve: 'basis' },
+  })
+  initialized = true
 }
 
-/** Render the theme-agnostic SVG (colors come from inherited CSS variables).
- *  Post-processing: sequence diagrams get widened label spacing + mirrored
- *  participants (lib/sequence.ts); flowchart/state edges get their orthogonal
- *  corners rounded (lib/edges.ts). */
-export function renderThemeableSVG(text: string): string {
-  return smoothEdges(enhanceSequenceSVG(renderMermaidSVG(text, LIVE_OPTIONS)))
+// mermaid.render requires a unique DOM id per call; a monotonic counter keeps
+// them distinct across rapid re-renders.
+let renderSeq = 0
+
+/**
+ * Render `text` to an SVG string, throwing on invalid syntax. On failure mermaid
+ * can leave an orphaned temp element behind, so we clean it up before rethrowing.
+ */
+export async function renderToSvg(text: string): Promise<string> {
+  ensureInitialized()
+  const id = `mmd-${++renderSeq}`
+  try {
+    const { svg } = await mermaid.render(id, text)
+    return svg
+  } catch (err) {
+    document.getElementById(id)?.remove()
+    document.getElementById(`d${id}`)?.remove()
+    throw err
+  }
 }
 
 export interface RenderResult {
@@ -49,158 +57,15 @@ export interface RenderError {
   message: string
 }
 
-/**
- * Render the diagram once in "CSS variable" mode. The returned SVG is
- * theme-agnostic; colors come from CSS custom properties set on its container.
- */
-export function renderPreview(text: string): RenderResult | RenderError {
+/** Render the diagram, returning a discriminated result instead of throwing so
+ *  the preview can show inline error messages. */
+export async function renderPreview(text: string): Promise<RenderResult | RenderError> {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false, message: 'Empty diagram.' }
   try {
-    const svg = renderThemeableSVG(text)
+    const svg = await renderToSvg(text)
     return { ok: true, svg }
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
-  }
-}
-
-/** Roles read (by bare name) inside beautiful-mermaid's own <style> block. */
-const OPTIONAL_ROLES = ['line', 'accent', 'muted', 'surface', 'border'] as const
-
-/**
- * Map a theme's colors to the CSS custom properties consumed by the live
- * preview SVG.
- *
- * `bg`/`fg` are emitted under the outer `--mm-*` names (see `LIVE_OPTIONS`) to
- * avoid a self-reference cycle. Each optional role is emitted under its bare
- * name (`--line`, `--accent`, …) because the SVG's `<style>` reads those
- * directly. Roles the theme does NOT define are set to `initial` — crucial now
- * that shadcn defines `--accent`/`--muted`/`--border` on the document root: the
- * explicit `initial` shields the SVG from those, so its `var(--x, fallback)`
- * color-mix fallbacks apply instead of the app's chrome colors leaking in.
- */
-export function colorsToCssVars(colors: DiagramColors): Record<string, string> {
-  const out: Record<string, string> = {
-    '--mm-bg': colors.bg,
-    '--mm-fg': colors.fg,
-  }
-  // On dark themes the derived edge-label color (`--muted` → `--_text-muted`,
-  // only ~40% toward fg by default) is too dim. Push it further toward the
-  // foreground for legible secondary text; leave light themes untouched.
-  const boostedMuted = darkMutedOverride(colors)
-  for (const key of OPTIONAL_ROLES) {
-    if (key === 'muted' && boostedMuted) out['--muted'] = boostedMuted
-    else out[`--${key}`] = colors[key] ?? 'initial'
-  }
-  return out
-}
-
-/** A higher-contrast muted color for dark backgrounds, or null to keep default. */
-function darkMutedOverride(colors: DiagramColors): string | null {
-  const fg = parseColor(colors.fg)
-  const bg = parseColor(colors.bg)
-  if (!fg || !bg) return null
-  const luminance = (0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b) / 255
-  if (luminance >= 0.5) return null // light theme — leave as-is
-  return toHex(mixSrgb(fg, bg, 68))
-}
-
-/**
- * Derive the shadcn/ui design tokens from the active diagram theme, so the whole
- * UI matches the diagram. Returned as CSS custom properties to set on the
- * document root (covering portaled overlays too).
- */
-export function colorsToChromeVars(colors: DiagramColors): Record<string, string> {
-  const bg = parseColor(colors.bg)
-  const fg = parseColor(colors.fg)
-  const mix = (pct: number, base: string): string => {
-    const b = parseColor(base)
-    return fg && b ? toHex(mixSrgb(fg, b, pct)) : base
-  }
-
-  const accent = colors.accent ?? mix(85, colors.bg)
-  const accentRgb = parseColor(accent)
-  const accentLum = accentRgb
-    ? (0.299 * accentRgb.r + 0.587 * accentRgb.g + 0.114 * accentRgb.b) / 255
-    : 0.5
-  const onAccent = accentLum > 0.6 ? '#0b0e14' : '#ffffff'
-
-  const card = mix(4, colors.bg)
-  const border = colors.border ?? mix(18, colors.bg)
-  const mutedFg = colors.muted ?? mix(55, colors.bg)
-
-  return {
-    '--background': colors.bg,
-    '--foreground': colors.fg,
-    '--card': card,
-    '--card-foreground': colors.fg,
-    '--popover': mix(6, colors.bg),
-    '--popover-foreground': colors.fg,
-    '--primary': accent,
-    '--primary-foreground': onAccent,
-    '--secondary': mix(10, colors.bg),
-    '--secondary-foreground': colors.fg,
-    '--muted': mix(8, colors.bg),
-    '--muted-foreground': mutedFg,
-    '--accent': mix(12, colors.bg),
-    '--accent-foreground': colors.fg,
-    '--border': border,
-    '--input': mix(14, colors.bg),
-    '--ring': accent,
-    '--sidebar': card,
-    '--sidebar-foreground': colors.fg,
-    '--sidebar-primary': accent,
-    '--sidebar-primary-foreground': onAccent,
-    '--sidebar-accent': mix(12, colors.bg),
-    '--sidebar-accent-foreground': colors.fg,
-    '--sidebar-border': border,
-    '--sidebar-ring': accent,
-  }
-}
-
-/**
- * Resolve a theme into a complete map of every CSS variable the SVG references
- * (base + internal `--_*`) as literal hex colors. This mirrors the derivation in
- * beautiful-mermaid's own `<style>` block. Used by the exporter to inline colors.
- */
-export function resolveThemeVariables(colors: DiagramColors): Record<string, string> {
-  const bg = parseColor(colors.bg)
-  const fg = parseColor(colors.fg)
-
-  // If the palette isn't plain hex/rgb we can't do the math; fall back to
-  // passing the raw values through and letting mix() default sensibly.
-  const mix = (pct: number, fallback: string): string => {
-    if (!fg || !bg) return fallback
-    return toHex(mixSrgb(fg, bg, pct))
-  }
-
-  const line = colors.line ?? mix(50, colors.fg)
-  const accent = colors.accent ?? mix(85, colors.fg)
-  const surface = colors.surface ?? mix(3, colors.bg)
-  const border = colors.border ?? mix(20, colors.fg)
-  const muted40 = colors.muted ?? mix(40, colors.fg)
-  const muted60 = colors.muted ?? mix(60, colors.fg)
-
-  return {
-    '--bg': colors.bg,
-    '--fg': colors.fg,
-    '--line': line,
-    '--accent': accent,
-    '--muted': colors.muted ?? muted40,
-    '--surface': surface,
-    '--border': border,
-    // Internal derived variables (exact names from the rendered <style> block):
-    '--_text': colors.fg,
-    '--_text-sec': muted60,
-    '--_text-muted': muted40,
-    '--_text-faint': mix(25, colors.fg),
-    '--_line': line,
-    '--_arrow': accent,
-    '--_node-fill': surface,
-    '--_node-stroke': border,
-    '--_group-fill': colors.bg,
-    '--_group-hdr': mix(5, colors.fg),
-    '--_inner-stroke': mix(12, colors.fg),
-    '--_key-badge': mix(10, colors.fg),
   }
 }

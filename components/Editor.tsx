@@ -48,11 +48,10 @@ const mermaidLanguage = StreamLanguage.define<unknown>({
 })
 
 /**
- * Syntax colors derived from the active theme's CSS variables (set on :root by
- * `useChromeTheme`), so highlighting tracks the selected diagram theme rather
- * than a fixed palette. The themed palette is essentially accent (`--primary`) +
- * `--foreground` + `--muted-foreground`, so this is an accent-weighted scheme
- * rather than many independent hues — but it always conforms to the theme.
+ * Syntax colors reference the shadcn design tokens (`--primary`, `--foreground`,
+ * `--muted-foreground`) defined statically in globals.css, so highlighting stays
+ * consistent with the app chrome. An accent-weighted scheme rather than many
+ * independent hues.
  */
 function highlightStyle(): HighlightStyle {
   const accent = 'var(--primary)'
@@ -244,8 +243,8 @@ function createSearchPanel(view: EditorView): Panel {
 }
 
 function editorTheme(dark: boolean) {
-  // Colors reference the shadcn design tokens (driven from the active diagram
-  // theme), so the editor surface matches the rest of the site.
+  // Colors reference the shadcn design tokens, so the editor surface matches the
+  // rest of the site.
   return EditorView.theme(
     {
       '&': {
@@ -422,8 +421,8 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
   }, [value])
 
   // React to light/dark switches without remounting. The highlight style is
-  // CSS-variable based (tracks the theme live via :root), so only the editor
-  // theme — which carries CodeMirror's own `dark` flag — needs reconfiguring.
+  // CSS-variable based (reads :root tokens), so only the editor theme — which
+  // carries CodeMirror's own `dark` flag — needs reconfiguring.
   useEffect(() => {
     const view = viewRef.current
     if (!view) return

@@ -1,18 +1,16 @@
 'use client'
 
 import Link from 'next/link'
-import { THEMES } from 'beautiful-mermaid'
 import {
   ArrowRight,
   Download,
+  Eye,
   GitCommitHorizontal,
   History,
-  Palette,
   Pencil,
 } from 'lucide-react'
 import { loginWithGitHub } from '@/app/actions/auth'
 import { GithubIcon } from '@/components/icons'
-import { useChromeTheme } from '@/lib/hooks'
 import { APP_NAME } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -24,17 +22,13 @@ const CONCEPT = `flowchart LR
 `
 
 const FEATURES = [
-  { icon: Palette, title: 'Live themed preview', body: 'Recolor the whole app with built-in and VS Code / Shiki themes.' },
+  { icon: Eye, title: 'Live preview', body: 'See your diagram render as you type, rendered by Mermaid.' },
   { icon: Download, title: 'Export', body: 'Download or copy as SVG or high-DPI PNG.' },
   { icon: GitCommitHorizontal, title: 'Commit to GitHub', body: 'Save commits straight to main — no separate database.' },
   { icon: History, title: 'Version history', body: 'Preview any past commit and recover or fork it.' },
 ]
 
 export default function Landing({ signedIn }: { signedIn: boolean }) {
-  // Landing uses a fixed light theme so the chrome matches the hero diagram.
-  const theme = THEMES['github-light'] ?? null
-  useChromeTheme(theme, false)
-
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
@@ -55,7 +49,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
               Draw Mermaid diagrams. Commit them to GitHub.
             </h1>
             <p className="mt-4 max-w-md text-muted-foreground">
-              A diagram editor with a live themed preview that saves straight to your
+              A diagram editor with a live preview that saves straight to your
               repo — every commit is a version you can revisit.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
@@ -85,7 +79,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
 
           <div className="rounded-xl border bg-card p-2 shadow-2xl">
             <div className="h-[320px] overflow-hidden rounded-lg">
-              <Preview text={CONCEPT} colors={theme} />
+              <Preview text={CONCEPT} />
             </div>
           </div>
         </section>
