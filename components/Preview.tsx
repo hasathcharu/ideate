@@ -78,8 +78,13 @@ export default function Preview({
   const viewRef = useRef(view)
   viewRef.current = view
 
+  const themeBackground =
+    typeof config?.themeVariables?.background === 'string'
+      ? config.themeVariables.background
+      : undefined
+
   const wrapperStyle: CSSProperties = {
-    background: paintBackground ? '#ffffff' : 'transparent',
+    background: paintBackground ? (themeBackground ?? '#ffffff') : 'transparent',
   }
 
   /** Center the diagram and scale it to fit the viewport (never upscaling). */

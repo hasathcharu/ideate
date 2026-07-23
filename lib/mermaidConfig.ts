@@ -396,6 +396,14 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   // A muted-but-legible text color, derived when we have both text + a surface.
   const mutedText =
     text && surface ? `color-mix(in srgb, ${text} 60%, ${surface})` : text
+  // Dividers/panel edges/input outlines want a quiet hairline, not the bold
+  // accent mermaid uses for node borders — blend it mostly toward the surface
+  // so it reads as a subtle line instead of a high-contrast stroke.
+  const surfaceBg = bg ?? surface
+  const softBorder =
+    borderColor && surfaceBg
+      ? `color-mix(in srgb, ${borderColor} 25%, ${surfaceBg})`
+      : borderColor
 
   set('--background', bg)
   set('--foreground', text)
@@ -409,8 +417,8 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   set('--muted-foreground', mutedText)
   set('--accent', secondary)
   set('--accent-foreground', text)
-  set('--border', borderColor)
-  set('--input', borderColor)
+  set('--border', softBorder)
+  set('--input', softBorder)
   set('--ring', accentLine)
   set('--primary', accentLine)
   set('--primary-foreground', bg ?? surface)
@@ -420,7 +428,7 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   set('--sidebar-primary-foreground', bg ?? surface)
   set('--sidebar-accent', secondary)
   set('--sidebar-accent-foreground', text)
-  set('--sidebar-border', borderColor)
+  set('--sidebar-border', softBorder)
   set('--sidebar-ring', accentLine)
 
   if (font) {

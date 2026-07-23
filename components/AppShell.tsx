@@ -797,7 +797,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
                 }}
               >
-                <SelectTrigger size="sm" className="h-7 w-40" aria-label="Diagram theme">
+                <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent align="end">
@@ -929,6 +929,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           selectedSha={selectedSha}
           versionContent={versionContent}
           versionLoading={versionLoading}
+          config={appliedConfig}
           onSelect={selectVersion}
           onRecover={onRecover}
           onFork={onFork}
