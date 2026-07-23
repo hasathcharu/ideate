@@ -203,6 +203,29 @@ export interface RenderError {
   message: string
 }
 
+/**
+ * `@mermaid-js/layout-elk` (0.2.2, latest as of writing) can't lay out
+ * state-diagram composite/nested states (`state X { ... }`): it loses the
+ * child node's `shape` on the way through ELK's own graph representation, so
+ * mermaid's generic cluster renderer throws a bare
+ * `shapes[shape] is not a function` — an upstream limitation, not something
+ * fixable from the render call here. Recognize that specific failure and
+ * point at the fix (switch to Dagre) instead of surfacing the internal error.
+ */
+function describeRenderError(err: unknown, text: string, userConfig: MermaidUserConfig | null): string {
+  const message = err instanceof Error ? err.message : String(err)
+  const isElkClusterFailure = /shapes\[.*\] is not a function/.test(message)
+  const isElkLayout = userConfig?.layout === 'elk'
+  const hasCompositeState = /^\s*state\s+\S+\s*\{/m.test(text)
+  if (isElkClusterFailure && isElkLayout && hasCompositeState) {
+    return (
+      'The ELK layout can’t render composite/nested states (`state X { ... }`) ' +
+      'in state diagrams — switch Layout to Dagre for this diagram.'
+    )
+  }
+  return message
+}
+
 /** Render the diagram, returning a discriminated result instead of throwing so
  *  the preview can show inline error messages. */
 export async function renderPreview(
@@ -215,6 +238,6 @@ export async function renderPreview(
     const svg = await renderToSvg(text, userConfig)
     return { ok: true, svg }
   } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
+    return { ok: false, message: describeRenderError(err, text, userConfig) }
   }
 }
