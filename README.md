@@ -1,8 +1,8 @@
-# SketchMade
+# Ideate
 
 A web-based Mermaid diagram editor where **your own GitHub repository is the
 database**. There is no application database. You sign in with GitHub, connect a
-repo, edit diagrams in a split-pane editor with a live themed preview, export to
+repo, edit diagrams in a split-pane editor with a live preview, export to
 PNG/SVG, and commit your work straight to the repo. Every diagram's commit
 history doubles as its version history.
 
@@ -15,14 +15,19 @@ history doubles as its version history.
 
 ## Features
 
-- Split-pane **CodeMirror 6** editor with a live [`beautiful-mermaid`](https://www.npmjs.com/package/beautiful-mermaid)
-  preview (flowchart, state, sequence, class, ER, XY chart).
-- **Theme switching** across `beautiful-mermaid`'s built-in themes plus VS Code /
-  Shiki themes — applied live via CSS custom properties (no re-render).
-- **Export** to SVG and PNG (high-DPI raster), with the theme colors resolved
-  and inlined so downloads are never colorless.
+- Split-pane **CodeMirror 6** editor with a live [`mermaid`](https://mermaid.js.org/)
+  preview supporting every diagram type mermaid renders.
+- **Theming & layout**: ~19 built-in color presets (or hand-edit the global
+  mermaid YAML config) retune every diagram *and* recolor the whole app chrome
+  to match; switch the layout engine between Dagre and ELK.
+- **Export** to SVG and PNG (high-DPI raster) — mermaid bakes literal colors into
+  the SVG, so downloads stand alone. The raw mermaid source can also be
+  exported/copied with the config baked in as frontmatter.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
-  directly to `main`.
+  to whichever branch is selected.
+- **Branches**: switch or create a branch from the branch picker, and open a
+  pull request back to the default branch with one click (redirects to GitHub —
+  no PR-creation API surface).
 - **Conflict handling**: if the file moved on GitHub since you loaded it, choose
   *Overwrite* (commit on top of the latest — never a force-push) or *Start over*.
 - **Version history**: browse a file's commits, preview any version read-only,
@@ -31,7 +36,7 @@ history doubles as its version history.
 ## Tech stack
 
 Next.js (App Router, TypeScript strict) · Auth.js v5 (GitHub OAuth) ·
-beautiful-mermaid · CodeMirror 6 · @octokit/rest (server-side only) · Shiki.
+mermaid · CodeMirror 6 · @octokit/rest (server-side only).
 
 > This app **cannot** be a static export — authentication and all GitHub I/O run
 > in server actions, so it needs a server runtime (Vercel / Cloudflare Pages /
@@ -52,7 +57,7 @@ New OAuth App** (<https://github.com/settings/developers>):
 
 | Field | Value (local dev) |
 |---|---|
-| Application name | `keep-mermaid (dev)` |
+| Application name | `Ideate (dev)` |
 | Homepage URL | `http://localhost:3000` |
 | Authorization callback URL | `http://localhost:3000/api/auth/callback/github` |
 
@@ -97,8 +102,8 @@ Open <http://localhost:3000>. You land on a start page with two choices:
 - **Local mode** — start drawing immediately; edits stay in your browser
   (localStorage). No account needed. Editor, live themed preview and export all
   work offline.
-- **GitHub repo mode** — sign in with GitHub, connect a repository, and commit
-  diagrams to `main`; every commit is a version.
+- **GitHub repo mode** — sign in with GitHub, connect a repository, pick (or
+  create) a branch, and commit diagrams there; every commit is a version.
 
 The whole UI recolors to match the selected diagram theme (built with Tailwind v4
 + shadcn/ui). The file-tree sidebar is collapsible, and exports can be downloaded
@@ -124,9 +129,8 @@ or copied to the clipboard (SVG/PNG).
 
 ## Scope / limitations (MVP)
 
-- Six diagram types (whatever `beautiful-mermaid` supports); no core-`mermaid.js`
-  fallback yet.
-- Commits go to `main` only — no branching, no branch selector.
+- "Open PR" is a redirect to GitHub's compare page — no PR-creation API call,
+  no in-app merge/review flow.
 - Single-file commits (no multi-file atomic commits).
 - Version history uses `GET /commits?path=`, which does **not** follow renames —
   history appears to stop at a rename. This is expected.

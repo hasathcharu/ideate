@@ -1,30 +1,56 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import {
-  ChevronRight,
+  Command,
   FolderGit2,
+  GitBranch,
+  GitPullRequestArrow,
   History,
   PanelLeft,
   Plus,
   RefreshCw,
-  Save,
+  RotateCcw,
+  Settings2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import Editor from './Editor'
 import Preview from './Preview'
-import ThemeSelect from './ThemeSelect'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
 import RepoPicker from './RepoPicker'
+import BranchPicker from './BranchPicker'
 import FileTree from './FileTree'
 import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
+import ConfigModal from './ConfigModal'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { useChromeTheme, useDebouncedValue, useResolvedTheme } from '@/lib/hooks'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
+import {
+  parseMermaidConfig,
+  applyThemeToSite,
+  layoutFromConfig,
+  setLayoutInYaml,
+  setThemeInYaml,
+  themeFromConfig,
+  type MermaidUserConfig,
+} from '@/lib/mermaidConfig'
+import { THEME_PRESETS } from '@/lib/themes'
+import { useDebouncedValue } from '@/lib/hooks'
 import {
   loadConfig,
   saveConfig,
@@ -34,7 +60,6 @@ import {
   docIdForFile,
   SCRATCH_DOC_ID,
 } from '@/lib/storage'
-import { DEFAULT_THEME_ID } from '@/lib/themes'
 import { APP_NAME } from '@/lib/config'
 import { buildTree, collectFilePaths, isDiagramFile } from '@/lib/tree'
 import { cn } from '@/lib/utils'
@@ -46,9 +71,10 @@ import {
   commitFile,
   deletePaths,
   renameFile,
+  createBranch,
   type TreeResult,
 } from '@/app/actions/github'
-import type { AppConfig, FileCommit, Repo, SessionUser, TreeNode } from '@/lib/types'
+import type { AppConfig, FileCommit, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
 
 export interface AppShellProps {
   user: SessionUser | null
@@ -58,7 +84,7 @@ export interface AppShellProps {
 const SAMPLE = `flowchart TD
   A[Working copy in localStorage] -->|Save = commit| B(GitHub repo)
   B --> C{Conflict?}
-  C -->|No| D[Committed on main]
+  C -->|No| D[Committed on your branch]
   C -->|Yes| E[Refetch sha, commit on top]
   E --> D
 `
@@ -66,6 +92,21 @@ const SAMPLE = `flowchart TD
 const NEW_TEMPLATE = `flowchart LR
   A[Start] --> B[End]
 `
+
+// Sentinel Select values for the theme dropdown: "None" strips the theme (revert
+// to the default look), "Custom" is the read-only display state when the config's
+// palette matches no preset (e.g. hand-edited themeVariables).
+const NONE_THEME = '__none__'
+const CUSTOM_THEME = '__custom__'
+const HISTORY_PAGE_SIZE = 30
+
+/** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
+function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
+  if (!paths.some((p) => set.has(p))) return set
+  const next = new Set(set)
+  for (const p of paths) next.delete(p)
+  return next
+}
 
 type PromptSpec = Pick<
   PromptModalProps,
@@ -77,9 +118,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
-    themeId: DEFAULT_THEME_ID,
-    bakeThemeOnExport: true,
+    exportBackground: 'white',
     splitRatio: 0.5,
+    sidebarWidth: 256,
+    mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
   const [isMac, setIsMac] = useState(false)
@@ -87,6 +129,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Live editor/preview split ratio (persisted to config on drag end).
   const [editorRatio, setEditorRatio] = useState(0.5)
   const paneRowRef = useRef<HTMLDivElement>(null)
+
+  // Live sidebar width in pixels (persisted to config on drag end).
+  const [sidebarWidth, setSidebarWidth] = useState(256)
 
   const [text, setText] = useState(SAMPLE)
   const [baseline, setBaseline] = useState(SAMPLE)
@@ -106,24 +151,77 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [deleteBusy, setDeleteBusy] = useState(false)
 
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false)
+  const [branchBusy, setBranchBusy] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
 
+  const [configOpen, setConfigOpen] = useState(false)
+
   const [historyOpen, setHistoryOpen] = useState(false)
+  // Path segment currently displayed — starts at the open file's path, but moves
+  // to an older path once the user chooses to view history before a rename.
+  const [historyPath, setHistoryPath] = useState<string | null>(null)
+  const [historyPathStack, setHistoryPathStack] = useState<string[]>([])
   const [commits, setCommits] = useState<FileCommit[] | null>(null)
+  const [historyPage, setHistoryPage] = useState(1)
+  const [hasMoreCommits, setHasMoreCommits] = useState(false)
+  const [loadingMoreCommits, setLoadingMoreCommits] = useState(false)
+  const [renamedFrom, setRenamedFrom] = useState<string | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [versionContent, setVersionContent] = useState<string | null>(null)
   const [versionLoading, setVersionLoading] = useState(false)
 
   const debouncedText = useDebouncedValue(text, 350)
-  const { colors, dark, loading } = useResolvedTheme(config.themeId)
-  useChromeTheme(colors, dark)
+
+  // Parse the user's YAML config. The memo keeps a stable object reference until
+  // the raw text changes, so it's safe to feed into the Preview render effect's
+  // deps. `appliedConfig` holds the last *valid* parse — a half-typed config
+  // (parse error) leaves the previous theme in place rather than blanking it.
+  const parsedConfig = useMemo(() => parseMermaidConfig(config.mermaidConfig), [config.mermaidConfig])
+  const [appliedConfig, setAppliedConfig] = useState<MermaidUserConfig | null>(null)
+  useEffect(() => {
+    if (parsedConfig.error) return
+    setAppliedConfig(parsedConfig.config)
+    // themeVariables recolor the whole app chrome (empty config resets it).
+    applyThemeToSite(parsedConfig.config)
+  }, [parsedConfig])
+
+  // The layout dropdown reflects — and writes back into — the YAML config, which
+  // is the single source of truth. Selecting an engine rewrites the `layout` key
+  // (see the Select's onValueChange, which calls setLayoutInYaml).
+  const layoutValues = useMemo(() => LAYOUT_ENGINES.map((e) => e.value), [])
+  const currentLayout = layoutFromConfig(appliedConfig, layoutValues, DEFAULT_LAYOUT)
+
+  // The theme dropdown, like layout, reflects and writes back the YAML config.
+  // Show the matching preset if the config's palette matches one; "Custom" if it
+  // has a palette matching none (hand-tuned); "None" if it sets no theme at all.
+  const currentTheme = useMemo(() => {
+    const matched = themeFromConfig(appliedConfig)
+    if (matched) return matched.value
+    const tv = appliedConfig?.themeVariables
+    const hasVars = !!tv && typeof tv === 'object' && Object.keys(tv).length > 0
+    return hasVars ? CUSTOM_THEME : NONE_THEME
+  }, [appliedConfig])
+
+  // Shared by the Select's onValueChange (commit) and each item's onFocus (live
+  // preview as arrow keys/hover move the highlight), so navigating the dropdown
+  // re-themes the diagram before the user settles on a choice.
+  const applyTheme = useCallback(
+    (v: string) => {
+      if (v === CUSTOM_THEME) return
+      const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
+      if (v !== NONE_THEME && !preset) return
+      updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
+    },
+    [config.mermaidConfig],
+  )
 
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
   const docId =
-    repo && openPath ? docIdForFile(repo.owner, repo.name, openPath) : SCRATCH_DOC_ID
+    repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : SCRATCH_DOC_ID
   // Export/download file name: the open file's name (folder + extension stripped).
   // Falls back to "diagram" only when nothing is open (local mode / fresh scratch).
   const baseName =
@@ -132,7 +230,23 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // A just-created file has no sha and isn't in the fetched tree yet; splice its
   // path in so it shows in the sidebar (flagged unsaved) before the first commit.
   const pendingPath = repo && openPath && loadedSha === null ? openPath : null
-  const dirtyPath = dirty && openPath ? openPath : null
+
+  // Every path with unsaved edits made *this session*, not just the open one —
+  // so switching files without saving still shows the earlier file as dirty in
+  // the tree. Keyed off the open file's live dirty state; committing, reverting,
+  // deleting, or renaming a path removes it below.
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    if (!openPath) return
+    setDirtyPaths((prev) => {
+      if (dirty === prev.has(openPath)) return prev
+      const next = new Set(prev)
+      if (dirty) next.add(openPath)
+      else next.delete(openPath)
+      return next
+    })
+  }, [openPath, dirty])
+
   const displayNodes = useMemo(() => {
     const base = tree?.tree ?? []
     if (!pendingPath) return base
@@ -141,10 +255,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return buildTree(paths)
   }, [tree, pendingPath])
 
-  const refreshTree = useCallback(async (target: { owner: string; name: string }) => {
+  const refreshTree = useCallback(async (target: RepoRef) => {
     setTree(null)
     setTreeError(null)
-    const res = await listTree(target.owner, target.name)
+    const res = await listTree(
+      target.owner,
+      target.name,
+      target.branch,
+      target.branch === target.defaultBranch,
+    )
     if (res.ok) {
       setTree(res.data)
       return res.data
@@ -169,6 +288,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const stored = loadConfig()
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
+    setSidebarWidth(stored.sidebarWidth)
     setHydrated(true)
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
@@ -263,6 +383,53 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [updateConfig],
   )
 
+  const MIN_SIDEBAR_WIDTH = 180
+  const MAX_SIDEBAR_WIDTH = 480
+
+  const startSidebarDrag = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startWidth = sidebarWidth
+      const onMove = (ev: PointerEvent) => {
+        const next = startWidth + (ev.clientX - startX)
+        setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next)))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setSidebarWidth((w) => {
+          updateConfig({ sidebarWidth: w })
+          return w
+        })
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [sidebarWidth, updateConfig],
+  )
+
+  const onSidebarDividerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 40 : 8
+      let delta = 0
+      if (e.key === 'ArrowLeft') delta = -step
+      else if (e.key === 'ArrowRight') delta = step
+      else return
+      e.preventDefault()
+      setSidebarWidth((w) => {
+        const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w + delta))
+        updateConfig({ sidebarWidth: next })
+        return next
+      })
+    },
+    [updateConfig],
+  )
+
   const openPrompt = useCallback((spec: PromptSpec) => {
     setPrompt(spec)
     setPromptOpen(true)
@@ -270,26 +437,63 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onSelectRepo = useCallback(
     (r: Repo) => {
-      updateConfig({ repo: { owner: r.owner, name: r.name } })
+      const next: RepoRef = {
+        owner: r.owner,
+        name: r.name,
+        defaultBranch: r.defaultBranch,
+        branch: r.defaultBranch,
+      }
+      updateConfig({ repo: next })
       setRepoPickerOpen(false)
       setOpenPath(null)
       setLoadedSha(null)
-      void refreshTree({ owner: r.owner, name: r.name }).then((data) => {
+      void refreshTree(next).then((data) => {
         if (data) showRepoStartState(data)
       })
     },
     [updateConfig, refreshTree, showRepoStartState],
   )
 
-  const openFile = useCallback(
-    async (path: string) => {
+  const onSelectBranch = useCallback(
+    (branch: string) => {
       if (!repo) return
-      const res = await readFile(repo.owner, repo.name, path)
+      const next: RepoRef = { ...repo, branch }
+      updateConfig({ repo: next })
+      setBranchPickerOpen(false)
+      setOpenPath(null)
+      setLoadedSha(null)
+      void refreshTree(next).then((data) => {
+        if (data) showRepoStartState(data)
+      })
+    },
+    [repo, updateConfig, refreshTree, showRepoStartState],
+  )
+
+  const onCreateBranch = useCallback(
+    async (name: string) => {
+      if (!repo) return
+      setBranchBusy(true)
+      const res = await createBranch(repo.owner, repo.name, name, repo.branch)
+      setBranchBusy(false)
       if (!res.ok) {
         toast.error(res.error.message)
         return
       }
-      const id = docIdForFile(repo.owner, repo.name, path)
+      toast.success(`Created and switched to ${name}`)
+      onSelectBranch(name)
+    },
+    [repo, onSelectBranch],
+  )
+
+  const openFile = useCallback(
+    async (path: string) => {
+      if (!repo) return
+      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      if (!res.ok) {
+        toast.error(res.error.message)
+        return
+      }
+      const id = docIdForFile(repo.owner, repo.name, repo.branch, path)
       const draft = loadDraft(id)
       setBaseline(res.data.content)
       setLoadedSha(res.data.sha)
@@ -314,7 +518,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const defaultValue = dirPath ? `${dirPath}/untitled.mmd` : 'untitled.mmd'
       openPrompt({
         title: 'New diagram',
-        description: 'Create a new diagram file on main.',
+        description: `Create a new diagram file on ${repo.branch}.`,
         label: 'File path',
         defaultValue,
         submitLabel: 'Start editing',
@@ -336,7 +540,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!repo || node.type !== 'file') return
       openPrompt({
         title: 'Rename file',
-        description: 'Move or rename this file on main. Git history is preserved as a rename.',
+        description: `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
         label: 'New path',
         defaultValue: node.path,
         submitLabel: 'Rename',
@@ -346,18 +550,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
-          const res = await renameFile(repo.owner, repo.name, node.path, newPath)
+          const res = await renameFile(repo.owner, repo.name, node.path, newPath, repo.branch)
           if (!res.ok) {
             toast.error(res.error.message)
             return
           }
           setPromptOpen(false)
           // Carry any uncommitted draft over to the new path.
-          const oldId = docIdForFile(repo.owner, repo.name, node.path)
-          const newId = docIdForFile(repo.owner, repo.name, newPath)
+          const oldId = docIdForFile(repo.owner, repo.name, repo.branch, node.path)
+          const newId = docIdForFile(repo.owner, repo.name, repo.branch, newPath)
           const draft = loadDraft(oldId)
           if (draft) saveDraft(newId, draft.content)
           clearDraft(oldId)
+          setDirtyPaths((prev) => {
+            if (!prev.has(node.path)) return prev
+            const next = new Set(prev)
+            next.delete(node.path)
+            next.add(newPath)
+            return next
+          })
           if (openPath === node.path) {
             setOpenPath(newPath)
             setLoadedSha(res.data.sha)
@@ -397,12 +608,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const committed = paths.filter((p) => p !== pendingPath)
     if (committed.length === 0) {
       if (affectsOpen) detachEditor()
+      setDirtyPaths((prev) => withoutPaths(prev, paths))
       setDeleteOpen(false)
       setDeleteTarget(null)
       return
     }
     setDeleteBusy(true)
-    const res = await deletePaths(repo.owner, repo.name, committed)
+    const res = await deletePaths(repo.owner, repo.name, committed, repo.branch)
     setDeleteBusy(false)
     if (!res.ok) {
       toast.error(res.error.message)
@@ -413,6 +625,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         ? `Deleted ${committed[0]}`
         : `Deleted ${res.data.deleted} files`,
     )
+    setDirtyPaths((prev) => withoutPaths(prev, paths))
     setDeleteOpen(false)
     setDeleteTarget(null)
     if (affectsOpen) detachEditor()
@@ -423,7 +636,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     async (path: string, sha: string | undefined, content: string) => {
       if (!repo) return
       setSaving(true)
-      const res = await commitFile(repo.owner, repo.name, path, content, sha)
+      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
       setSaving(false)
       if (res.ok) {
         setBaseline(content)
@@ -445,7 +658,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (openPath === null) {
       openPrompt({
         title: 'Save to repository',
-        description: 'Choose a path on main for this diagram.',
+        description: `Choose a path on ${repo.branch} for this diagram.`,
         label: 'File path',
         defaultValue: 'untitled.mmd',
         submitLabel: 'Save',
@@ -460,6 +673,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
     void commitCurrent(openPath, loadedSha ?? undefined, text)
   }, [repo, dirty, saving, openPath, loadedSha, text, commitCurrent, openPrompt])
 
+  // Discard uncommitted edits, resetting the editor back to the last-loaded
+  // commit. Only meaningful once there is an actual commit to fall back to
+  // (loadedSha !== null) — a never-committed file has no "last commit" state.
+  const canRestore = dirty && loadedSha !== null
+  const onRestore = useCallback(() => {
+    if (!canRestore) return
+    setText(baseline)
+    clearDraft(docId)
+  }, [canRestore, baseline, docId])
+
   // Detect the platform for the correct modifier label (⌘ vs Ctrl).
   useEffect(() => {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
@@ -469,6 +692,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // saves; ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because
   // browsers reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it.
   // `e.code` (physical key) is used so macOS Option+N (a dead key) still matches.
+  // ⌘/Ctrl+B toggles the file-tree sidebar (only meaningful once a repo is open).
   useEffect(() => {
     if (!githubEnabled) return
     const onKey = (e: KeyboardEvent) => {
@@ -479,22 +703,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
       } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
+      } else if (e.code === 'KeyB' && !e.altKey && repo) {
+        e.preventDefault()
+        setSidebarOpen((v) => !v)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [githubEnabled, onSave, newDiagram])
+  }, [githubEnabled, onSave, newDiagram, repo])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
     setConflictBusy(true)
-    const fresh = await readFile(repo.owner, repo.name, openPath)
+    const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     if (!fresh.ok) {
       setConflictBusy(false)
       toast.error(fresh.error.message)
       return
     }
-    const res = await commitFile(repo.owner, repo.name, openPath, text, fresh.data.sha)
+    const res = await commitFile(repo.owner, repo.name, openPath, text, repo.branch, fresh.data.sha)
     setConflictBusy(false)
     if (res.ok) {
       setBaseline(text)
@@ -511,7 +738,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const onStartOver = useCallback(async () => {
     if (!repo || !openPath) return
     setConflictBusy(true)
-    const fresh = await readFile(repo.owner, repo.name, openPath)
+    const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     setConflictBusy(false)
     if (!fresh.ok) {
       toast.error(fresh.error.message)
@@ -539,22 +766,79 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
+  const HISTORY_PAGE_SIZE = 30
+
+  // Loads one page of history for `path`; `append` decides whether it extends the
+  // current list (Load more) or replaces it (first load / jump to another path).
+  const loadHistoryPage = useCallback(
+    async (path: string, page: number, append: boolean) => {
+      if (!repo) return
+      const res = await listFileCommits(
+        repo.owner,
+        repo.name,
+        path,
+        repo.branch,
+        page,
+        HISTORY_PAGE_SIZE,
+      )
+      if (!res.ok) {
+        setHistoryError(res.error.message)
+        return
+      }
+      setCommits((prev) => (append && prev ? [...prev, ...res.data.commits] : res.data.commits))
+      setHistoryPage(page)
+      setHasMoreCommits(res.data.hasMore)
+      setRenamedFrom(res.data.renamedFrom)
+      // Preselect the latest version on a fresh load only.
+      if (!append && res.data.commits[0]) void selectVersion(res.data.commits[0])
+    },
+    [repo, selectVersion],
+  )
+
   const openHistory = useCallback(async () => {
     if (!repo || !openPath) return
     setHistoryOpen(true)
+    setHistoryPath(openPath)
+    setHistoryPathStack([])
     setCommits(null)
     setHistoryError(null)
     setSelectedSha(null)
     setVersionContent(null)
-    const res = await listFileCommits(repo.owner, repo.name, openPath)
-    if (res.ok) {
-      setCommits(res.data)
-      // Preselect the latest version (commits are newest-first).
-      if (res.data[0]) void selectVersion(res.data[0])
-    } else {
-      setHistoryError(res.error.message)
-    }
-  }, [repo, openPath, selectVersion])
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    await loadHistoryPage(openPath, 1, false)
+  }, [repo, openPath, loadHistoryPage])
+
+  const loadMoreCommits = useCallback(async () => {
+    if (!historyPath || loadingMoreCommits) return
+    setLoadingMoreCommits(true)
+    await loadHistoryPage(historyPath, historyPage + 1, true)
+    setLoadingMoreCommits(false)
+  }, [historyPath, historyPage, loadingMoreCommits, loadHistoryPage])
+
+  const viewHistoryBeforeRename = useCallback(async () => {
+    if (!historyPath || !renamedFrom) return
+    setHistoryPathStack((prev) => [...prev, historyPath])
+    setHistoryPath(renamedFrom)
+    setCommits(null)
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    setHistoryError(null)
+    await loadHistoryPage(renamedFrom, 1, false)
+  }, [historyPath, renamedFrom, loadHistoryPage])
+
+  const goBackHistory = useCallback(async () => {
+    if (historyPathStack.length === 0) return
+    const next = historyPathStack.slice(0, -1)
+    const target = historyPathStack[historyPathStack.length - 1]!
+    setHistoryPathStack(next)
+    setHistoryPath(target)
+    setCommits(null)
+    setHasMoreCommits(false)
+    setRenamedFrom(null)
+    setHistoryError(null)
+    await loadHistoryPage(target, 1, false)
+  }, [historyPathStack, loadHistoryPage])
 
   const onRecover = useCallback(() => {
     if (versionContent === null) return
@@ -584,11 +868,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
   }, [versionContent, repo, openPrompt])
 
-  const onThemeChange = useCallback((id: string) => updateConfig({ themeId: id }), [updateConfig])
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
   const showSidebar = githubEnabled && !!repo && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
+  const sidebarHint = isMac ? '⌘ B' : 'Ctrl + B'
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -599,13 +883,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
               size="icon-sm"
               variant="ghost"
               onClick={() => setSidebarOpen((v) => !v)}
-              title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+              title={`${sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'} (${sidebarHint})`}
             >
               <PanelLeft />
             </Button>
           ) : null}
-          <span className="text-lg text-primary">◇</span>
-          <span className="text-[15px] font-semibold">{APP_NAME}</span>
+          <Link href="/" className="text-xl font-bold hover:text-primary">
+            {APP_NAME}
+          </Link>
           {githubEnabled ? (
             <Button
               size="sm"
@@ -617,20 +902,61 @@ export default function AppShell({ user, mode }: AppShellProps) {
               {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
             </Button>
           ) : null}
+          {githubEnabled && repo ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => setBranchPickerOpen(true)}
+            >
+              <GitBranch /> {repo.branch}
+            </Button>
+          ) : null}
+          {githubEnabled && repo && repo.defaultBranch && repo.branch !== repo.defaultBranch ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() =>
+                window.open(
+                  `https://github.com/${repo.owner}/${repo.name}/compare/${repo.defaultBranch}...${repo.branch}?expand=1`,
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }
+            >
+              <GitPullRequestArrow /> Open PR
+            </Button>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
           {githubEnabled ? (
             <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRestore}
+                disabled={!canRestore}
+                title="Restore to last commit"
+              >
+                <RotateCcw /> Restore
+              </Button>
+              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Commit (${saveHint})`}>
+                {saving ? 'Committing…' : 'Commit'}
+                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
+                  {isMac ? (
+                    <>
+                      <Command className="size-2.5" /> <span>S</span>
+                    </>
+                  ) : (
+                    <span>Ctrl + S</span>
+                  )}
+                </kbd>
+              </Button>
               <span className="text-xs text-muted-foreground">
                 {dirty ? '● Unsaved' : 'Saved'}
               </span>
-              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Save (${saveHint})`}>
-                <Save /> {saving ? 'Saving…' : 'Save'}
-                <kbd className="ml-1 rounded border border-current/30 px-1 text-[10px] leading-relaxed font-medium opacity-70">
-                  {saveHint}
-                </kbd>
-              </Button>
               {openPath && repo ? (
                 <Button size="sm" variant="ghost" onClick={openHistory}>
                   <History /> History
@@ -639,13 +965,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <Separator orientation="vertical" className="h-6" />
             </>
           ) : null}
-          <ThemeSelect value={config.themeId} onChange={onThemeChange} loading={loading} />
           <ExportMenu
             text={debouncedText}
-            colors={colors}
             baseName={baseName}
-            includeBackground={config.bakeThemeOnExport}
-            onToggleBackground={(v) => updateConfig({ bakeThemeOnExport: v })}
+            configYaml={config.mermaidConfig}
+            background={config.exportBackground}
+            onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
+            config={appliedConfig}
           />
           <Separator orientation="vertical" className="h-6" />
           <AuthButton user={user} />
@@ -654,9 +980,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
       <div className="flex min-h-0 flex-1">
         {showSidebar ? (
-          <aside className="flex w-64 flex-none flex-col overflow-hidden border-r bg-sidebar">
+          <aside
+            className="flex flex-none flex-col overflow-hidden bg-sidebar"
+            style={{ width: sidebarWidth }}
+          >
             <div className="flex items-center justify-between px-3 py-2.5">
-              <span className="truncate text-sm font-medium">{repo?.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
+                Files
+                {dirtyPaths.size > 0 ? (
+                  <span
+                    className="size-1.5 shrink-0 rounded-full bg-amber-500"
+                    title={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
+                    aria-label={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
+                  />
+                ) : null}
+              </span>
               <div className="flex items-center gap-0.5">
                 <Button
                   size="icon-xs"
@@ -692,7 +1030,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <FileTree
                   nodes={displayNodes}
                   activePath={openPath}
-                  dirtyPath={dirtyPath}
+                  dirtyPaths={dirtyPaths}
+                  branch={repo?.branch ?? ''}
                   onOpenFile={openFile}
                   onDelete={requestDelete}
                   onNewFile={(dir) => newDiagram(dir)}
@@ -700,40 +1039,111 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 />
               )}
             </div>
-            <Separator />
-            <div className="flex-none px-3 py-2 text-xs text-muted-foreground">
-              Made by{' '}
-              <a
-                href="https://hasathcharu.com"
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-medium text-foreground hover:text-primary hover:underline"
-              >
-                Hasathcharu
-              </a>
-            </div>
           </aside>
+        ) : null}
+        {showSidebar ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            aria-valuemin={MIN_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_SIDEBAR_WIDTH}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={startSidebarDrag}
+            onKeyDown={onSidebarDividerKeyDown}
+            className="group flex w-1.5 flex-none cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
+          >
+            <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+          </div>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
             {githubEnabled && repo ? (
-              <>
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setRepoPickerOpen(true)}
-                >
-                  {repo.owner}/{repo.name}
-                </button>
-                <ChevronRight className="size-3" />
-                <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
-              </>
+              <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
             ) : githubEnabled ? (
               <span>Connect a repository to browse and commit your diagrams.</span>
             ) : (
               <span>Local mode — edits stay in your browser (localStorage).</span>
             )}
+            <div className="ml-auto flex items-center gap-1.5">
+              <span className="text-muted-foreground">Theme</span>
+              <Select value={currentTheme} onValueChange={applyTheme}>
+                <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem
+                    value={NONE_THEME}
+                    className="cursor-pointer"
+                    onFocus={() => applyTheme(NONE_THEME)}
+                  >
+                    None (default)
+                  </SelectItem>
+                  {currentTheme === CUSTOM_THEME ? (
+                    <SelectItem value={CUSTOM_THEME} disabled>
+                      Custom
+                    </SelectItem>
+                  ) : null}
+                  <SelectSeparator />
+                  <SelectGroup>
+                    <SelectLabel>Light</SelectLabel>
+                    {THEME_PRESETS.filter((preset) => preset.mode === 'light').map((preset) => (
+                      <SelectItem
+                        key={preset.value}
+                        value={preset.value}
+                        className="cursor-pointer"
+                        onFocus={() => applyTheme(preset.value)}
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Dark</SelectLabel>
+                    {THEME_PRESETS.filter((preset) => preset.mode === 'dark').map((preset) => (
+                      <SelectItem
+                        key={preset.value}
+                        value={preset.value}
+                        className="cursor-pointer"
+                        onFocus={() => applyTheme(preset.value)}
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <span className="text-muted-foreground">Layout</span>
+              <Select
+                value={currentLayout}
+                onValueChange={(v) =>
+                  updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
+                }
+              >
+                <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {LAYOUT_ENGINES.map((engine) => (
+                    <SelectItem key={engine.value} value={engine.value}>
+                      {engine.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="size-7"
+                onClick={() => setConfigOpen(true)}
+                aria-label="Diagram configuration"
+                title="Diagram configuration"
+              >
+                <Settings2 />
+              </Button>
+            </div>
           </div>
 
           <div
@@ -744,7 +1154,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             }}
           >
             <section className="min-h-0 overflow-auto" aria-label="Editor">
-              <Editor value={text} onChange={setText} dark={dark} />
+              <Editor value={text} onChange={setText} dark={false} />
             </section>
             <div
               role="separator"
@@ -761,7 +1171,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
             </div>
             <section className="min-h-0 overflow-auto" aria-label="Preview">
-              <Preview text={debouncedText} colors={colors} />
+              <Preview
+                text={debouncedText}
+                config={appliedConfig}
+              />
             </section>
           </div>
         </main>
@@ -775,11 +1188,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
         />
       ) : null}
 
+      {githubEnabled && repo ? (
+        <BranchPicker
+          open={branchPickerOpen}
+          onOpenChange={setBranchPickerOpen}
+          owner={repo.owner}
+          name={repo.name}
+          currentBranch={repo.branch}
+          defaultBranch={repo.defaultBranch}
+          creating={branchBusy}
+          onSelect={onSelectBranch}
+          onCreate={onCreateBranch}
+        />
+      ) : null}
+
       {openPath ? (
         <ConflictModal
           open={conflictOpen}
           onOpenChange={setConflictOpen}
           path={openPath}
+          branch={repo?.branch ?? ''}
           busy={conflictBusy}
           onOverwrite={onOverwrite}
           onStartOver={onStartOver}
@@ -790,11 +1218,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
         <PromptModal open={promptOpen} onOpenChange={setPromptOpen} {...prompt} />
       ) : null}
 
+      <ConfigModal
+        open={configOpen}
+        onOpenChange={setConfigOpen}
+        value={config.mermaidConfig}
+        onChange={(v) => updateConfig({ mermaidConfig: v })}
+        error={parsedConfig.error}
+      />
+
       <DeleteModal
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         target={deleteTarget}
         fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
+        branch={repo?.branch ?? ''}
         busy={deleteBusy}
         onConfirm={confirmDelete}
       />
@@ -804,13 +1241,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
           open={historyOpen}
           onOpenChange={setHistoryOpen}
           path={openPath}
+          historyPath={historyPath ?? openPath}
           commits={commits}
           error={historyError}
+          hasMore={hasMoreCommits}
+          loadingMore={loadingMoreCommits}
+          renamedFrom={renamedFrom}
+          canGoBack={historyPathStack.length > 0}
           selectedSha={selectedSha}
           versionContent={versionContent}
           versionLoading={versionLoading}
-          colors={colors}
+          config={appliedConfig}
           onSelect={selectVersion}
+          onLoadMore={loadMoreCommits}
+          onViewBeforeRename={viewHistoryBeforeRename}
+          onBack={goBackHistory}
           onRecover={onRecover}
           onFork={onFork}
         />

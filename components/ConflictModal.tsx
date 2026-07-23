@@ -15,6 +15,7 @@ export interface ConflictModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   path: string
+  branch: string
   busy: boolean
   onOverwrite: () => void
   onStartOver: () => void
@@ -24,6 +25,7 @@ export default function ConflictModal({
   open,
   onOpenChange,
   path,
+  branch,
   busy,
   onOverwrite,
   onStartOver,
@@ -34,7 +36,7 @@ export default function ConflictModal({
         <DialogHeader>
           <DialogTitle>This file changed on GitHub</DialogTitle>
           <DialogDescription>
-            <code>{path}</code> was updated on <code>main</code> since you opened it, so
+            <code>{path}</code> was updated on <code>{branch}</code> since you opened it, so
             your save was rejected.
           </DialogDescription>
         </DialogHeader>

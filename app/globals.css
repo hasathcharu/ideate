@@ -4,10 +4,11 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * shadcn/ui design tokens. Defaults below are a neutral palette; at runtime the
- * app overrides these on the root element from the active beautiful-mermaid
- * theme (see colorsToChromeVars in lib/mermaid.ts), so the whole UI matches the
- * diagram.
+ * shadcn/ui design tokens — the default light palette used when no diagram
+ * theme is set. `applyThemeToSite` (lib/mermaidConfig.ts) overrides these via
+ * inline styles on <body> when the user picks/edits a theme, so this is a
+ * fallback, not a fixed palette. The `.dark` block is kept for a possible
+ * future dark mode but is currently unused.
  */
 :root {
   --radius: 0.625rem;
@@ -173,13 +174,17 @@
 .preview-zoom {
   touch-action: none;
 }
-.preview-zoom .preview-svg,
-.preview-zoom .preview-svg svg {
+.preview-zoom .preview-svg {
   max-width: none;
 }
+/* The host is sized to the diagram's natural pixels (Preview.tsx); force the SVG
+   to fill it and beat mermaid's inline width="100%" + max-width, which otherwise
+   collapse the diagram inside the shrink-to-fit host and make it render tiny. */
 .preview-zoom .preview-svg svg {
-  height: auto;
   display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
 }
 /* The zoomed diagram fills the viewport; browsers show black by default. */
 .preview-zoom:fullscreen {

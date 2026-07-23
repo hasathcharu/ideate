@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Lock, Loader2 } from 'lucide-react'
 import { listRepos } from '@/app/actions/github'
-import { APP_NAME } from '@/lib/config'
 import type { Repo } from '@/lib/types'
 import {
   Dialog,
@@ -51,12 +50,12 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-w-xl sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Connect a repository</DialogTitle>
           <DialogDescription>
-            Pick the repo to use as your database. {APP_NAME} reads and writes the{' '}
-            <code>main</code> branch only.
+            Pick the repo to use as your database. You can switch branches (or create
+            one) after connecting.
           </DialogDescription>
         </DialogHeader>
 
@@ -67,7 +66,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
           autoFocus
         />
 
-        <ScrollArea className="h-80 -mx-1 px-1">
+        <ScrollArea className="h-80 min-w-0 -mx-1 px-1">
           {error ? (
             <p className="px-2 py-6 text-center text-sm text-destructive">{error}</p>
           ) : repos === null ? (
@@ -87,7 +86,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
                     className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-accent"
                     onClick={() => onSelect(repo)}
                   >
-                    <span className="truncate text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
                       {repo.owner}/<span className="text-foreground">{repo.name}</span>
                     </span>
                     <Badge variant="outline" className="shrink-0 gap-1">

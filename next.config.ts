@@ -1,9 +1,21 @@
 import type { NextConfig } from 'next'
+import { execSync } from 'node:child_process'
+
+/** Short commit hash of the current checkout, inlined into the client bundle
+ *  as NEXT_PUBLIC_COMMIT_SHA (see lib/config.ts). Falls back to 'dev' when
+ *  there's no git history available (e.g. a shallow deploy artifact). */
+function commitSha(): string {
+  try {
+    return execSync('git rev-parse --short HEAD').toString().trim()
+  } catch {
+    return 'dev'
+  }
+}
 
 const nextConfig: NextConfig = {
-  // beautiful-mermaid is ESM and ships untranspiled `src` for some entry points;
-  // let Next transpile it so it bundles cleanly for the client editor/preview.
-  transpilePackages: ['beautiful-mermaid'],
+  env: {
+    NEXT_PUBLIC_COMMIT_SHA: commitSha(),
+  },
 }
 
 export default nextConfig

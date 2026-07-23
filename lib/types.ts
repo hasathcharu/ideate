@@ -1,17 +1,3 @@
-import type { DiagramColors } from 'beautiful-mermaid'
-
-/** A selectable theme in the UI. Built-in themes resolve synchronously; Shiki
- *  themes are loaded on demand and mapped through `fromShikiTheme()`. */
-export interface ThemeOption {
-  id: string
-  label: string
-  kind: 'builtin' | 'shiki'
-  /** Whether the theme reads as dark — used only to pick a sensible editor look. */
-  dark: boolean
-}
-
-export type { DiagramColors }
-
 /** Identifies which document a localStorage draft belongs to. */
 export type DocId = string
 
@@ -30,13 +16,39 @@ export interface Repo {
   defaultBranch: string
 }
 
+/** The repo + branch currently selected. Branch lives alongside owner/name (not
+ *  a sibling AppConfig field) so switching either one is a single atomic reset. */
+export interface RepoRef {
+  owner: string
+  name: string
+  defaultBranch: string
+  branch: string
+}
+
+/** A branch in the "switch branch" dropdown. */
+export interface Branch {
+  name: string
+  protected: boolean
+}
+
+/** Background painted behind an exported diagram: a solid white/black fill, no
+ *  fill at all (transparent), or the current theme's own `background` color. */
+export type ExportBackground = 'white' | 'black' | 'none' | 'theme'
+
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
-  repo: { owner: string; name: string } | null
-  themeId: string
-  bakeThemeOnExport: boolean
+  repo: RepoRef | null
+  /** Background painted behind exported diagrams. */
+  exportBackground: ExportBackground
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
+  /** File-tree sidebar width in pixels. */
+  sidebarWidth: number
+  /** Raw YAML text of the global mermaid config — the single source of truth for
+   *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
+   *  the layout dropdown writes the `layout` key into it. Empty = mermaid
+   *  defaults. */
+  mermaidConfig: string
 }
 
 /** A node in the repository file tree. */
@@ -64,6 +76,16 @@ export interface FileCommit {
   /** The file's path at this commit — differs from the current path across
    *  renames, so version previews read the correct historical path. */
   path: string
+}
+
+/** One page of commit history for a single path segment (see `listFileCommits`). */
+export interface FileCommitsPage {
+  commits: FileCommit[]
+  /** True if this path has more commits beyond this page — fetch `page + 1`. */
+  hasMore: boolean
+  /** Set only once the last page of this segment is reached: the path this file
+   *  was renamed from, if its earliest commit here is a rename, else null. */
+  renamedFrom: string | null
 }
 
 /** Discriminated result type for server actions so the client can branch on
