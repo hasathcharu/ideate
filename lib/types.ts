@@ -78,6 +78,16 @@ export interface FileCommit {
   path: string
 }
 
+/** One page of commit history for a single path segment (see `listFileCommits`). */
+export interface FileCommitsPage {
+  commits: FileCommit[]
+  /** True if this path has more commits beyond this page — fetch `page + 1`. */
+  hasMore: boolean
+  /** Set only once the last page of this segment is reached: the path this file
+   *  was renamed from, if its earliest commit here is a rename, else null. */
+  renamedFrom: string | null
+}
+
 /** Discriminated result type for server actions so the client can branch on
  *  errors (especially 409 conflicts) without try/catch around RPC. */
 export type ActionResult<T> =

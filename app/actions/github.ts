@@ -9,6 +9,7 @@ import type {
   ActionResult,
   Branch,
   FileCommit,
+  FileCommitsPage,
   FileContent,
   Repo,
   TreeNode,
@@ -180,74 +181,88 @@ export async function readFileAtRef(
 }
 
 /**
- * Version history — commits touching a path on `branch`, newest first.
+ * Version history — one page of commits touching `path` on `branch`, newest first.
  *
- * The REST commits API does not follow renames, so after a rename the pre-rename
- * history would be orphaned. We reconstruct it: for each path segment we list its
- * commits, then inspect the earliest one — if it renamed the file into this path
- * (GitHub reports `previous_filename`), we hop to that older path and continue.
- * Each commit carries the `path` it had at that point so previews read correctly.
+ * The REST commits API does not follow renames, so a path's history stops dead at
+ * the commit that created it under that name. Rather than eagerly walking the whole
+ * rename chain (which can mean an unbounded number of `listCommits`/`getCommit` calls
+ * for a long-lived, oft-renamed file), each call here only ever fetches one page of
+ * one path segment. Only once the *last* page of a segment is reached do we check
+ * whether its earliest commit renamed the file in from an older path (GitHub reports
+ * `previous_filename`) — the caller decides whether to page into that older path,
+ * surfaced as `renamedFrom` so the UI can offer it as an explicit "view history
+ * before rename" action instead of silently merging it in.
  */
 export async function listFileCommits(
   owner: string,
   repo: string,
   path: string,
   branch: string,
-): Promise<ActionResult<FileCommit[]>> {
+  page = 1,
+  perPage = 30,
+): Promise<ActionResult<FileCommitsPage>> {
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    const commits: FileCommit[] = []
-    const seen = new Set<string>()
-    let currentPath: string | null = path
+    // The commits API's path filter is a tree-diff, so it also matches the commit
+    // that renamed `path` AWAY to somewhere else (its tree entry at `path` changed
+    // too — to "absent"). That commit only ever shows up as the newest entry of
+    // page 1, dated after everything that actually lived at `path`. Fetch one
+    // extra up front so removing it doesn't cost us the `hasMore` page boundary.
+    const fetchSize = page === 1 ? perPage + 2 : perPage + 1
+    const { data } = await octokit.repos.listCommits({
+      owner,
+      repo,
+      path,
+      sha: branch,
+      page,
+      per_page: fetchSize,
+    })
 
-    // Bounded hops guard against pathological/looping rename chains.
-    for (let hop = 0; hop < 20; hop++) {
-      const segPath: string | null = currentPath
-      if (!segPath) break
-      const segment = await commitsTouchingPath(octokit, owner, repo, segPath, branch)
-      if (segment.length === 0) break
-
-      for (const c of segment) {
-        if (seen.has(c.sha)) continue
-        seen.add(c.sha)
-        commits.push({ ...c, path: segPath })
+    let raw = data
+    if (page === 1 && raw.length > 0) {
+      const newest = raw[0]!
+      if (await renamedAwayFromPath(octokit, owner, repo, newest.sha, path)) {
+        raw = raw.slice(1)
       }
-
-      // Did the earliest commit for this path rename the file into it?
-      const earliest = segment[segment.length - 1]!
-      currentPath = await renamedFromPath(octokit, owner, repo, earliest.sha, segPath)
     }
 
-    // Newest first across the whole (possibly multi-path) chain.
-    commits.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
-    return ok(commits)
+    const hasMore = raw.length > perPage
+    const commits: FileCommit[] = raw.slice(0, perPage).map((c) => ({
+      sha: c.sha,
+      message: c.commit.message.split('\n')[0] ?? c.commit.message,
+      author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
+      date: c.commit.author?.date ?? '',
+      path,
+    }))
+
+    // Only the last page of a segment can reveal a rename into `path` — every
+    // earlier page is newer than the segment's earliest (renaming) commit.
+    let renamedFrom: string | null = null
+    if (!hasMore && commits.length > 0) {
+      const earliest = commits[commits.length - 1]!
+      renamedFrom = await renamedFromPath(octokit, owner, repo, earliest.sha, path)
+    }
+
+    return ok({ commits, hasMore, renamedFrom })
   } catch (error) {
     return err(mapError(error))
   }
 }
 
-/** Commits touching `path` on `branch` (newest first), without the current path. */
-async function commitsTouchingPath(
+/** True if commit `sha` renamed the file at `path` away to a different path —
+ *  i.e. `path`'s content no longer exists there as of this commit. */
+async function renamedAwayFromPath(
   octokit: Octokit,
   owner: string,
   repo: string,
+  sha: string,
   path: string,
-  branch: string,
-): Promise<Array<Omit<FileCommit, 'path'>>> {
-  const { data } = await octokit.repos.listCommits({
-    owner,
-    repo,
-    path,
-    sha: branch,
-    per_page: 100,
-  })
-  return data.map((c) => ({
-    sha: c.sha,
-    message: c.commit.message.split('\n')[0] ?? c.commit.message,
-    author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
-    date: c.commit.author?.date ?? '',
-  }))
+): Promise<boolean> {
+  const { data } = await octokit.repos.getCommit({ owner, repo, ref: sha })
+  return !!data.files?.some(
+    (f) => f.previous_filename === path && f.status === 'renamed' && f.filename !== path,
+  )
 }
 
 /** If commit `sha` renamed a file into `path`, the file's previous path, else null. */
