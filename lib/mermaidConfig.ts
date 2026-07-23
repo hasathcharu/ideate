@@ -38,9 +38,7 @@ export type MermaidUserConfig = Record<string, unknown> & {
 }
 
 /** A commented starter shown as a placeholder when no config has been set yet. */
-export const CONFIG_PLACEHOLDER = `# Mermaid config (YAML). Applies to every diagram.
-# Anything under themeVariables also recolors the whole app.
-config:
+export const CONFIG_PLACEHOLDER = `config:
   theme: base
   themeVariables:
     primaryColor: '#e5e9f0'

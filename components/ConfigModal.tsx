@@ -158,9 +158,7 @@ export default function ConfigModal({
           <DialogTitle>Diagram configuration</DialogTitle>
           <DialogDescription>
             The global mermaid config in YAML — the single source of truth, applied to every
-            diagram (preview and export). Anything under{' '}
-            <code className="font-mono">themeVariables</code> also recolors the whole app, and the{' '}
-            <code className="font-mono">layout</code> key mirrors the toolbar dropdown.
+            diagram.
           </DialogDescription>
         </DialogHeader>
 
