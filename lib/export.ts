@@ -132,31 +132,27 @@ async function renderPngBlob(
 
   const scale = Math.min(4, Math.max(2, Math.round(window.devicePixelRatio || 1) + 1))
   const img = new Image()
-  const svgUrl = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }))
+  const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve()
-      img.onerror = () => reject(new Error('Failed to load SVG for rasterization.'))
-      img.src = svgUrl
-    })
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('Failed to load SVG for rasterization.'))
+    img.src = svgUrl
+  })
 
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(width * scale))
-    canvas.height = Math.max(1, Math.round(height * scale))
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Could not acquire a 2D canvas context.')
-    ctx.scale(scale, scale)
-    ctx.drawImage(img, 0, 0, width, height)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(width * scale))
+  canvas.height = Math.max(1, Math.round(height * scale))
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not acquire a 2D canvas context.')
+  ctx.scale(scale, scale)
+  ctx.drawImage(img, 0, 0, width, height)
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/png'),
-    )
-    if (!blob) throw new Error('Canvas produced no PNG blob.')
-    return blob
-  } finally {
-    URL.revokeObjectURL(svgUrl)
-  }
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, 'image/png'),
+  )
+  if (!blob) throw new Error('Canvas produced no PNG blob.')
+  return blob
 }
 
 export async function exportPNG(
