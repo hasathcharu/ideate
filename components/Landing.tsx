@@ -26,7 +26,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
       </header>
 
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 pb-24 text-center">
-        <h1 className="text-4xl font-bold tracking-tight md:text-5xl">
+        <h1 className="text-4xl leading-tight font-bold tracking-tight md:text-5xl">
           Draw Mermaid diagrams. Commit them to GitHub.
         </h1>
         <p className="mt-4 max-w-md text-muted-foreground">
