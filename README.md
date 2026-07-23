@@ -17,8 +17,12 @@ history doubles as its version history.
 
 - Split-pane **CodeMirror 6** editor with a live [`mermaid`](https://mermaid.js.org/)
   preview supporting every diagram type mermaid renders.
+- **Theming & layout**: ~19 built-in color presets (or hand-edit the global
+  mermaid YAML config) retune every diagram *and* recolor the whole app chrome
+  to match; switch the layout engine between Dagre and ELK.
 - **Export** to SVG and PNG (high-DPI raster) — mermaid bakes literal colors into
-  the SVG, so downloads stand alone.
+  the SVG, so downloads stand alone. The raw mermaid source can also be
+  exported/copied with the config baked in as frontmatter.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   to whichever branch is selected.
 - **Branches**: switch or create a branch from the branch picker, and open a
@@ -125,8 +129,6 @@ or copied to the clipboard (SVG/PNG).
 
 ## Scope / limitations (MVP)
 
-- Six diagram types (whatever `beautiful-mermaid` supports); no core-`mermaid.js`
-  fallback yet.
 - "Open PR" is a redirect to GitHub's compare page — no PR-creation API call,
   no in-app merge/review flow.
 - Single-file commits (no multi-file atomic commits).

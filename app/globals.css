@@ -4,9 +4,11 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * shadcn/ui design tokens — a fixed light palette. The app no longer recolors
- * itself from a diagram theme; these are the static chrome colors. The `.dark`
- * block is kept for a possible future dark mode but is currently unused.
+ * shadcn/ui design tokens — the default light palette used when no diagram
+ * theme is set. `applyThemeToSite` (lib/mermaidConfig.ts) overrides these via
+ * inline styles on <body> when the user picks/edits a theme, so this is a
+ * fallback, not a fixed palette. The `.dark` block is kept for a possible
+ * future dark mode but is currently unused.
  */
 :root {
   --radius: 0.625rem;

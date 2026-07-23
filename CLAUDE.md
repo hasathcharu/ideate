@@ -34,8 +34,9 @@ Save = commit; open old version = checkout.
    latest sha, then commit on top of it (`onOverwrite` in `AppShell.tsx`). Do not
    use the git data API to rewrite refs.
 7. **Diagrams render with the official `mermaid` library** (`lib/mermaid.ts`),
-   pinned to its built-in `default` theme. Rendering is async and browser-only.
-   Any diagram type mermaid supports works.
+   on the built-in `base` theme so the global YAML config's `themeVariables` can
+   retune it. Rendering is async and browser-only. Any diagram type mermaid
+   supports works.
 
 ## UI stack
 
@@ -66,32 +67,50 @@ components/
   ui/                       shadcn components
   AppShell.tsx              orchestrator; collapsible sidebar; controlled modals
   Editor, Preview, Landing, ExportMenu, RepoPicker, BranchPicker, FileTree,
-  ConflictModal, PromptModal, HistoryPanel, AuthButton, icons.tsx
+  ConflictModal, ConfigModal, DeleteModal, PromptModal, HistoryPanel,
+  AuthButton, icons.tsx
 lib/
   session.server.ts         server-only token reader (import 'server-only')
   mermaid.ts                official-mermaid init + async render (renderToSvg / renderPreview)
+  mermaidConfig.ts          global YAML config: parse, layout/theme YAML editing, applyThemeToSite
+  themes.ts                 preset theme palettes (THEME_PRESETS) for the theme dropdown
   export.ts                 standalone SVG + SVG/PNG download & copy
+  config.ts                 app name / repo URL / commit sha constants
   tree.ts, storage.ts, hooks.ts, types.ts
 ```
 
-## Rendering (no theming)
+## Rendering & theming
 
 Diagrams render through the official `mermaid` library, initialized once in
-`lib/mermaid.ts` with the built-in `default` (light) theme, `htmlLabels: false`
-(pure-SVG labels, no `<foreignObject>`), and `curve: 'basis'` for smooth edges.
-`mermaid.render()` is async and needs the DOM, so `Preview.tsx` renders in an
-effect (guarding against stale in-flight renders) — never during SSR.
+`lib/mermaid.ts` on the `base` theme (the only built-in theme that honors
+`themeVariables`), `htmlLabels: false` (pure-SVG labels, no `<foreignObject>`),
+and `curve: 'basis'` for smooth edges. `mermaid.render()` is async and needs the
+DOM, so `Preview.tsx` renders in an effect (guarding against stale in-flight
+renders) — never during SSR.
 
-The app chrome is a **fixed light** shadcn palette in `app/globals.css`; there is
-no theme picker and no diagram-driven chrome recoloring.
+A single global mermaid config, stored as raw YAML text in `AppConfig.mermaidConfig`
+(`lib/types.ts`), is the single source of truth for `theme`/`themeVariables`,
+`layout`, and any other per-diagram mermaid settings.
+It's edited directly via `ConfigModal.tsx` (the settings cogwheel), or indirectly
+via the Theme and Layout dropdowns in `AppShell.tsx`, which write into that same
+YAML through `setThemeInYaml`/`setLayoutInYaml` (`lib/mermaidConfig.ts`) rather
+than owning separate state. `lib/themes.ts` ships ~19 built-in presets
+(`THEME_PRESETS`); picking one, or hand-editing `themeVariables`, both retunes
+every diagram render **and** recolors the app chrome, via `applyThemeToSite`
+mapping the diagram palette onto the shadcn CSS custom properties on `<body>`.
+`app/globals.css`'s `:root`/`.dark` blocks are only the fallback palette used
+when no theme is set — they are not fixed/static in practice.
 
 ## Export
 
 mermaid bakes literal colors and a self-contained `<style>` block into the SVG at
 render time, so the markup already stands alone — `lib/export.ts` only normalizes
 dimensions (mermaid emits `width="100%"` + a viewBox), adds XML namespaces, and
-optionally paints a white background. Both exporters (SVG / PNG) share the single
-`resolveStandaloneSvg` step; PNG rasterizes it via `Image` → `<canvas>`.
+optionally paints a background (white/black/the active theme's own background
+color). Both exporters (SVG / PNG) share the single `resolveStandaloneSvg` step;
+PNG rasterizes it via `Image` → `<canvas>`. Exporting the mermaid source
+(`exportSource`/`copySource`) bakes the global YAML config in as a real
+frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
 
 ## Conventions
 
