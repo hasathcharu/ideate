@@ -6,4 +6,4 @@
  * `.env.local`, e.g. `NEXT_PUBLIC_APP_NAME=SketchMaid`. Falls back to the
  * default below when unset.
  */
-export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || 'SketchMaid'
+export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME
