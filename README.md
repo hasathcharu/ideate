@@ -1,4 +1,4 @@
-# SketchMade
+# Ideate
 
 A web-based Mermaid diagram editor where **your own GitHub repository is the
 database**. There is no application database. You sign in with GitHub, connect a
@@ -57,7 +57,7 @@ New OAuth App** (<https://github.com/settings/developers>):
 
 | Field | Value (local dev) |
 |---|---|
-| Application name | `keep-mermaid (dev)` |
+| Application name | `Ideate (dev)` |
 | Homepage URL | `http://localhost:3000` |
 | Authorization callback URL | `http://localhost:3000/api/auth/callback/github` |
 
