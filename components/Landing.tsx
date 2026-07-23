@@ -12,7 +12,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="mx-auto flex w-full max-w-3xl items-end gap-2 px-6 py-5">
         <span className="text-xl font-bold leading-none">{APP_NAME}</span>
-        <span className="text-sm leading-none text-muted-foreground mb-0.5">
+        <span className="text-sm leading-none text-muted-foreground mb-px">
           by{' '}
           <a
             href="https://hasathcharu.com"
