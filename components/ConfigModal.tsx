@@ -170,7 +170,7 @@ export default function ConfigModal({
           error ? (
             <p className="flex items-start gap-2 text-sm text-destructive">
               <AlertCircle className="mt-0.5 size-4 flex-none" />
-              <span className="min-w-0 break-words">{error}</span>
+              <span className="min-w-0 wrap-break-word">{error}</span>
             </p>
           ) : (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">

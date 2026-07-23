@@ -50,7 +50,7 @@ export default function AuthButton({ user }: AuthButtonProps) {
             className="rounded-full border border-border"
           />
         ) : null}
-        <span className="max-w-[140px] truncate text-sm text-muted-foreground">
+        <span className="max-w-35 truncate text-sm text-muted-foreground">
           {user.login ?? user.name ?? 'Signed in'}
         </span>
       </button>
