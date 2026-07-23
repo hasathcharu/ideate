@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowRight, Pencil } from 'lucide-react'
+import { ArrowRight, Pencil, TriangleAlert } from 'lucide-react'
 import { loginWithGitHub } from '@/app/actions/auth'
 import { GithubIcon } from '@/components/icons'
 import { APP_NAME } from '@/lib/config'
@@ -10,6 +10,11 @@ import { Button } from '@/components/ui/button'
 export default function Landing({ signedIn }: { signedIn: boolean }) {
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
+      <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-center text-xs text-amber-700 md:hidden dark:text-amber-400">
+        <TriangleAlert className="size-3.5 shrink-0" />
+        {APP_NAME} isn&apos;t built for phone-sized screens — try a larger one for the full
+        editor experience.
+      </div>
       <header className="mx-auto flex w-full max-w-3xl items-end gap-2 px-6 py-5">
         <span className="text-xl font-bold leading-none">{APP_NAME}</span>
         <span className="text-sm leading-none text-muted-foreground mb-px">
@@ -26,7 +31,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
       </header>
 
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 pb-24 text-center">
-        <h1 className="text-4xl leading-tight font-bold tracking-tight md:text-5xl">
+    <h1 className="text-4xl leading-tight font-bold tracking-tight md:text-5xl">
           Draw Mermaid diagrams. Commit them to GitHub.
         </h1>
         <p className="mt-4 max-w-md text-muted-foreground">

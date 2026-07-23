@@ -27,6 +27,7 @@ import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
 import ConfigModal from './ConfigModal'
+import MobileWarningModal from './MobileWarningModal'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -50,7 +51,7 @@ import {
   type MermaidUserConfig,
 } from '@/lib/mermaidConfig'
 import { THEME_PRESETS } from '@/lib/themes'
-import { useDebouncedValue } from '@/lib/hooks'
+import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
 import {
   loadConfig,
   saveConfig,
@@ -125,6 +126,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
   })
   const [hydrated, setHydrated] = useState(false)
   const [isMac, setIsMac] = useState(false)
+
+  // Warn on small screens once per load — the layout needs room for the editor
+  // and preview side by side, but the user can dismiss and continue anyway.
+  const isMobile = useIsMobile()
+  const [mobileWarningOpen, setMobileWarningOpen] = useState(false)
+  const [mobileWarningDismissed, setMobileWarningDismissed] = useState(false)
+  useEffect(() => {
+    if (isMobile && !mobileWarningDismissed) setMobileWarningOpen(true)
+  }, [isMobile, mobileWarningDismissed])
 
   // Live editor/preview split ratio (persisted to config on drag end).
   const [editorRatio, setEditorRatio] = useState(0.5)
@@ -1260,6 +1270,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
           onFork={onFork}
         />
       ) : null}
+
+      <MobileWarningModal
+        open={mobileWarningOpen}
+        onOpenChange={(open) => {
+          setMobileWarningOpen(open)
+          if (!open) setMobileWarningDismissed(true)
+        }}
+      />
     </div>
   )
 }
