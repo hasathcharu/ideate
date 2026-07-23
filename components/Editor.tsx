@@ -15,7 +15,7 @@ import {
   replaceAll,
   closeSearchPanel,
 } from '@codemirror/search'
-import { indentWithTab } from '@codemirror/commands'
+import { indentWithTab, toggleComment } from '@codemirror/commands'
 import {
   StreamLanguage,
   HighlightStyle,
@@ -26,6 +26,7 @@ import { tags as t } from '@lezer/highlight'
 /** A small stream tokenizer that gives Mermaid source enough structure to read
  *  well in the editor. Not a full grammar — just keywords, arrows, labels. */
 const mermaidLanguage = StreamLanguage.define<unknown>({
+  languageData: { commentTokens: { line: '%%' } },
   token(stream) {
     if (stream.match(/%%.*/)) return 'comment'
     if (stream.match(/"(?:[^"\\]|\\.)*"/)) return 'string'
@@ -384,7 +385,7 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
         extensions: [
           basicSetup,
           search({ top: true, createPanel: createSearchPanel }),
-          keymap.of([indentWithTab]),
+          keymap.of([indentWithTab, { key: 'Mod-/', run: toggleComment }]),
           mermaidLanguage,
           themeCompartment.current.of(editorTheme(dark)),
           highlightCompartment.current.of(

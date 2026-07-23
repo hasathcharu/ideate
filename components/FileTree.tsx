@@ -92,20 +92,22 @@ function TreeItem(props: ItemProps) {
             )}
             <span className="truncate">{node.name}</span>
           </button>
-          {dirty ? <UnsavedDot /> : null}
-          <IconAction
-            title={`New file in ${node.name}`}
-            onClick={() => onNewFile(node.path)}
-          >
-            <Plus className="size-3.5" />
-          </IconAction>
-          <IconAction
-            title={`Delete folder ${node.name}`}
-            danger
-            onClick={() => onDelete(node)}
-          >
-            <Trash2 className="size-3.5" />
-          </IconAction>
+          <div className="relative flex shrink-0 items-center">
+            {dirty ? <UnsavedDot /> : null}
+            <IconAction
+              title={`New file in ${node.name}`}
+              onClick={() => onNewFile(node.path)}
+            >
+              <Plus className="size-3.5" />
+            </IconAction>
+            <IconAction
+              title={`Delete folder ${node.name}`}
+              danger
+              onClick={() => onDelete(node)}
+            >
+              <Trash2 className="size-3.5" />
+            </IconAction>
+          </div>
         </div>
         {open && node.children ? (
           <ul>
@@ -138,26 +140,30 @@ function TreeItem(props: ItemProps) {
           <FileCode className="size-3.5 shrink-0 opacity-70" />
           <span className="truncate">{node.name}</span>
         </button>
-        {dirty ? <UnsavedDot /> : null}
-        <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
-          <Pencil className="size-3.5" />
-        </IconAction>
-        <IconAction title={`Delete ${node.name}`} danger onClick={() => onDelete(node)}>
-          <Trash2 className="size-3.5" />
-        </IconAction>
+        <div className="relative flex shrink-0 items-center">
+          {dirty ? <UnsavedDot /> : null}
+          <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
+            <Pencil className="size-3.5" />
+          </IconAction>
+          <IconAction title={`Delete ${node.name}`} danger onClick={() => onDelete(node)}>
+            <Trash2 className="size-3.5" />
+          </IconAction>
+        </div>
       </div>
     </li>
   )
 }
 
-/** Amber dot marking unsaved changes; hidden on hover to reveal the actions. */
+/** Amber dot marking unsaved changes; overlays the action buttons, hidden on hover to reveal them. */
 function UnsavedDot() {
   return (
     <span
-      className="mr-1.5 size-1.5 shrink-0 rounded-full bg-amber-500 group-hover:hidden"
+      className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
       title="Unsaved changes"
       aria-label="Unsaved changes"
-    />
+    >
+      <span className="size-1.5 rounded-full bg-amber-500" />
+    </span>
   )
 }
 
