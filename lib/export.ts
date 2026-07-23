@@ -1,5 +1,7 @@
 import { renderToSvg } from './mermaid'
+import { buildExportSource } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
+import type { ExportBackground } from './types'
 
 /**
  * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
@@ -11,9 +13,6 @@ import type { MermaidUserConfig } from './mermaidConfig'
  * namespaces, and optionally paint a background.
  */
 
-/** mermaid's `default` theme paints on white. */
-const BACKGROUND = '#ffffff'
-
 export interface StandaloneSvg {
   /** The fully self-contained SVG markup (literal colors, no external refs). */
   markup: string
@@ -22,10 +21,31 @@ export interface StandaloneSvg {
 }
 
 interface ResolveOptions {
-  /** Paint a solid background behind the diagram (vs. transparent). */
-  paintBackground: boolean
+  /** Background to paint behind the diagram. */
+  background: ExportBackground
   /** Global mermaid config (theme, layout, per-diagram settings) to render with. */
   config?: MermaidUserConfig | null
+}
+
+/** Resolve a background choice to a literal fill color, or `null` for
+ *  transparent. "theme" reads the active theme's own `background` variable,
+ *  falling back to white when no theme (or no `background` key) is set. */
+function resolveBackgroundColor(
+  background: ExportBackground,
+  config?: MermaidUserConfig | null,
+): string | null {
+  switch (background) {
+    case 'white':
+      return '#ffffff'
+    case 'black':
+      return '#000000'
+    case 'none':
+      return null
+    case 'theme': {
+      const themeBg = config?.themeVariables?.background
+      return typeof themeBg === 'string' && themeBg.trim() ? themeBg : '#ffffff'
+    }
+  }
 }
 
 /** Read the diagram's intrinsic pixel size from width/height, falling back to
@@ -72,7 +92,8 @@ export async function resolveStandaloneSvg(
   svg.style.removeProperty('max-width')
 
   ensureNamespaces(svg)
-  if (opts.paintBackground) prependBackground(svg, BACKGROUND, width, height)
+  const bgColor = resolveBackgroundColor(opts.background, opts.config)
+  if (bgColor) prependBackground(svg, bgColor, width, height)
 
   const markup = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svg)}`
   return { markup, width, height }
@@ -113,30 +134,30 @@ function triggerDownload(blob: Blob, filename: string): void {
 export async function exportSVG(
   text: string,
   filename: string,
-  paintBackground: boolean,
+  background: ExportBackground,
   config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground, config })
+  const { markup } = await resolveStandaloneSvg(text, { background, config })
   triggerDownload(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
 /** Copy the standalone SVG markup to the clipboard as text. */
 export async function copySVG(
   text: string,
-  paintBackground: boolean,
+  background: ExportBackground,
   config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground, config })
+  const { markup } = await resolveStandaloneSvg(text, { background, config })
   await navigator.clipboard.writeText(markup)
 }
 
 /** Rasterize the resolved SVG to a high-DPI PNG blob (shared by download/copy). */
 async function renderPngBlob(
   text: string,
-  paintBackground: boolean,
+  background: ExportBackground,
   config?: MermaidUserConfig | null,
 ): Promise<Blob> {
-  const { markup, width, height } = await resolveStandaloneSvg(text, { paintBackground, config })
+  const { markup, width, height } = await resolveStandaloneSvg(text, { background, config })
 
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
@@ -169,18 +190,38 @@ async function renderPngBlob(
 export async function exportPNG(
   text: string,
   filename: string,
-  paintBackground: boolean,
+  background: ExportBackground,
   config?: MermaidUserConfig | null,
 ): Promise<void> {
-  triggerDownload(await renderPngBlob(text, paintBackground, config), filename)
+  triggerDownload(await renderPngBlob(text, background, config), filename)
 }
 
 /** Copy the rendered PNG to the clipboard as an image. */
 export async function copyPNG(
   text: string,
-  paintBackground: boolean,
+  background: ExportBackground,
   config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const blob = await renderPngBlob(text, paintBackground, config)
+  const blob = await renderPngBlob(text, background, config)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+}
+
+/* ------------------------------------------------------------------ */
+/* Mermaid source (code + config)                                      */
+/* ------------------------------------------------------------------ */
+
+/** Download the raw mermaid diagram source, with the global config baked in as
+ *  a YAML frontmatter block, as a standalone `.mmd` file. */
+export async function exportSource(
+  text: string,
+  filename: string,
+  configYaml: string,
+): Promise<void> {
+  const source = buildExportSource(text, configYaml)
+  triggerDownload(new Blob([source], { type: 'text/plain;charset=utf-8' }), filename)
+}
+
+/** Copy the raw mermaid diagram source (with config frontmatter) to the clipboard. */
+export async function copySource(text: string, configYaml: string): Promise<void> {
+  await navigator.clipboard.writeText(buildExportSource(text, configYaml))
 }

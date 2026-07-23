@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import {
   ChevronRight,
   Command,
@@ -11,7 +12,7 @@ import {
   PanelLeft,
   Plus,
   RefreshCw,
-  Save,
+  RotateCcw,
   Settings2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -96,6 +97,14 @@ const NEW_TEMPLATE = `flowchart LR
 const NONE_THEME = '__none__'
 const CUSTOM_THEME = '__custom__'
 
+/** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
+function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
+  if (!paths.some((p) => set.has(p))) return set
+  const next = new Set(set)
+  for (const p of paths) next.delete(p)
+  return next
+}
+
 type PromptSpec = Pick<
   PromptModalProps,
   'title' | 'description' | 'label' | 'defaultValue' | 'submitLabel' | 'validate' | 'onSubmit'
@@ -106,8 +115,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
-    exportBackground: true,
+    exportBackground: 'white',
     splitRatio: 0.5,
+    sidebarWidth: 256,
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
@@ -116,6 +126,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Live editor/preview split ratio (persisted to config on drag end).
   const [editorRatio, setEditorRatio] = useState(0.5)
   const paneRowRef = useRef<HTMLDivElement>(null)
+
+  // Live sidebar width in pixels (persisted to config on drag end).
+  const [sidebarWidth, setSidebarWidth] = useState(256)
 
   const [text, setText] = useState(SAMPLE)
   const [baseline, setBaseline] = useState(SAMPLE)
@@ -181,6 +194,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return hasVars ? CUSTOM_THEME : NONE_THEME
   }, [appliedConfig])
 
+  // Shared by the Select's onValueChange (commit) and each item's onFocus (live
+  // preview as arrow keys/hover move the highlight), so navigating the dropdown
+  // re-themes the diagram before the user settles on a choice.
+  const applyTheme = useCallback(
+    (v: string) => {
+      if (v === CUSTOM_THEME) return
+      const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
+      if (v !== NONE_THEME && !preset) return
+      updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
+    },
+    [config.mermaidConfig],
+  )
+
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
   const docId =
@@ -193,7 +219,23 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // A just-created file has no sha and isn't in the fetched tree yet; splice its
   // path in so it shows in the sidebar (flagged unsaved) before the first commit.
   const pendingPath = repo && openPath && loadedSha === null ? openPath : null
-  const dirtyPath = dirty && openPath ? openPath : null
+
+  // Every path with unsaved edits made *this session*, not just the open one —
+  // so switching files without saving still shows the earlier file as dirty in
+  // the tree. Keyed off the open file's live dirty state; committing, reverting,
+  // deleting, or renaming a path removes it below.
+  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    if (!openPath) return
+    setDirtyPaths((prev) => {
+      if (dirty === prev.has(openPath)) return prev
+      const next = new Set(prev)
+      if (dirty) next.add(openPath)
+      else next.delete(openPath)
+      return next
+    })
+  }, [openPath, dirty])
+
   const displayNodes = useMemo(() => {
     const base = tree?.tree ?? []
     if (!pendingPath) return base
@@ -235,6 +277,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const stored = loadConfig()
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
+    setSidebarWidth(stored.sidebarWidth)
     setHydrated(true)
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
@@ -323,6 +366,53 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setEditorRatio((r) => {
         const next = Math.min(MAX_RATIO, Math.max(MIN_RATIO, r + delta))
         updateConfig({ splitRatio: next })
+        return next
+      })
+    },
+    [updateConfig],
+  )
+
+  const MIN_SIDEBAR_WIDTH = 180
+  const MAX_SIDEBAR_WIDTH = 480
+
+  const startSidebarDrag = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startWidth = sidebarWidth
+      const onMove = (ev: PointerEvent) => {
+        const next = startWidth + (ev.clientX - startX)
+        setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next)))
+      }
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        setSidebarWidth((w) => {
+          updateConfig({ sidebarWidth: w })
+          return w
+        })
+      }
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+    },
+    [sidebarWidth, updateConfig],
+  )
+
+  const onSidebarDividerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = e.shiftKey ? 40 : 8
+      let delta = 0
+      if (e.key === 'ArrowLeft') delta = -step
+      else if (e.key === 'ArrowRight') delta = step
+      else return
+      e.preventDefault()
+      setSidebarWidth((w) => {
+        const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w + delta))
+        updateConfig({ sidebarWidth: next })
         return next
       })
     },
@@ -461,6 +551,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
           const draft = loadDraft(oldId)
           if (draft) saveDraft(newId, draft.content)
           clearDraft(oldId)
+          setDirtyPaths((prev) => {
+            if (!prev.has(node.path)) return prev
+            const next = new Set(prev)
+            next.delete(node.path)
+            next.add(newPath)
+            return next
+          })
           if (openPath === node.path) {
             setOpenPath(newPath)
             setLoadedSha(res.data.sha)
@@ -500,6 +597,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const committed = paths.filter((p) => p !== pendingPath)
     if (committed.length === 0) {
       if (affectsOpen) detachEditor()
+      setDirtyPaths((prev) => withoutPaths(prev, paths))
       setDeleteOpen(false)
       setDeleteTarget(null)
       return
@@ -516,6 +614,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         ? `Deleted ${committed[0]}`
         : `Deleted ${res.data.deleted} files`,
     )
+    setDirtyPaths((prev) => withoutPaths(prev, paths))
     setDeleteOpen(false)
     setDeleteTarget(null)
     if (affectsOpen) detachEditor()
@@ -563,6 +662,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
     void commitCurrent(openPath, loadedSha ?? undefined, text)
   }, [repo, dirty, saving, openPath, loadedSha, text, commitCurrent, openPrompt])
 
+  // Discard uncommitted edits, resetting the editor back to the last-loaded
+  // commit. Only meaningful once there is an actual commit to fall back to
+  // (loadedSha !== null) — a never-committed file has no "last commit" state.
+  const canRestore = dirty && loadedSha !== null
+  const onRestore = useCallback(() => {
+    if (!canRestore) return
+    setText(baseline)
+    clearDraft(docId)
+  }, [canRestore, baseline, docId])
+
   // Detect the platform for the correct modifier label (⌘ vs Ctrl).
   useEffect(() => {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
@@ -572,6 +681,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // saves; ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because
   // browsers reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it.
   // `e.code` (physical key) is used so macOS Option+N (a dead key) still matches.
+  // ⌘/Ctrl+B toggles the file-tree sidebar (only meaningful once a repo is open).
   useEffect(() => {
     if (!githubEnabled) return
     const onKey = (e: KeyboardEvent) => {
@@ -582,11 +692,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
+      } else if (e.code === 'KeyB' && !e.altKey && repo) {
+        e.preventDefault()
+        setSidebarOpen((v) => !v)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [githubEnabled, onSave, newDiagram])
+  }, [githubEnabled, onSave, newDiagram, repo])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
@@ -691,6 +804,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const showSidebar = githubEnabled && !!repo && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
+  const sidebarHint = isMac ? '⌘ B' : 'Ctrl + B'
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -701,13 +815,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
               size="icon-sm"
               variant="ghost"
               onClick={() => setSidebarOpen((v) => !v)}
-              title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+              title={`${sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'} (${sidebarHint})`}
             >
               <PanelLeft />
             </Button>
           ) : null}
-          <span className="text-lg text-primary">◇</span>
-          <span className="text-[15px] font-semibold">{APP_NAME}</span>
+          <Link href="/" className="text-xl font-bold hover:text-primary">
+            {APP_NAME}
+          </Link>
           {githubEnabled ? (
             <Button
               size="sm"
@@ -750,21 +865,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
         <div className="flex items-center gap-2">
           {githubEnabled ? (
             <>
-              <span className="text-xs text-muted-foreground">
-                {dirty ? '● Unsaved' : 'Saved'}
-              </span>
-              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Save (${saveHint})`}>
-                <Save /> {saving ? 'Saving…' : 'Save'}
-                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-relaxed font-medium opacity-70">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onRestore}
+                disabled={!canRestore}
+                title="Restore to last commit"
+              >
+                <RotateCcw /> Restore
+              </Button>
+              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Commit (${saveHint})`}>
+                {saving ? 'Committing…' : 'Commit'}
+                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
                   {isMac ? (
                     <>
-                      <Command className="size-2.5" /> S
+                      <Command className="size-2.5" /> <span>S</span>
                     </>
                   ) : (
-                    'Ctrl + S'
+                    <span>Ctrl + S</span>
                   )}
                 </kbd>
               </Button>
+              <span className="text-xs text-muted-foreground">
+                {dirty ? '● Unsaved' : 'Saved'}
+              </span>
               {openPath && repo ? (
                 <Button size="sm" variant="ghost" onClick={openHistory}>
                   <History /> History
@@ -776,8 +900,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
           <ExportMenu
             text={debouncedText}
             baseName={baseName}
-            includeBackground={config.exportBackground}
-            onToggleBackground={(v) => updateConfig({ exportBackground: v })}
+            configYaml={config.mermaidConfig}
+            background={config.exportBackground}
+            onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
             config={appliedConfig}
           />
           <Separator orientation="vertical" className="h-6" />
@@ -787,9 +912,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
       <div className="flex min-h-0 flex-1">
         {showSidebar ? (
-          <aside className="flex w-64 flex-none flex-col overflow-hidden border-r bg-sidebar">
+          <aside
+            className="flex flex-none flex-col overflow-hidden bg-sidebar"
+            style={{ width: sidebarWidth }}
+          >
             <div className="flex items-center justify-between px-3 py-2.5">
-              <span className="truncate text-sm font-medium">{repo?.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
+                Files
+                {dirtyPaths.size > 0 ? (
+                  <span
+                    className="size-1.5 shrink-0 rounded-full bg-amber-500"
+                    title={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
+                    aria-label={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
+                  />
+                ) : null}
+              </span>
               <div className="flex items-center gap-0.5">
                 <Button
                   size="icon-xs"
@@ -825,7 +962,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <FileTree
                   nodes={displayNodes}
                   activePath={openPath}
-                  dirtyPath={dirtyPath}
+                  dirtyPaths={dirtyPaths}
                   branch={repo?.branch ?? ''}
                   onOpenFile={openFile}
                   onDelete={requestDelete}
@@ -834,19 +971,23 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 />
               )}
             </div>
-            <Separator />
-            <div className="flex-none px-3 py-2 text-xs text-muted-foreground">
-              Made by{' '}
-              <a
-                href="https://hasathcharu.com"
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-medium text-foreground hover:text-primary hover:underline"
-              >
-                Hasathcharu
-              </a>
-            </div>
           </aside>
+        ) : null}
+        {showSidebar ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            aria-valuemin={MIN_SIDEBAR_WIDTH}
+            aria-valuemax={MAX_SIDEBAR_WIDTH}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={startSidebarDrag}
+            onKeyDown={onSidebarDividerKeyDown}
+            className="group flex w-1.5 flex-none cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
+          >
+            <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+          </div>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -878,27 +1019,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
             )}
             <div className="ml-auto flex items-center gap-1.5">
               <span className="text-muted-foreground">Theme</span>
-              <Select
-                value={currentTheme}
-                onValueChange={(v) => {
-                  if (v === CUSTOM_THEME) return
-                  const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
-                  if (v !== NONE_THEME && !preset) return
-                  updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
-                }}
-              >
+              <Select value={currentTheme} onValueChange={applyTheme}>
                 <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent align="end">
-                  <SelectItem value={NONE_THEME}>None (default)</SelectItem>
+                  <SelectItem
+                    value={NONE_THEME}
+                    className="cursor-pointer"
+                    onFocus={() => applyTheme(NONE_THEME)}
+                  >
+                    None (default)
+                  </SelectItem>
                   {currentTheme === CUSTOM_THEME ? (
                     <SelectItem value={CUSTOM_THEME} disabled>
                       Custom
                     </SelectItem>
                   ) : null}
                   {THEME_PRESETS.map((preset) => (
-                    <SelectItem key={preset.value} value={preset.value}>
+                    <SelectItem
+                      key={preset.value}
+                      value={preset.value}
+                      className="cursor-pointer"
+                      onFocus={() => applyTheme(preset.value)}
+                    >
                       {preset.label}
                     </SelectItem>
                   ))}

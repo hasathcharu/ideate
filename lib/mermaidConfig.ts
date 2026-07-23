@@ -46,7 +46,6 @@ export const CONFIG_PLACEHOLDER = `config:
     primaryBorderColor: '#5e81ac'
     lineColor: '#5e81ac'
     background: '#eceff4'
-    fontFamily: 'JetBrains Mono, monospace'
 `
 
 /**
@@ -108,6 +107,30 @@ function stripFrontmatterFences(yaml: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/* ------------------------------------------------------------------ */
+/* Export (diagram code + config, as a standalone .mmd source)        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Combine the diagram text with the global config as a real mermaid YAML
+ * frontmatter block, so the exported source stands alone (renders identically
+ * if pasted elsewhere). The stored config is normally the bare-body form (keys
+ * at the root, e.g. from `setThemeInYaml`); real mermaid frontmatter nests
+ * those keys under a top-level `config:` key, so it's added here unless the
+ * user already pasted the full frontmatter form themselves.
+ */
+export function buildExportSource(text: string, mermaidConfigYaml: string): string {
+  if (!mermaidConfigYaml.trim()) return text
+
+  const lines = mermaidConfigYaml.replace(/\r\n/g, '\n').split('\n')
+  const hasConfigKey = lines.some((l) => /^config\s*:\s*(#.*)?$/.test(l))
+  const body = hasConfigKey
+    ? lines.join('\n').replace(/\n+$/, '')
+    : ['config:', ...lines.map((l) => (l.trim() ? `  ${l}` : l))].join('\n').replace(/\n+$/, '')
+
+  return `---\n${body}\n---\n\n${text}`
 }
 
 /* ------------------------------------------------------------------ */

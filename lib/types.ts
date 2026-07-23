@@ -31,13 +31,19 @@ export interface Branch {
   protected: boolean
 }
 
+/** Background painted behind an exported diagram: a solid white/black fill, no
+ *  fill at all (transparent), or the current theme's own `background` color. */
+export type ExportBackground = 'white' | 'black' | 'none' | 'theme'
+
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
   repo: RepoRef | null
-  /** Paint a solid background behind exported diagrams (vs. transparent). */
-  exportBackground: boolean
+  /** Background painted behind exported diagrams. */
+  exportBackground: ExportBackground
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
+  /** File-tree sidebar width in pixels. */
+  sidebarWidth: number
   /** Raw YAML text of the global mermaid config — the single source of truth for
    *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
    *  the layout dropdown writes the `layout` key into it. Empty = mermaid

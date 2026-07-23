@@ -52,9 +52,8 @@ export default function DeleteModal({
           </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          This commits a removal to <code>{branch}</code>. The history stays in Git — you can
-          restore it on GitHub — but the file{isDir && fileCount !== 1 ? 's' : ''} will no
-          longer appear here.
+          This commits a removal to <code>{branch}</code>. The history stays in Git, you can
+          restore it on GitHub.
         </p>
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>

@@ -8,8 +8,8 @@ import type { TreeNode } from '@/lib/types'
 export interface FileTreeProps {
   nodes: TreeNode[]
   activePath: string | null
-  /** Path with unsaved changes (shown with a dot); may be a not-yet-saved file. */
-  dirtyPath: string | null
+  /** Paths with unsaved changes (shown with a dot); may include not-yet-saved files. */
+  dirtyPaths: ReadonlySet<string>
   /** The branch being browsed, for the empty-state copy. */
   branch: string
   onOpenFile: (path: string) => void
@@ -22,7 +22,7 @@ export interface FileTreeProps {
 export default function FileTree({
   nodes,
   activePath,
-  dirtyPath,
+  dirtyPaths,
   branch,
   onOpenFile,
   onDelete,
@@ -45,7 +45,7 @@ export default function FileTree({
           node={node}
           depth={0}
           activePath={activePath}
-          dirtyPath={dirtyPath}
+          dirtyPaths={dirtyPaths}
           onOpenFile={onOpenFile}
           onDelete={onDelete}
           onNewFile={onNewFile}
@@ -60,7 +60,7 @@ interface ItemProps {
   node: TreeNode
   depth: number
   activePath: string | null
-  dirtyPath: string | null
+  dirtyPaths: ReadonlySet<string>
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string) => void
@@ -68,14 +68,14 @@ interface ItemProps {
 }
 
 function TreeItem(props: ItemProps) {
-  const { node, depth, activePath, dirtyPath, onOpenFile, onDelete, onNewFile, onRename } =
+  const { node, depth, activePath, dirtyPaths, onOpenFile, onDelete, onNewFile, onRename } =
     props
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
   if (node.type === 'dir') {
     // Dot when an unsaved file lives somewhere inside this folder.
-    const dirty = !!dirtyPath && dirtyPath.startsWith(`${node.path}/`)
+    const dirty = Array.from(dirtyPaths).some((p) => p.startsWith(`${node.path}/`))
     return (
       <li>
         <div className="group flex items-center rounded-md text-muted-foreground hover:bg-accent">
@@ -119,7 +119,7 @@ function TreeItem(props: ItemProps) {
   }
 
   const active = activePath === node.path
-  const dirty = dirtyPath === node.path
+  const dirty = dirtyPaths.has(node.path)
   return (
     <li>
       <div

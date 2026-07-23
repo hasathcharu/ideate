@@ -24,8 +24,9 @@ function hasStorage(): boolean {
 
 const DEFAULT_CONFIG: AppConfig = {
   repo: null,
-  exportBackground: true,
+  exportBackground: 'white',
   splitRatio: 0.5,
+  sidebarWidth: 256,
   mermaidConfig: '',
 }
 
@@ -43,6 +44,12 @@ export function loadConfig(): AppConfig {
     // repopulates both fields.
     if (merged.repo && (!merged.repo.branch || !merged.repo.defaultBranch)) {
       merged.repo = null
+    }
+    // A config saved before the background chooser shipped stores a boolean
+    // (paint white vs. transparent) — map it onto the new choice rather than
+    // let a stale non-string value reach the export UI.
+    if (typeof merged.exportBackground === 'boolean') {
+      merged.exportBackground = merged.exportBackground ? 'white' : 'none'
     }
     return merged
   } catch {

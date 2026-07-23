@@ -1,17 +1,19 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   copyPNG,
+  copySource,
   copySVG,
   exportPNG,
+  exportSource,
   exportSVG,
 } from '@/lib/export'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
+import type { ExportBackground } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,12 +21,47 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+
+const BACKGROUND_OPTIONS: ReadonlyArray<{ value: ExportBackground; label: string }> = [
+  { value: 'white', label: 'White' },
+  { value: 'black', label: 'Black' },
+  { value: 'none', label: 'None (transparent)' },
+  { value: 'theme', label: 'Theme' },
+]
+
+/** A repeating checkerboard, the universal "transparent" indicator. */
+const TRANSPARENT_PATTERN: CSSProperties = {
+  backgroundImage:
+    'linear-gradient(45deg, #80808066 25%, transparent 25%), linear-gradient(-45deg, #80808066 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #80808066 75%), linear-gradient(-45deg, transparent 75%, #80808066 75%)',
+  backgroundSize: '8px 8px',
+  backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0px',
+}
+
+function swatchStyle(
+  value: ExportBackground,
+  themeBg: string | undefined,
+): CSSProperties {
+  switch (value) {
+    case 'white':
+      return { background: '#ffffff' }
+    case 'black':
+      return { background: '#000000' }
+    case 'none':
+      return TRANSPARENT_PATTERN
+    case 'theme':
+      return { background: themeBg ?? 'linear-gradient(135deg, #6366f1, #ec4899)' }
+  }
+}
 
 export interface ExportMenuProps {
   text: string
   baseName: string
-  includeBackground: boolean
-  onToggleBackground: (value: boolean) => void
+  /** Raw YAML text of the global mermaid config, for the "Mermaid + Config" export. */
+  configYaml: string
+  background: ExportBackground
+  onBackgroundChange: (value: ExportBackground) => void
   /** Global mermaid config (theme, layout, per-diagram settings) to render exports with. */
   config?: MermaidUserConfig | null
 }
@@ -32,8 +69,9 @@ export interface ExportMenuProps {
 export default function ExportMenu({
   text,
   baseName,
-  includeBackground,
-  onToggleBackground,
+  configYaml,
+  background,
+  onBackgroundChange,
   config = null,
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
@@ -52,6 +90,10 @@ export default function ExportMenu({
   }
 
   const name = baseName || 'diagram'
+  const themeBg =
+    typeof config?.themeVariables?.background === 'string'
+      ? config.themeVariables.background
+      : undefined
 
   const Row = ({
     label,
@@ -103,24 +145,48 @@ export default function ExportMenu({
       <DropdownMenuContent align="end" className="w-64">
         <DropdownMenuLabel>Export diagram</DropdownMenuLabel>
         <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-          <span className="text-sm">With Background</span>
-          <Switch
-            checked={includeBackground}
-            onCheckedChange={(v) => onToggleBackground(Boolean(v))}
-          />
+          <span className="text-sm">Background</span>
+          <div className="flex items-center gap-1.5">
+            {BACKGROUND_OPTIONS.map((opt) => (
+              <Tooltip key={opt.value}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={opt.label}
+                    aria-pressed={background === opt.value}
+                    onClick={() => onBackgroundChange(opt.value)}
+                    className={cn(
+                      'size-6 rounded-md border border-input transition-shadow',
+                      background === opt.value &&
+                        'ring-2 ring-primary ring-offset-1 ring-offset-popover',
+                    )}
+                    style={swatchStyle(opt.value, themeBg)}
+                  />
+                </TooltipTrigger>
+                <TooltipContent>{opt.label}</TooltipContent>
+              </Tooltip>
+            ))}
+          </div>
         </div>
         <DropdownMenuSeparator />
         <Row
           label="SVG"
           format="SVG"
-          onDownload={() => exportSVG(text, `${name}.svg`, includeBackground, config)}
-          onCopy={() => copySVG(text, includeBackground, config)}
+          onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
+          onCopy={() => copySVG(text, background, config)}
         />
         <Row
           label="PNG"
           format="PNG"
-          onDownload={() => exportPNG(text, `${name}.png`, includeBackground, config)}
-          onCopy={() => copyPNG(text, includeBackground, config)}
+          onDownload={() => exportPNG(text, `${name}.png`, background, config)}
+          onCopy={() => copyPNG(text, background, config)}
+        />
+        <DropdownMenuSeparator />
+        <Row
+          label="Mermaid + Config"
+          format="MMD"
+          onDownload={() => exportSource(text, `${name}.mmd`, configYaml)}
+          onCopy={() => copySource(text, configYaml)}
         />
       </DropdownMenuContent>
     </DropdownMenu>
