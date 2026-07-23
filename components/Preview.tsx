@@ -5,19 +5,18 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
 import {
   renderPreview,
-  DEFAULT_LAYOUT,
-  type LayoutEngine,
   type RenderError,
   type RenderResult,
 } from '@/lib/mermaid'
+import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { Button } from '@/components/ui/button'
 
 export interface PreviewProps {
   text: string
   /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground?: boolean
-  /** Layout engine to render the diagram with. */
-  layout?: LayoutEngine
+  /** Global mermaid config (theme, layout, per-diagram settings) to render with. */
+  config?: MermaidUserConfig | null
 }
 
 interface View {
@@ -37,7 +36,7 @@ function clampScale(s: number): number {
 export default function Preview({
   text,
   paintBackground = true,
-  layout = DEFAULT_LAYOUT,
+  config = null,
 }: PreviewProps) {
   // The preview is client-only (per the architecture): mermaid measures text
   // against the live DOM, so it can only run in the browser. Gate on mount so
@@ -51,13 +50,13 @@ export default function Preview({
   useEffect(() => {
     if (!mounted) return
     let cancelled = false
-    void renderPreview(text, layout).then((r) => {
+    void renderPreview(text, config).then((r) => {
       if (!cancelled) setResult(r)
     })
     return () => {
       cancelled = true
     }
-  }, [text, layout, mounted])
+  }, [text, config, mounted])
   const isEmpty = !text.trim()
 
   const viewportRef = useRef<HTMLDivElement | null>(null)

@@ -1,5 +1,3 @@
-import type { LayoutEngine } from './mermaid'
-
 /** Identifies which document a localStorage draft belongs to. */
 export type DocId = string
 
@@ -25,8 +23,11 @@ export interface AppConfig {
   exportBackground: boolean
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
-  /** Mermaid layout engine used for preview + export. */
-  layoutEngine: LayoutEngine
+  /** Raw YAML text of the global mermaid config — the single source of truth for
+   *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
+   *  the layout dropdown writes the `layout` key into it. Empty = mermaid
+   *  defaults. */
+  mermaidConfig: string
 }
 
 /** A node in the repository file tree. */

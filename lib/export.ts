@@ -1,4 +1,5 @@
-import { renderToSvg, type LayoutEngine, DEFAULT_LAYOUT } from './mermaid'
+import { renderToSvg } from './mermaid'
+import type { MermaidUserConfig } from './mermaidConfig'
 
 /**
  * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
@@ -23,8 +24,8 @@ export interface StandaloneSvg {
 interface ResolveOptions {
   /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground: boolean
-  /** Layout engine to render with (matches the preview). */
-  layout?: LayoutEngine
+  /** Global mermaid config (theme, layout, per-diagram settings) to render with. */
+  config?: MermaidUserConfig | null
 }
 
 /** Read the diagram's intrinsic pixel size from width/height, falling back to
@@ -45,7 +46,7 @@ export async function resolveStandaloneSvg(
   text: string,
   opts: ResolveOptions,
 ): Promise<StandaloneSvg> {
-  const raw = await renderToSvg(text, opts.layout ?? DEFAULT_LAYOUT)
+  const raw = await renderToSvg(text, opts.config ?? null)
 
   const doc = new DOMParser().parseFromString(raw, 'image/svg+xml')
   const svg = doc.querySelector('svg')
@@ -102,9 +103,9 @@ export async function exportSVG(
   text: string,
   filename: string,
   paintBackground: boolean,
-  layout?: LayoutEngine,
+  config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground, layout })
+  const { markup } = await resolveStandaloneSvg(text, { paintBackground, config })
   triggerDownload(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
@@ -112,9 +113,9 @@ export async function exportSVG(
 export async function copySVG(
   text: string,
   paintBackground: boolean,
-  layout?: LayoutEngine,
+  config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground, layout })
+  const { markup } = await resolveStandaloneSvg(text, { paintBackground, config })
   await navigator.clipboard.writeText(markup)
 }
 
@@ -122,9 +123,9 @@ export async function copySVG(
 async function renderPngBlob(
   text: string,
   paintBackground: boolean,
-  layout?: LayoutEngine,
+  config?: MermaidUserConfig | null,
 ): Promise<Blob> {
-  const { markup, width, height } = await resolveStandaloneSvg(text, { paintBackground, layout })
+  const { markup, width, height } = await resolveStandaloneSvg(text, { paintBackground, config })
 
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
@@ -162,17 +163,17 @@ export async function exportPNG(
   text: string,
   filename: string,
   paintBackground: boolean,
-  layout?: LayoutEngine,
+  config?: MermaidUserConfig | null,
 ): Promise<void> {
-  triggerDownload(await renderPngBlob(text, paintBackground, layout), filename)
+  triggerDownload(await renderPngBlob(text, paintBackground, config), filename)
 }
 
 /** Copy the rendered PNG to the clipboard as an image. */
 export async function copyPNG(
   text: string,
   paintBackground: boolean,
-  layout?: LayoutEngine,
+  config?: MermaidUserConfig | null,
 ): Promise<void> {
-  const blob = await renderPngBlob(text, paintBackground, layout)
+  const blob = await renderPngBlob(text, paintBackground, config)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }

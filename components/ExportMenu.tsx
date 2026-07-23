@@ -9,7 +9,7 @@ import {
   exportPNG,
   exportSVG,
 } from '@/lib/export'
-import type { LayoutEngine } from '@/lib/mermaid'
+import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -25,8 +25,8 @@ export interface ExportMenuProps {
   baseName: string
   includeBackground: boolean
   onToggleBackground: (value: boolean) => void
-  /** Layout engine to render exports with (matches the preview). */
-  layout: LayoutEngine
+  /** Global mermaid config (theme, layout, per-diagram settings) to render exports with. */
+  config?: MermaidUserConfig | null
 }
 
 export default function ExportMenu({
@@ -34,7 +34,7 @@ export default function ExportMenu({
   baseName,
   includeBackground,
   onToggleBackground,
-  layout,
+  config = null,
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const disabled = !text.trim()
@@ -113,14 +113,14 @@ export default function ExportMenu({
         <Row
           label="SVG"
           format="SVG"
-          onDownload={() => exportSVG(text, `${name}.svg`, includeBackground, layout)}
-          onCopy={() => copySVG(text, includeBackground, layout)}
+          onDownload={() => exportSVG(text, `${name}.svg`, includeBackground, config)}
+          onCopy={() => copySVG(text, includeBackground, config)}
         />
         <Row
           label="PNG"
           format="PNG"
-          onDownload={() => exportPNG(text, `${name}.png`, includeBackground, layout)}
-          onCopy={() => copyPNG(text, includeBackground, layout)}
+          onDownload={() => exportPNG(text, `${name}.png`, includeBackground, config)}
+          onCopy={() => copyPNG(text, includeBackground, config)}
         />
       </DropdownMenuContent>
     </DropdownMenu>

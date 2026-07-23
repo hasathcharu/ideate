@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Settings2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import Editor from './Editor'
@@ -21,6 +22,7 @@ import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
+import ConfigModal from './ConfigModal'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -30,7 +32,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { DEFAULT_LAYOUT, LAYOUT_ENGINES, type LayoutEngine } from '@/lib/mermaid'
+import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
+import {
+  parseMermaidConfig,
+  applyThemeToSite,
+  layoutFromConfig,
+  setLayoutInYaml,
+  type MermaidUserConfig,
+} from '@/lib/mermaidConfig'
 import { useDebouncedValue } from '@/lib/hooks'
 import {
   loadConfig,
@@ -85,7 +94,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     repo: null,
     exportBackground: true,
     splitRatio: 0.5,
-    layoutEngine: DEFAULT_LAYOUT,
+    mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
   const [isMac, setIsMac] = useState(false)
@@ -115,6 +124,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
 
+  const [configOpen, setConfigOpen] = useState(false)
+
   const [historyOpen, setHistoryOpen] = useState(false)
   const [commits, setCommits] = useState<FileCommit[] | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -123,6 +134,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [versionLoading, setVersionLoading] = useState(false)
 
   const debouncedText = useDebouncedValue(text, 350)
+
+  // Parse the user's YAML config. The memo keeps a stable object reference until
+  // the raw text changes, so it's safe to feed into the Preview render effect's
+  // deps. `appliedConfig` holds the last *valid* parse — a half-typed config
+  // (parse error) leaves the previous theme in place rather than blanking it.
+  const parsedConfig = useMemo(() => parseMermaidConfig(config.mermaidConfig), [config.mermaidConfig])
+  const [appliedConfig, setAppliedConfig] = useState<MermaidUserConfig | null>(null)
+  useEffect(() => {
+    if (parsedConfig.error) return
+    setAppliedConfig(parsedConfig.config)
+    // themeVariables recolor the whole app chrome (empty config resets it).
+    applyThemeToSite(parsedConfig.config)
+  }, [parsedConfig])
+
+  // The layout dropdown reflects — and writes back into — the YAML config, which
+  // is the single source of truth. Selecting an engine rewrites the `layout` key
+  // (see the Select's onValueChange, which calls setLayoutInYaml).
+  const layoutValues = useMemo(() => LAYOUT_ENGINES.map((e) => e.value), [])
+  const currentLayout = layoutFromConfig(appliedConfig, layoutValues, DEFAULT_LAYOUT)
 
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
@@ -647,7 +677,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             baseName={baseName}
             includeBackground={config.exportBackground}
             onToggleBackground={(v) => updateConfig({ exportBackground: v })}
-            layout={config.layoutEngine}
+            config={appliedConfig}
           />
           <Separator orientation="vertical" className="h-6" />
           <AuthButton user={user} />
@@ -739,8 +769,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
             <div className="ml-auto flex items-center gap-1.5">
               <span className="text-muted-foreground">Layout</span>
               <Select
-                value={config.layoutEngine}
-                onValueChange={(v) => updateConfig({ layoutEngine: v as LayoutEngine })}
+                value={currentLayout}
+                onValueChange={(v) =>
+                  updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
+                }
               >
                 <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
                   <SelectValue />
@@ -753,6 +785,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   ))}
                 </SelectContent>
               </Select>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="size-7"
+                onClick={() => setConfigOpen(true)}
+                aria-label="Diagram configuration"
+                title="Diagram configuration"
+              >
+                <Settings2 />
+              </Button>
             </div>
           </div>
 
@@ -781,7 +823,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
             </div>
             <section className="min-h-0 overflow-auto" aria-label="Preview">
-              <Preview text={debouncedText} layout={config.layoutEngine} />
+              <Preview
+                text={debouncedText}
+                config={appliedConfig}
+              />
             </section>
           </div>
         </main>
@@ -809,6 +854,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       {prompt ? (
         <PromptModal open={promptOpen} onOpenChange={setPromptOpen} {...prompt} />
       ) : null}
+
+      <ConfigModal
+        open={configOpen}
+        onOpenChange={setConfigOpen}
+        value={config.mermaidConfig}
+        onChange={(v) => updateConfig({ mermaidConfig: v })}
+        error={parsedConfig.error}
+      />
 
       <DeleteModal
         open={deleteOpen}

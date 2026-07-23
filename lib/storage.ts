@@ -1,5 +1,4 @@
 import type { AppConfig } from './types'
-import { DEFAULT_LAYOUT } from './mermaid'
 
 /**
  * localStorage is the WORKING COPY: uncommitted drafts + app config only.
@@ -26,7 +25,7 @@ const DEFAULT_CONFIG: AppConfig = {
   repo: null,
   exportBackground: true,
   splitRatio: 0.5,
-  layoutEngine: DEFAULT_LAYOUT,
+  mermaidConfig: '',
 }
 
 export function loadConfig(): AppConfig {

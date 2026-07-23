@@ -1,5 +1,6 @@
 import mermaid from 'mermaid'
 import elkLayouts from '@mermaid-js/layout-elk'
+import type { MermaidUserConfig } from './mermaidConfig'
 
 /**
  * Diagram rendering via the official `mermaid` library.
@@ -39,26 +40,57 @@ const BASE_CONFIG = {
   flowchart: { htmlLabels: false, curve: 'basis' },
 } as const
 
-let initialized = false
-// The layout the global mermaid config is currently set to; re-init only when
-// the requested engine actually changes.
-let currentLayout: LayoutEngine = DEFAULT_LAYOUT
+let loadersRegistered = false
+// A cache key (the serialized user config) of the config mermaid is currently
+// initialized with, so we only re-init when something actually changes.
+// `null` means "never initialized yet".
+let currentKey: string | null = null
 
-function ensureInitialized(): void {
-  if (initialized) return
-  // Register the ELK loader so `layout: 'elk'` resolves; dagre is built in.
-  mermaid.registerLayoutLoaders(elkLayouts)
-  mermaid.initialize({ ...BASE_CONFIG, layout: currentLayout })
-  initialized = true
+/** Deep-merge plain objects (user config over defaults) so overriding e.g.
+ *  `flowchart.curve` doesn't wipe out `flowchart.htmlLabels`. Arrays and
+ *  scalars from `override` replace the base value outright. */
+function deepMerge<T extends Record<string, unknown>>(
+  base: T,
+  override: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base }
+  for (const [key, value] of Object.entries(override)) {
+    const prev = out[key]
+    if (isPlainObject(prev) && isPlainObject(value)) {
+      out[key] = deepMerge(prev, value)
+    } else {
+      out[key] = value
+    }
+  }
+  return out
 }
 
-/** Point mermaid's global config at `layout` (a no-op if already set). */
-function applyLayout(layout: LayoutEngine): void {
-  if (layout === currentLayout) return
-  currentLayout = layout
-  // Re-pass the full base config: initialize() merges, and passing only { layout }
-  // has been observed to let defaults (e.g. htmlLabels) creep back in.
-  mermaid.initialize({ ...BASE_CONFIG, layout })
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Initialize mermaid with the base config merged with the user's config — but
+ * only when that config changes. mermaid's `initialize()` rebuilds its site
+ * config from the built-in defaults on each call, so passing the full merged
+ * object every time keeps removed keys from lingering. The user config is the
+ * single source of truth, including `layout` (the dropdown edits the YAML — see
+ * `setLayoutInYaml`); we only default it to dagre when the config omits it.
+ */
+function applyConfig(userConfig: MermaidUserConfig | null): void {
+  const key = userConfig ? JSON.stringify(userConfig) : ''
+  if (key === currentKey) return
+  currentKey = key
+
+  if (!loadersRegistered) {
+    // Register the ELK loader so `layout: 'elk'` resolves; dagre is built in.
+    mermaid.registerLayoutLoaders(elkLayouts)
+    loadersRegistered = true
+  }
+
+  const merged = userConfig ? deepMerge(BASE_CONFIG, userConfig) : { ...BASE_CONFIG }
+  if (typeof merged.layout !== 'string') merged.layout = DEFAULT_LAYOUT
+  mermaid.initialize(merged)
 }
 
 /**
@@ -123,10 +155,9 @@ let renderSeq = 0
  */
 export async function renderToSvg(
   text: string,
-  layout: LayoutEngine = DEFAULT_LAYOUT,
+  userConfig: MermaidUserConfig | null = null,
 ): Promise<string> {
-  ensureInitialized()
-  applyLayout(layout)
+  applyConfig(userConfig)
   const id = `mmd-${++renderSeq}`
   installCircularSafeStringify()
   try {
@@ -154,12 +185,12 @@ export interface RenderError {
  *  the preview can show inline error messages. */
 export async function renderPreview(
   text: string,
-  layout: LayoutEngine = DEFAULT_LAYOUT,
+  userConfig: MermaidUserConfig | null = null,
 ): Promise<RenderResult | RenderError> {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false, message: 'Empty diagram.' }
   try {
-    const svg = await renderToSvg(text, layout)
+    const svg = await renderToSvg(text, userConfig)
     return { ok: true, svg }
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
