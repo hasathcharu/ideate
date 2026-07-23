@@ -145,6 +145,27 @@ function restoreStringify(): void {
   }
 }
 
+/**
+ * A themed `fontFamily` (lib/themes.ts) is baked verbatim into the SVG mermaid
+ * produces, so the browser must have that face loaded *before* mermaid measures
+ * text to size note/label boxes — otherwise the measurement pass silently falls
+ * back to a different font than the one that ends up painted, and text overflows
+ * its box (this only surfaces with a custom theme; the built-in default theme
+ * never requests a custom font, so it never hits the mismatch). Mirrors the same
+ * guard already used before PNG rasterization (lib/export.ts).
+ */
+async function ensureFontsReady(userConfig: MermaidUserConfig | null): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return
+  const family = userConfig?.themeVariables?.fontFamily
+  const primary = typeof family === 'string' ? family.split(',')[0]?.trim().replace(/^['"]|['"]$/g, '') : undefined
+  if (primary) {
+    // Kick off the download now rather than waiting for mermaid's own text
+    // measurement to lazily trigger it.
+    void document.fonts.load(`400 16px "${primary}"`)
+  }
+  await document.fonts.ready
+}
+
 // mermaid.render requires a unique DOM id per call; a monotonic counter keeps
 // them distinct across rapid re-renders.
 let renderSeq = 0
@@ -158,6 +179,7 @@ export async function renderToSvg(
   userConfig: MermaidUserConfig | null = null,
 ): Promise<string> {
   applyConfig(userConfig)
+  await ensureFontsReady(userConfig)
   const id = `mmd-${++renderSeq}`
   installCircularSafeStringify()
   try {

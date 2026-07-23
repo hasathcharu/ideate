@@ -18,6 +18,7 @@ export interface DeleteModalProps {
   target: TreeNode | null
   /** How many diagram files the delete will remove (1 for a file). */
   fileCount: number
+  branch: string
   busy: boolean
   onConfirm: () => void
 }
@@ -27,6 +28,7 @@ export default function DeleteModal({
   onOpenChange,
   target,
   fileCount,
+  branch,
   busy,
   onConfirm,
 }: DeleteModalProps) {
@@ -40,17 +42,17 @@ export default function DeleteModal({
             {isDir ? (
               <>
                 Remove <code>{target?.path}</code> and its {fileCount} diagram file
-                {fileCount === 1 ? '' : 's'} from <code>main</code>.
+                {fileCount === 1 ? '' : 's'} from <code>{branch}</code>.
               </>
             ) : (
               <>
-                Remove <code>{target?.path}</code> from <code>main</code>.
+                Remove <code>{target?.path}</code> from <code>{branch}</code>.
               </>
             )}
           </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          This commits a removal to <code>main</code>. The history stays in Git — you can
+          This commits a removal to <code>{branch}</code>. The history stays in Git — you can
           restore it on GitHub — but the file{isDir && fileCount !== 1 ? 's' : ''} will no
           longer appear here.
         </p>

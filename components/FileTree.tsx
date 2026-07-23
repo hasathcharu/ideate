@@ -10,6 +10,8 @@ export interface FileTreeProps {
   activePath: string | null
   /** Path with unsaved changes (shown with a dot); may be a not-yet-saved file. */
   dirtyPath: string | null
+  /** The branch being browsed, for the empty-state copy. */
+  branch: string
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   /** Create a new file inside this directory (path prefilled). */
@@ -21,6 +23,7 @@ export default function FileTree({
   nodes,
   activePath,
   dirtyPath,
+  branch,
   onOpenFile,
   onDelete,
   onNewFile,
@@ -30,7 +33,7 @@ export default function FileTree({
     return (
       <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">
         No <code>.md</code> / <code>.mmd</code> / <code>.mermaid</code> files found on{' '}
-        <code>main</code>.
+        <code>{branch}</code>.
       </p>
     )
   }

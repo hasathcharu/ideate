@@ -16,9 +16,24 @@ export interface Repo {
   defaultBranch: string
 }
 
+/** The repo + branch currently selected. Branch lives alongside owner/name (not
+ *  a sibling AppConfig field) so switching either one is a single atomic reset. */
+export interface RepoRef {
+  owner: string
+  name: string
+  defaultBranch: string
+  branch: string
+}
+
+/** A branch in the "switch branch" dropdown. */
+export interface Branch {
+  name: string
+  protected: boolean
+}
+
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
-  repo: { owner: string; name: string } | null
+  repo: RepoRef | null
   /** Paint a solid background behind exported diagrams (vs. transparent). */
   exportBackground: boolean
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */

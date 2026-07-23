@@ -46,7 +46,7 @@ export const CONFIG_PLACEHOLDER = `config:
     primaryBorderColor: '#5e81ac'
     lineColor: '#5e81ac'
     background: '#eceff4'
-    fontFamily: JetBrains Mono
+    fontFamily: 'JetBrains Mono, monospace'
 `
 
 /**

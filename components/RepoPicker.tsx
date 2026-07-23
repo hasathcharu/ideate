@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Lock, Loader2 } from 'lucide-react'
 import { listRepos } from '@/app/actions/github'
-import { APP_NAME } from '@/lib/config'
 import type { Repo } from '@/lib/types'
 import {
   Dialog,
@@ -55,8 +54,8 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
         <DialogHeader>
           <DialogTitle>Connect a repository</DialogTitle>
           <DialogDescription>
-            Pick the repo to use as your database. {APP_NAME} reads and writes the{' '}
-            <code>main</code> branch only.
+            Pick the repo to use as your database. You can switch branches (or create
+            one) after connecting.
           </DialogDescription>
         </DialogHeader>
 

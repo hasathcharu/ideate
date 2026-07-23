@@ -6,8 +6,8 @@ Guidance for working in this repository.
 
 A Mermaid diagram editor that uses **the user's GitHub repo as the database** —
 there is no app database. localStorage holds the uncommitted working copy;
-GitHub `main` holds the committed state. Save = commit; open old version =
-checkout.
+GitHub holds the committed state, on whichever branch is currently selected.
+Save = commit; open old version = checkout.
 
 ## Hard architectural rules (non-negotiable)
 
@@ -21,8 +21,13 @@ checkout.
    nor passed as a client-component prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
    (selected repo, active theme, export prefs). Never tokens/secrets.
-4. **Push directly to `main`. No branching, ever.** The branch is the constant
-   `MAIN_BRANCH` in `app/actions/github.ts`. No branch selector.
+4. **Every read/write server action takes a caller-supplied `branch`** — there
+   is no fixed branch constant. The selected `{owner, name, defaultBranch,
+   branch}` (`RepoRef`, `lib/types.ts`) lives in `AppConfig.repo`;
+   `BranchPicker.tsx` lists/creates branches (`listBranches`/`createBranch` in
+   `app/actions/github.ts`). "Open PR" is a plain redirect to GitHub's compare
+   URL (`compare/{defaultBranch}...{branch}`) — there is no PR-creation API
+   surface, and no server-side PR/merge logic of any kind.
 5. **The editor and preview are client components** (`'use client'`). Do not SSR
    them.
 6. **Never expose a true force-push.** "Overwrite" on conflict = refetch the
@@ -60,7 +65,7 @@ app/
 components/
   ui/                       shadcn components
   AppShell.tsx              orchestrator; collapsible sidebar; controlled modals
-  Editor, Preview, Landing, ExportMenu, RepoPicker, FileTree,
+  Editor, Preview, Landing, ExportMenu, RepoPicker, BranchPicker, FileTree,
   ConflictModal, PromptModal, HistoryPanel, AuthButton, icons.tsx
 lib/
   session.server.ts         server-only token reader (import 'server-only')

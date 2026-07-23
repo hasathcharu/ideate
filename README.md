@@ -20,7 +20,10 @@ history doubles as its version history.
 - **Export** to SVG and PNG (high-DPI raster) — mermaid bakes literal colors into
   the SVG, so downloads stand alone.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
-  directly to `main`.
+  to whichever branch is selected.
+- **Branches**: switch or create a branch from the branch picker, and open a
+  pull request back to the default branch with one click (redirects to GitHub —
+  no PR-creation API surface).
 - **Conflict handling**: if the file moved on GitHub since you loaded it, choose
   *Overwrite* (commit on top of the latest — never a force-push) or *Start over*.
 - **Version history**: browse a file's commits, preview any version read-only,
@@ -95,8 +98,8 @@ Open <http://localhost:3000>. You land on a start page with two choices:
 - **Local mode** — start drawing immediately; edits stay in your browser
   (localStorage). No account needed. Editor, live themed preview and export all
   work offline.
-- **GitHub repo mode** — sign in with GitHub, connect a repository, and commit
-  diagrams to `main`; every commit is a version.
+- **GitHub repo mode** — sign in with GitHub, connect a repository, pick (or
+  create) a branch, and commit diagrams there; every commit is a version.
 
 The whole UI recolors to match the selected diagram theme (built with Tailwind v4
 + shadcn/ui). The file-tree sidebar is collapsible, and exports can be downloaded
@@ -124,7 +127,8 @@ or copied to the clipboard (SVG/PNG).
 
 - Six diagram types (whatever `beautiful-mermaid` supports); no core-`mermaid.js`
   fallback yet.
-- Commits go to `main` only — no branching, no branch selector.
+- "Open PR" is a redirect to GitHub's compare page — no PR-creation API call,
+  no in-app merge/review flow.
 - Single-file commits (no multi-file atomic commits).
 - Version history uses `GET /commits?path=`, which does **not** follow renames —
   history appears to stop at a rename. This is expected.

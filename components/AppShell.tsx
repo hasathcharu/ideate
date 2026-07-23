@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronRight,
+  Command,
   FolderGit2,
+  GitBranch,
+  GitPullRequestArrow,
   History,
   PanelLeft,
   Plus,
@@ -17,6 +20,7 @@ import Preview from './Preview'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
 import RepoPicker from './RepoPicker'
+import BranchPicker from './BranchPicker'
 import FileTree from './FileTree'
 import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
@@ -64,9 +68,10 @@ import {
   commitFile,
   deletePaths,
   renameFile,
+  createBranch,
   type TreeResult,
 } from '@/app/actions/github'
-import type { AppConfig, FileCommit, Repo, SessionUser, TreeNode } from '@/lib/types'
+import type { AppConfig, FileCommit, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
 
 export interface AppShellProps {
   user: SessionUser | null
@@ -76,7 +81,7 @@ export interface AppShellProps {
 const SAMPLE = `flowchart TD
   A[Working copy in localStorage] -->|Save = commit| B(GitHub repo)
   B --> C{Conflict?}
-  C -->|No| D[Committed on main]
+  C -->|No| D[Committed on your branch]
   C -->|Yes| E[Refetch sha, commit on top]
   E --> D
 `
@@ -130,6 +135,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [deleteBusy, setDeleteBusy] = useState(false)
 
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false)
+  const [branchBusy, setBranchBusy] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
 
@@ -177,7 +184,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
   const docId =
-    repo && openPath ? docIdForFile(repo.owner, repo.name, openPath) : SCRATCH_DOC_ID
+    repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : SCRATCH_DOC_ID
   // Export/download file name: the open file's name (folder + extension stripped).
   // Falls back to "diagram" only when nothing is open (local mode / fresh scratch).
   const baseName =
@@ -195,10 +202,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return buildTree(paths)
   }, [tree, pendingPath])
 
-  const refreshTree = useCallback(async (target: { owner: string; name: string }) => {
+  const refreshTree = useCallback(async (target: RepoRef) => {
     setTree(null)
     setTreeError(null)
-    const res = await listTree(target.owner, target.name)
+    const res = await listTree(
+      target.owner,
+      target.name,
+      target.branch,
+      target.branch === target.defaultBranch,
+    )
     if (res.ok) {
       setTree(res.data)
       return res.data
@@ -324,26 +336,63 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onSelectRepo = useCallback(
     (r: Repo) => {
-      updateConfig({ repo: { owner: r.owner, name: r.name } })
+      const next: RepoRef = {
+        owner: r.owner,
+        name: r.name,
+        defaultBranch: r.defaultBranch,
+        branch: r.defaultBranch,
+      }
+      updateConfig({ repo: next })
       setRepoPickerOpen(false)
       setOpenPath(null)
       setLoadedSha(null)
-      void refreshTree({ owner: r.owner, name: r.name }).then((data) => {
+      void refreshTree(next).then((data) => {
         if (data) showRepoStartState(data)
       })
     },
     [updateConfig, refreshTree, showRepoStartState],
   )
 
-  const openFile = useCallback(
-    async (path: string) => {
+  const onSelectBranch = useCallback(
+    (branch: string) => {
       if (!repo) return
-      const res = await readFile(repo.owner, repo.name, path)
+      const next: RepoRef = { ...repo, branch }
+      updateConfig({ repo: next })
+      setBranchPickerOpen(false)
+      setOpenPath(null)
+      setLoadedSha(null)
+      void refreshTree(next).then((data) => {
+        if (data) showRepoStartState(data)
+      })
+    },
+    [repo, updateConfig, refreshTree, showRepoStartState],
+  )
+
+  const onCreateBranch = useCallback(
+    async (name: string) => {
+      if (!repo) return
+      setBranchBusy(true)
+      const res = await createBranch(repo.owner, repo.name, name, repo.branch)
+      setBranchBusy(false)
       if (!res.ok) {
         toast.error(res.error.message)
         return
       }
-      const id = docIdForFile(repo.owner, repo.name, path)
+      toast.success(`Created and switched to ${name}`)
+      onSelectBranch(name)
+    },
+    [repo, onSelectBranch],
+  )
+
+  const openFile = useCallback(
+    async (path: string) => {
+      if (!repo) return
+      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      if (!res.ok) {
+        toast.error(res.error.message)
+        return
+      }
+      const id = docIdForFile(repo.owner, repo.name, repo.branch, path)
       const draft = loadDraft(id)
       setBaseline(res.data.content)
       setLoadedSha(res.data.sha)
@@ -368,7 +417,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const defaultValue = dirPath ? `${dirPath}/untitled.mmd` : 'untitled.mmd'
       openPrompt({
         title: 'New diagram',
-        description: 'Create a new diagram file on main.',
+        description: `Create a new diagram file on ${repo.branch}.`,
         label: 'File path',
         defaultValue,
         submitLabel: 'Start editing',
@@ -390,7 +439,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!repo || node.type !== 'file') return
       openPrompt({
         title: 'Rename file',
-        description: 'Move or rename this file on main. Git history is preserved as a rename.',
+        description: `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
         label: 'New path',
         defaultValue: node.path,
         submitLabel: 'Rename',
@@ -400,15 +449,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
-          const res = await renameFile(repo.owner, repo.name, node.path, newPath)
+          const res = await renameFile(repo.owner, repo.name, node.path, newPath, repo.branch)
           if (!res.ok) {
             toast.error(res.error.message)
             return
           }
           setPromptOpen(false)
           // Carry any uncommitted draft over to the new path.
-          const oldId = docIdForFile(repo.owner, repo.name, node.path)
-          const newId = docIdForFile(repo.owner, repo.name, newPath)
+          const oldId = docIdForFile(repo.owner, repo.name, repo.branch, node.path)
+          const newId = docIdForFile(repo.owner, repo.name, repo.branch, newPath)
           const draft = loadDraft(oldId)
           if (draft) saveDraft(newId, draft.content)
           clearDraft(oldId)
@@ -456,7 +505,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return
     }
     setDeleteBusy(true)
-    const res = await deletePaths(repo.owner, repo.name, committed)
+    const res = await deletePaths(repo.owner, repo.name, committed, repo.branch)
     setDeleteBusy(false)
     if (!res.ok) {
       toast.error(res.error.message)
@@ -477,7 +526,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     async (path: string, sha: string | undefined, content: string) => {
       if (!repo) return
       setSaving(true)
-      const res = await commitFile(repo.owner, repo.name, path, content, sha)
+      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
       setSaving(false)
       if (res.ok) {
         setBaseline(content)
@@ -499,7 +548,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (openPath === null) {
       openPrompt({
         title: 'Save to repository',
-        description: 'Choose a path on main for this diagram.',
+        description: `Choose a path on ${repo.branch} for this diagram.`,
         label: 'File path',
         defaultValue: 'untitled.mmd',
         submitLabel: 'Save',
@@ -542,13 +591,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
     setConflictBusy(true)
-    const fresh = await readFile(repo.owner, repo.name, openPath)
+    const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     if (!fresh.ok) {
       setConflictBusy(false)
       toast.error(fresh.error.message)
       return
     }
-    const res = await commitFile(repo.owner, repo.name, openPath, text, fresh.data.sha)
+    const res = await commitFile(repo.owner, repo.name, openPath, text, repo.branch, fresh.data.sha)
     setConflictBusy(false)
     if (res.ok) {
       setBaseline(text)
@@ -565,7 +614,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const onStartOver = useCallback(async () => {
     if (!repo || !openPath) return
     setConflictBusy(true)
-    const fresh = await readFile(repo.owner, repo.name, openPath)
+    const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     setConflictBusy(false)
     if (!fresh.ok) {
       toast.error(fresh.error.message)
@@ -600,7 +649,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setHistoryError(null)
     setSelectedSha(null)
     setVersionContent(null)
-    const res = await listFileCommits(repo.owner, repo.name, openPath)
+    const res = await listFileCommits(repo.owner, repo.name, openPath, repo.branch)
     if (res.ok) {
       setCommits(res.data)
       // Preselect the latest version (commits are newest-first).
@@ -670,6 +719,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
               {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
             </Button>
           ) : null}
+          {githubEnabled && repo ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => setBranchPickerOpen(true)}
+            >
+              <GitBranch /> {repo.branch}
+            </Button>
+          ) : null}
+          {githubEnabled && repo && repo.defaultBranch && repo.branch !== repo.defaultBranch ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="rounded-full"
+              onClick={() =>
+                window.open(
+                  `https://github.com/${repo.owner}/${repo.name}/compare/${repo.defaultBranch}...${repo.branch}?expand=1`,
+                  '_blank',
+                  'noopener,noreferrer',
+                )
+              }
+            >
+              <GitPullRequestArrow /> Open PR
+            </Button>
+          ) : null}
         </div>
 
         <div className="flex items-center gap-2">
@@ -680,8 +755,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
               </span>
               <Button size="sm" onClick={onSave} disabled={!canSave} title={`Save (${saveHint})`}>
                 <Save /> {saving ? 'Saving…' : 'Save'}
-                <kbd className="ml-1 rounded border border-current/30 px-1 text-[10px] leading-relaxed font-medium opacity-70">
-                  {saveHint}
+                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-relaxed font-medium opacity-70">
+                  {isMac ? (
+                    <>
+                      <Command className="size-2.5" /> S
+                    </>
+                  ) : (
+                    'Ctrl + S'
+                  )}
                 </kbd>
               </Button>
               {openPath && repo ? (
@@ -745,6 +826,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   nodes={displayNodes}
                   activePath={openPath}
                   dirtyPath={dirtyPath}
+                  branch={repo?.branch ?? ''}
                   onOpenFile={openFile}
                   onDelete={requestDelete}
                   onNewFile={(dir) => newDiagram(dir)}
@@ -777,6 +859,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   onClick={() => setRepoPickerOpen(true)}
                 >
                   {repo.owner}/{repo.name}
+                </button>
+                <ChevronRight className="size-3" />
+                <button
+                  type="button"
+                  className="font-mono text-primary hover:underline"
+                  onClick={() => setBranchPickerOpen(true)}
+                >
+                  {repo.branch}
                 </button>
                 <ChevronRight className="size-3" />
                 <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
@@ -887,11 +977,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
         />
       ) : null}
 
+      {githubEnabled && repo ? (
+        <BranchPicker
+          open={branchPickerOpen}
+          onOpenChange={setBranchPickerOpen}
+          owner={repo.owner}
+          name={repo.name}
+          currentBranch={repo.branch}
+          defaultBranch={repo.defaultBranch}
+          creating={branchBusy}
+          onSelect={onSelectBranch}
+          onCreate={onCreateBranch}
+        />
+      ) : null}
+
       {openPath ? (
         <ConflictModal
           open={conflictOpen}
           onOpenChange={setConflictOpen}
           path={openPath}
+          branch={repo?.branch ?? ''}
           busy={conflictBusy}
           onOverwrite={onOverwrite}
           onStartOver={onStartOver}
@@ -915,6 +1020,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         onOpenChange={setDeleteOpen}
         target={deleteTarget}
         fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
+        branch={repo?.branch ?? ''}
         busy={deleteBusy}
         onConfirm={confirmDelete}
       />

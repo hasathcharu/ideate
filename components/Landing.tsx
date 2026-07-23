@@ -17,14 +17,14 @@ import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/ca
 import Preview from './Preview'
 
 const CONCEPT = `flowchart LR
-  W[localStorage<br/>working copy] -->|Save = commit| G[(GitHub repo<br/>on main)]
+  W[localStorage<br/>working copy] -->|Save = commit| G[(GitHub repo<br/>on your branch)]
   G -->|History| V[Every commit<br/>is a version]
 `
 
 const FEATURES = [
   { icon: Eye, title: 'Live preview', body: 'See your diagram render as you type, rendered by Mermaid.' },
   { icon: Download, title: 'Export', body: 'Download or copy as SVG or high-DPI PNG.' },
-  { icon: GitCommitHorizontal, title: 'Commit to GitHub', body: 'Save commits straight to main — no separate database.' },
+  { icon: GitCommitHorizontal, title: 'Commit to GitHub', body: 'Save commits straight to your branch — no separate database.' },
   { icon: History, title: 'Version history', body: 'Preview any past commit and recover or fork it.' },
 ]
 

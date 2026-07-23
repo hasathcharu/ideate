@@ -12,9 +12,10 @@ const DRAFT_PREFIX = 'km:draft:'
 /** Stable id for the local-only scratch document (before a repo is connected). */
 export const SCRATCH_DOC_ID = 'local:scratch'
 
-/** Stable id for a repo file's draft. */
-export function docIdForFile(owner: string, repo: string, path: string): string {
-  return `${owner}/${repo}:${path}`
+/** Stable id for a repo file's draft. Includes branch so the same path on two
+ *  different branches never collides on the same draft. */
+export function docIdForFile(owner: string, repo: string, branch: string, path: string): string {
+  return `${owner}/${repo}@${branch}:${path}`
 }
 
 function hasStorage(): boolean {
@@ -34,7 +35,16 @@ export function loadConfig(): AppConfig {
     const raw = window.localStorage.getItem(CONFIG_KEY)
     if (!raw) return { ...DEFAULT_CONFIG }
     const parsed = JSON.parse(raw) as Partial<AppConfig>
-    return { ...DEFAULT_CONFIG, ...parsed }
+    const merged = { ...DEFAULT_CONFIG, ...parsed }
+    // A repo saved before branch support shipped is missing `branch`/
+    // `defaultBranch` — that shape can't drive the branch picker or the PR
+    // link, so treat it as disconnected rather than let `undefined` leak into
+    // GitHub API calls and URLs. The user just reconnects the repo, which
+    // repopulates both fields.
+    if (merged.repo && (!merged.repo.branch || !merged.repo.defaultBranch)) {
+      merged.repo = null
+    }
+    return merged
   } catch {
     return { ...DEFAULT_CONFIG }
   }
