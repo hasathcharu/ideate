@@ -23,6 +23,14 @@ import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { DEFAULT_LAYOUT, LAYOUT_ENGINES, type LayoutEngine } from '@/lib/mermaid'
 import { useDebouncedValue } from '@/lib/hooks'
 import {
   loadConfig,
@@ -77,6 +85,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     repo: null,
     exportBackground: true,
     splitRatio: 0.5,
+    layoutEngine: DEFAULT_LAYOUT,
   })
   const [hydrated, setHydrated] = useState(false)
   const [isMac, setIsMac] = useState(false)
@@ -638,6 +647,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             baseName={baseName}
             includeBackground={config.exportBackground}
             onToggleBackground={(v) => updateConfig({ exportBackground: v })}
+            layout={config.layoutEngine}
           />
           <Separator orientation="vertical" className="h-6" />
           <AuthButton user={user} />
@@ -726,6 +736,24 @@ export default function AppShell({ user, mode }: AppShellProps) {
             ) : (
               <span>Local mode — edits stay in your browser (localStorage).</span>
             )}
+            <div className="ml-auto flex items-center gap-1.5">
+              <span className="text-muted-foreground">Layout</span>
+              <Select
+                value={config.layoutEngine}
+                onValueChange={(v) => updateConfig({ layoutEngine: v as LayoutEngine })}
+              >
+                <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {LAYOUT_ENGINES.map((engine) => (
+                    <SelectItem key={engine.value} value={engine.value}>
+                      {engine.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           <div
@@ -753,7 +781,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
             </div>
             <section className="min-h-0 overflow-auto" aria-label="Preview">
-              <Preview text={debouncedText} />
+              <Preview text={debouncedText} layout={config.layoutEngine} />
             </section>
           </div>
         </main>

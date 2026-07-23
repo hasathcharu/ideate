@@ -3,13 +3,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
-import { renderPreview, type RenderError, type RenderResult } from '@/lib/mermaid'
+import {
+  renderPreview,
+  DEFAULT_LAYOUT,
+  type LayoutEngine,
+  type RenderError,
+  type RenderResult,
+} from '@/lib/mermaid'
 import { Button } from '@/components/ui/button'
 
 export interface PreviewProps {
   text: string
   /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground?: boolean
+  /** Layout engine to render the diagram with. */
+  layout?: LayoutEngine
 }
 
 interface View {
@@ -26,7 +34,11 @@ function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
 }
 
-export default function Preview({ text, paintBackground = true }: PreviewProps) {
+export default function Preview({
+  text,
+  paintBackground = true,
+  layout = DEFAULT_LAYOUT,
+}: PreviewProps) {
   // The preview is client-only (per the architecture): mermaid measures text
   // against the live DOM, so it can only run in the browser. Gate on mount so
   // the SVG is only built once `document` is available.
@@ -39,13 +51,13 @@ export default function Preview({ text, paintBackground = true }: PreviewProps) 
   useEffect(() => {
     if (!mounted) return
     let cancelled = false
-    void renderPreview(text).then((r) => {
+    void renderPreview(text, layout).then((r) => {
       if (!cancelled) setResult(r)
     })
     return () => {
       cancelled = true
     }
-  }, [text, mounted])
+  }, [text, layout, mounted])
   const isEmpty = !text.trim()
 
   const viewportRef = useRef<HTMLDivElement | null>(null)

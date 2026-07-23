@@ -1,4 +1,4 @@
-import { renderToSvg } from './mermaid'
+import { renderToSvg, type LayoutEngine, DEFAULT_LAYOUT } from './mermaid'
 
 /**
  * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
@@ -23,6 +23,8 @@ export interface StandaloneSvg {
 interface ResolveOptions {
   /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground: boolean
+  /** Layout engine to render with (matches the preview). */
+  layout?: LayoutEngine
 }
 
 /** Read the diagram's intrinsic pixel size from width/height, falling back to
@@ -43,7 +45,7 @@ export async function resolveStandaloneSvg(
   text: string,
   opts: ResolveOptions,
 ): Promise<StandaloneSvg> {
-  const raw = await renderToSvg(text)
+  const raw = await renderToSvg(text, opts.layout ?? DEFAULT_LAYOUT)
 
   const doc = new DOMParser().parseFromString(raw, 'image/svg+xml')
   const svg = doc.querySelector('svg')
@@ -100,20 +102,29 @@ export async function exportSVG(
   text: string,
   filename: string,
   paintBackground: boolean,
+  layout?: LayoutEngine,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground })
+  const { markup } = await resolveStandaloneSvg(text, { paintBackground, layout })
   triggerDownload(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
 /** Copy the standalone SVG markup to the clipboard as text. */
-export async function copySVG(text: string, paintBackground: boolean): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { paintBackground })
+export async function copySVG(
+  text: string,
+  paintBackground: boolean,
+  layout?: LayoutEngine,
+): Promise<void> {
+  const { markup } = await resolveStandaloneSvg(text, { paintBackground, layout })
   await navigator.clipboard.writeText(markup)
 }
 
 /** Rasterize the resolved SVG to a high-DPI PNG blob (shared by download/copy). */
-async function renderPngBlob(text: string, paintBackground: boolean): Promise<Blob> {
-  const { markup, width, height } = await resolveStandaloneSvg(text, { paintBackground })
+async function renderPngBlob(
+  text: string,
+  paintBackground: boolean,
+  layout?: LayoutEngine,
+): Promise<Blob> {
+  const { markup, width, height } = await resolveStandaloneSvg(text, { paintBackground, layout })
 
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
@@ -151,12 +162,17 @@ export async function exportPNG(
   text: string,
   filename: string,
   paintBackground: boolean,
+  layout?: LayoutEngine,
 ): Promise<void> {
-  triggerDownload(await renderPngBlob(text, paintBackground), filename)
+  triggerDownload(await renderPngBlob(text, paintBackground, layout), filename)
 }
 
 /** Copy the rendered PNG to the clipboard as an image. */
-export async function copyPNG(text: string, paintBackground: boolean): Promise<void> {
-  const blob = await renderPngBlob(text, paintBackground)
+export async function copyPNG(
+  text: string,
+  paintBackground: boolean,
+  layout?: LayoutEngine,
+): Promise<void> {
+  const blob = await renderPngBlob(text, paintBackground, layout)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
