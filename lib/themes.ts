@@ -19,6 +19,8 @@ export interface ThemePreset {
   label: string
   /** Always `base` — the only theme that honors `themeVariables`. */
   theme: string
+  /** Which section of the "Theme" dropdown this preset is grouped under. */
+  mode: 'light' | 'dark'
   /** The mermaid theme variables that define the palette. */
   themeVariables: Record<string, string>
 }
@@ -28,6 +30,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'zinc-light',
     label: 'Zinc Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#FFFFFF',
       primaryColor: '#F4F4F5',
@@ -57,6 +60,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'zinc-dark',
     label: 'Zinc Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#18181B',
       primaryColor: '#27272A',
@@ -86,6 +90,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'tokyo-night',
     label: 'Tokyo Night',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#1a1b26',
       primaryColor: '#24283b',
@@ -115,6 +120,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'tokyo-night-storm',
     label: 'Tokyo Night Storm',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#24283b',
       primaryColor: '#1f2335',
@@ -144,6 +150,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'tokyo-night-light',
     label: 'Tokyo Night Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#d5d6db',
       primaryColor: '#e9e9ec',
@@ -173,6 +180,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'catppuccin-mocha',
     label: 'Catppuccin Mocha',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#1e1e2e',
       primaryColor: '#313244',
@@ -202,6 +210,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'catppuccin-latte',
     label: 'Catppuccin Latte',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#eff1f5',
       primaryColor: '#e6e9ef',
@@ -231,6 +240,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'nord',
     label: 'Nord',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#2e3440',
       primaryColor: '#3b4252',
@@ -260,6 +270,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'nord-light',
     label: 'Nord Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       primaryColor: '#e5e9f0',
       primaryTextColor: '#2e3440',
@@ -289,6 +300,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'dracula',
     label: 'Dracula',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#282a36',
       primaryColor: '#44475a',
@@ -318,6 +330,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'github-light',
     label: 'GitHub Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#ffffff',
       primaryColor: '#f6f8fa',
@@ -347,6 +360,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'github-dark',
     label: 'GitHub Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#0d1117',
       primaryColor: '#161b22',
@@ -376,6 +390,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'solarized-light',
     label: 'Solarized Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#fdf6e3',
       primaryColor: '#eee8d5',
@@ -405,6 +420,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'solarized-dark',
     label: 'Solarized Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#002b36',
       primaryColor: '#073642',
@@ -434,6 +450,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'one-dark',
     label: 'One Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#282c34',
       primaryColor: '#2c313a',
@@ -463,6 +480,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'gruvbox-dark',
     label: 'Gruvbox Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#282828',
       primaryColor: '#3c3836',
@@ -492,6 +510,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'gruvbox-light',
     label: 'Gruvbox Light',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#fbf1c7',
       primaryColor: '#ebdbb2',
@@ -521,6 +540,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'rose-pine',
     label: 'Rosé Pine',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#191724',
       primaryColor: '#1f1d2e',
@@ -550,6 +570,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'rose-pine-dawn',
     label: 'Rosé Pine Dawn',
     theme: 'base',
+    mode: 'light',
     themeVariables: {
       background: '#faf4ed',
       primaryColor: '#fffaf3',
@@ -579,6 +600,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'everforest-dark',
     label: 'Everforest Dark',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#2d353b',
       primaryColor: '#343f44',
@@ -608,6 +630,7 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
     value: 'monokai',
     label: 'Monokai',
     theme: 'base',
+    mode: 'dark',
     themeVariables: {
       background: '#272822',
       primaryColor: '#3e3d32',

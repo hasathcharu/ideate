@@ -33,7 +33,10 @@ import { Separator } from '@/components/ui/separator'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -1036,16 +1039,33 @@ export default function AppShell({ user, mode }: AppShellProps) {
                       Custom
                     </SelectItem>
                   ) : null}
-                  {THEME_PRESETS.map((preset) => (
-                    <SelectItem
-                      key={preset.value}
-                      value={preset.value}
-                      className="cursor-pointer"
-                      onFocus={() => applyTheme(preset.value)}
-                    >
-                      {preset.label}
-                    </SelectItem>
-                  ))}
+                  <SelectSeparator />
+                  <SelectGroup>
+                    <SelectLabel>Light</SelectLabel>
+                    {THEME_PRESETS.filter((preset) => preset.mode === 'light').map((preset) => (
+                      <SelectItem
+                        key={preset.value}
+                        value={preset.value}
+                        className="cursor-pointer"
+                        onFocus={() => applyTheme(preset.value)}
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Dark</SelectLabel>
+                    {THEME_PRESETS.filter((preset) => preset.mode === 'dark').map((preset) => (
+                      <SelectItem
+                        key={preset.value}
+                        value={preset.value}
+                        className="cursor-pointer"
+                        onFocus={() => applyTheme(preset.value)}
+                      >
+                        {preset.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
               <span className="text-muted-foreground">Layout</span>
