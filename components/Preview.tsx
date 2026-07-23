@@ -50,7 +50,12 @@ export default function Preview({ text, paintBackground = true }: PreviewProps) 
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
+  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read
+  // and mirrored into state so the host box is sized in React-controlled px —
+  // this must not depend on mutating the mermaid <svg> node, whose attributes are
+  // wiped whenever React re-inserts the dangerouslySetInnerHTML subtree.
   const naturalRef = useRef({ w: 0, h: 0 })
+  const [natural, setNatural] = useState({ w: 0, h: 0 })
   // Once the user zooms/pans, stop auto-refitting on resize so we don't fight them.
   const interactedRef = useRef(false)
   const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
@@ -87,24 +92,19 @@ export default function Preview({ text, paintBackground = true }: PreviewProps) 
   useLayoutEffect(() => {
     const svg = svgHostRef.current?.querySelector('svg')
     if (!svg) return
-    // mermaid emits width="100%" + a viewBox; pin the intrinsic pixel size so the
-    // zoom transform positions the diagram at natural size rather than 0-width.
+    // mermaid sizes the SVG with a viewBox plus width="100%" and an inline
+    // max-width; read the intrinsic pixel size from the viewBox so we can give
+    // the host an explicit box (the SVG then fills it via CSS — see globals.css).
     const vb = svg.viewBox?.baseVal
-    let w = parseFloat(svg.getAttribute('width') ?? '')
-    let h = parseFloat(svg.getAttribute('height') ?? '')
-    if ((!w || !h) && vb && vb.width && vb.height) {
-      w = vb.width
-      h = vb.height
-    }
+    let w = vb && vb.width && vb.height ? vb.width : parseFloat(svg.getAttribute('width') ?? '')
+    let h = vb && vb.width && vb.height ? vb.height : parseFloat(svg.getAttribute('height') ?? '')
     if (!w || !h) {
       const bb = svg.getBoundingClientRect()
       w = bb.width
       h = bb.height
     }
-    svg.setAttribute('width', String(w))
-    svg.setAttribute('height', String(h))
-    svg.style.maxWidth = 'none'
     naturalRef.current = { w, h }
+    setNatural({ w, h })
     // Fit to screen whenever the diagram changes (fresh render). `fit()` clears
     // the interacted flag, so a subsequent resize won't refit until the user
     // pans/zooms again.
@@ -227,7 +227,13 @@ export default function Preview({ text, paintBackground = true }: PreviewProps) 
             <div
               ref={svgHostRef}
               className="preview-svg absolute top-0 left-0 origin-top-left"
-              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+              style={{
+                transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                // Explicit natural-size box so the SVG (forced to 100% in CSS)
+                // renders at full size regardless of mermaid's own width/max-width.
+                width: natural.w || undefined,
+                height: natural.h || undefined,
+              }}
               // eslint-disable-next-line react/no-danger
               dangerouslySetInnerHTML={{ __html: result.svg }}
             />

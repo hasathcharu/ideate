@@ -172,13 +172,17 @@
 .preview-zoom {
   touch-action: none;
 }
-.preview-zoom .preview-svg,
-.preview-zoom .preview-svg svg {
+.preview-zoom .preview-svg {
   max-width: none;
 }
+/* The host is sized to the diagram's natural pixels (Preview.tsx); force the SVG
+   to fill it and beat mermaid's inline width="100%" + max-width, which otherwise
+   collapse the diagram inside the shrink-to-fit host and make it render tiny. */
 .preview-zoom .preview-svg svg {
-  height: auto;
   display: block;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
 }
 /* The zoomed diagram fills the viewport; browsers show black by default. */
 .preview-zoom:fullscreen {
