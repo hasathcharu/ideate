@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
-  ChevronRight,
   Command,
   FolderGit2,
   GitBranch,
@@ -1062,25 +1061,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
             {githubEnabled && repo ? (
-              <>
-                <button
-                  type="button"
-                  className="text-primary hover:underline"
-                  onClick={() => setRepoPickerOpen(true)}
-                >
-                  {repo.owner}/{repo.name}
-                </button>
-                <ChevronRight className="size-3" />
-                <button
-                  type="button"
-                  className="font-mono text-primary hover:underline"
-                  onClick={() => setBranchPickerOpen(true)}
-                >
-                  {repo.branch}
-                </button>
-                <ChevronRight className="size-3" />
-                <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
-              </>
+              <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
             ) : githubEnabled ? (
               <span>Connect a repository to browse and commit your diagrams.</span>
             ) : (
