@@ -48,8 +48,19 @@ export async function resolveStandaloneSvg(
 ): Promise<StandaloneSvg> {
   const raw = await renderToSvg(text, opts.config ?? null)
 
-  const doc = new DOMParser().parseFromString(raw, 'image/svg+xml')
-  const svg = doc.querySelector('svg')
+  // Parse via the HTML parser, not `DOMParser(..., 'image/svg+xml')`. Note/label
+  // text renders through a `<foreignObject>` with real HTML inside (e.g. `<br>`
+  // for line breaks) regardless of `flowchart.htmlLabels` — valid HTML, but not
+  // well-formed XML. Strict XML parsing hits that on the first multi-line note
+  // and silently truncates the document from there on (browsers recover from
+  // `image/svg+xml` parse errors by rendering only the content up to the
+  // failure), which is why exports could lose content after the first note.
+  // The HTML parser has spec'd foreign-content handling for embedded
+  // <svg>/<foreignObject> subtrees, so this parses the same DOM Preview.tsx
+  // shows on screen; XMLSerializer then always emits well-formed XML.
+  const container = document.createElement('div')
+  container.innerHTML = raw
+  const svg = container.querySelector('svg')
   if (!svg) throw new Error('Renderer produced no <svg> element.')
 
   const { width, height } = intrinsicSize(svg)
