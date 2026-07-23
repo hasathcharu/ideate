@@ -1,5 +1,4 @@
 import type { AppConfig } from './types'
-import { DEFAULT_THEME_ID } from './themes'
 
 /**
  * localStorage is the WORKING COPY: uncommitted drafts + app config only.
@@ -13,9 +12,10 @@ const DRAFT_PREFIX = 'km:draft:'
 /** Stable id for the local-only scratch document (before a repo is connected). */
 export const SCRATCH_DOC_ID = 'local:scratch'
 
-/** Stable id for a repo file's draft. */
-export function docIdForFile(owner: string, repo: string, path: string): string {
-  return `${owner}/${repo}:${path}`
+/** Stable id for a repo file's draft. Includes branch so the same path on two
+ *  different branches never collides on the same draft. */
+export function docIdForFile(owner: string, repo: string, branch: string, path: string): string {
+  return `${owner}/${repo}@${branch}:${path}`
 }
 
 function hasStorage(): boolean {
@@ -24,9 +24,10 @@ function hasStorage(): boolean {
 
 const DEFAULT_CONFIG: AppConfig = {
   repo: null,
-  themeId: DEFAULT_THEME_ID,
-  bakeThemeOnExport: true,
+  exportBackground: 'white',
   splitRatio: 0.5,
+  sidebarWidth: 256,
+  mermaidConfig: '',
 }
 
 export function loadConfig(): AppConfig {
@@ -35,7 +36,22 @@ export function loadConfig(): AppConfig {
     const raw = window.localStorage.getItem(CONFIG_KEY)
     if (!raw) return { ...DEFAULT_CONFIG }
     const parsed = JSON.parse(raw) as Partial<AppConfig>
-    return { ...DEFAULT_CONFIG, ...parsed }
+    const merged = { ...DEFAULT_CONFIG, ...parsed }
+    // A repo saved before branch support shipped is missing `branch`/
+    // `defaultBranch` — that shape can't drive the branch picker or the PR
+    // link, so treat it as disconnected rather than let `undefined` leak into
+    // GitHub API calls and URLs. The user just reconnects the repo, which
+    // repopulates both fields.
+    if (merged.repo && (!merged.repo.branch || !merged.repo.defaultBranch)) {
+      merged.repo = null
+    }
+    // A config saved before the background chooser shipped stores a boolean
+    // (paint white vs. transparent) — map it onto the new choice rather than
+    // let a stale non-string value reach the export UI.
+    if (typeof merged.exportBackground === 'boolean') {
+      merged.exportBackground = merged.exportBackground ? 'white' : 'none'
+    }
+    return merged
   } catch {
     return { ...DEFAULT_CONFIG }
   }

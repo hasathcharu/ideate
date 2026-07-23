@@ -6,8 +6,8 @@ Guidance for working in this repository.
 
 A Mermaid diagram editor that uses **the user's GitHub repo as the database** —
 there is no app database. localStorage holds the uncommitted working copy;
-GitHub `main` holds the committed state. Save = commit; open old version =
-checkout.
+GitHub holds the committed state, on whichever branch is currently selected.
+Save = commit; open old version = checkout.
 
 ## Hard architectural rules (non-negotiable)
 
@@ -21,15 +21,21 @@ checkout.
    nor passed as a client-component prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
    (selected repo, active theme, export prefs). Never tokens/secrets.
-4. **Push directly to `main`. No branching, ever.** The branch is the constant
-   `MAIN_BRANCH` in `app/actions/github.ts`. No branch selector.
+4. **Every read/write server action takes a caller-supplied `branch`** — there
+   is no fixed branch constant. The selected `{owner, name, defaultBranch,
+   branch}` (`RepoRef`, `lib/types.ts`) lives in `AppConfig.repo`;
+   `BranchPicker.tsx` lists/creates branches (`listBranches`/`createBranch` in
+   `app/actions/github.ts`). "Open PR" is a plain redirect to GitHub's compare
+   URL (`compare/{defaultBranch}...{branch}`) — there is no PR-creation API
+   surface, and no server-side PR/merge logic of any kind.
 5. **The editor and preview are client components** (`'use client'`). Do not SSR
    them.
 6. **Never expose a true force-push.** "Overwrite" on conflict = refetch the
    latest sha, then commit on top of it (`onOverwrite` in `AppShell.tsx`). Do not
    use the git data API to rewrite refs.
-7. **MVP renders only the diagram types beautiful-mermaid supports** (flowchart,
-   state, sequence, class, ER, XY chart). No core-`mermaid.js` fallback.
+7. **Diagrams render with the official `mermaid` library** (`lib/mermaid.ts`),
+   pinned to its built-in `default` theme. Rendering is async and browser-only.
+   Any diagram type mermaid supports works.
 
 ## UI stack
 
@@ -59,42 +65,33 @@ app/
 components/
   ui/                       shadcn components
   AppShell.tsx              orchestrator; collapsible sidebar; controlled modals
-  Editor, Preview, Landing, ThemeSelect, ExportMenu, RepoPicker, FileTree,
+  Editor, Preview, Landing, ExportMenu, RepoPicker, BranchPicker, FileTree,
   ConflictModal, PromptModal, HistoryPanel, AuthButton, icons.tsx
 lib/
   session.server.ts         server-only token reader (import 'server-only')
-  mermaid.ts                render + colorsToCssVars (SVG) + colorsToChromeVars (shadcn tokens)
-  export.ts                 shared "resolve theme → standalone SVG" + SVG/PNG + copy
-  color.ts                  sRGB color-mix math (fallback for export inlining)
-  themes.ts                 theme registry (built-in + lazy Shiki)
+  mermaid.ts                official-mermaid init + async render (renderToSvg / renderPreview)
+  export.ts                 standalone SVG + SVG/PNG download & copy
   tree.ts, storage.ts, hooks.ts, types.ts
 ```
 
-## Theme bridge (whole-site theming)
+## Rendering (no theming)
 
-The active beautiful-mermaid theme drives the entire UI. `useChromeTheme` (in
-`lib/hooks.ts`) writes shadcn design tokens — derived by `colorsToChromeVars` —
-onto `document.documentElement` (so portaled dialogs/menus are themed too) and
-toggles the `dark` class. IMPORTANT: shadcn's `--accent`/`--muted`/`--border`
-tokens share names with beautiful-mermaid's SVG palette, so `colorsToCssVars`
-emits every optional SVG role on the preview/export wrapper (value, or `initial`
-to force the SVG's own color-mix fallback) — shielding the diagram from chrome
-colors leaking in. Also: render the SVG with `--mm-bg`/`--mm-fg` (never `--bg`/
-`--fg`) to avoid a self-reference cycle.
+Diagrams render through the official `mermaid` library, initialized once in
+`lib/mermaid.ts` with the built-in `default` (light) theme, `htmlLabels: false`
+(pure-SVG labels, no `<foreignObject>`), and `curve: 'basis'` for smooth edges.
+`mermaid.render()` is async and needs the DOM, so `Preview.tsx` renders in an
+effect (guarding against stale in-flight renders) — never during SSR.
 
-## Theming + export (the subtle part)
+The app chrome is a **fixed light** shadcn palette in `app/globals.css`; there is
+no theme picker and no diagram-driven chrome recoloring.
 
-`beautiful-mermaid` colors elements with CSS custom properties derived through
-`color-mix()`. For the **live preview** we render once with the palette pointed
-at CSS variables and set those variables on the container — theme switches are a
-pure CSS update, no re-render (`Preview.tsx`, `lib/mermaid.ts`).
+## Export
 
-For **export**, CSS variables and `color-mix` do not travel with a downloaded
-file, so `lib/export.ts` mounts the SVG offscreen with the theme applied, reads
-each element's browser-**computed** color via `getComputedStyle`, and inlines the
-literal value onto the attribute. The JS `color-mix` reproduction in
-`lib/color.ts` / `resolveThemeVariables` is a fallback only. Both exporters
-(SVG / PNG) share this single resolve step.
+mermaid bakes literal colors and a self-contained `<style>` block into the SVG at
+render time, so the markup already stands alone — `lib/export.ts` only normalizes
+dimensions (mermaid emits `width="100%"` + a viewBox), adds XML namespaces, and
+optionally paints a white background. Both exporters (SVG / PNG) share the single
+`resolveStandaloneSvg` step; PNG rasterizes it via `Image` → `<canvas>`.
 
 ## Conventions
 
@@ -110,5 +107,5 @@ npm run typecheck && npm run build
 ```
 
 Live GitHub read/write flows require a configured OAuth app and a signed-in user
-(see README). Read-action Octokit shapes and the export color-inlining were
-validated against the real GitHub API and a headless browser during development.
+(see README). Read-action Octokit shapes were validated against the real GitHub
+API during development.

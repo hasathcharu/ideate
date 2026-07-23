@@ -1,17 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
-import type { DiagramColors } from 'beautiful-mermaid'
-import { renderPreview, colorsToCssVars } from '@/lib/mermaid'
+import {
+  renderPreview,
+  type RenderError,
+  type RenderResult,
+} from '@/lib/mermaid'
+import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { Button } from '@/components/ui/button'
 
 export interface PreviewProps {
   text: string
-  colors: DiagramColors | null
-  /** Paint the theme background behind the diagram (vs. transparent). */
+  /** Paint a solid background behind the diagram (vs. transparent). */
   paintBackground?: boolean
+  /** Global mermaid config (theme, layout, per-diagram settings) to render with. */
+  config?: MermaidUserConfig | null
 }
 
 interface View {
@@ -28,22 +33,40 @@ function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
 }
 
-export default function Preview({ text, colors, paintBackground = true }: PreviewProps) {
-  // The preview is client-only (per the architecture): rendering it during SSR
-  // would both violate that and mis-measure sequence-diagram labels (text
-  // measurement needs the browser). Gate on mount so the SVG is only built once
-  // `document` — and canvas text metrics — are available.
+export default function Preview({
+  text,
+  paintBackground = true,
+  config = null,
+}: PreviewProps) {
+  // The preview is client-only (per the architecture): mermaid measures text
+  // against the live DOM, so it can only run in the browser. Gate on mount so
+  // the SVG is only built once `document` is available.
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
 
-  // Rendered once per source change; theme switches never re-render — they only
-  // change the CSS custom properties on the wrapper below.
-  const result = useMemo(() => (mounted ? renderPreview(text) : null), [text, mounted])
+  // mermaid renders asynchronously; keep the latest result in state and ignore
+  // any in-flight render that a newer source change has superseded.
+  const [result, setResult] = useState<RenderResult | RenderError | null>(null)
+  useEffect(() => {
+    if (!mounted) return
+    let cancelled = false
+    void renderPreview(text, config).then((r) => {
+      if (!cancelled) setResult(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [text, config, mounted])
   const isEmpty = !text.trim()
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
+  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read
+  // and mirrored into state so the host box is sized in React-controlled px —
+  // this must not depend on mutating the mermaid <svg> node, whose attributes are
+  // wiped whenever React re-inserts the dangerouslySetInnerHTML subtree.
   const naturalRef = useRef({ w: 0, h: 0 })
+  const [natural, setNatural] = useState({ w: 0, h: 0 })
   // Once the user zooms/pans, stop auto-refitting on resize so we don't fight them.
   const interactedRef = useRef(false)
   const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
@@ -55,10 +78,13 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
   const viewRef = useRef(view)
   viewRef.current = view
 
-  const styleVars = colors ? colorsToCssVars(colors) : {}
+  const themeBackground =
+    typeof config?.themeVariables?.background === 'string'
+      ? config.themeVariables.background
+      : undefined
+
   const wrapperStyle: CSSProperties = {
-    ...(styleVars as CSSProperties),
-    background: paintBackground && colors ? colors.bg : 'transparent',
+    background: paintBackground ? (themeBackground ?? '#ffffff') : 'transparent',
   }
 
   /** Center the diagram and scale it to fit the viewport (never upscaling). */
@@ -82,14 +108,19 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
   useLayoutEffect(() => {
     const svg = svgHostRef.current?.querySelector('svg')
     if (!svg) return
-    const wAttr = parseFloat(svg.getAttribute('width') ?? '')
-    const hAttr = parseFloat(svg.getAttribute('height') ?? '')
-    if (wAttr && hAttr) {
-      naturalRef.current = { w: wAttr, h: hAttr }
-    } else {
+    // mermaid sizes the SVG with a viewBox plus width="100%" and an inline
+    // max-width; read the intrinsic pixel size from the viewBox so we can give
+    // the host an explicit box (the SVG then fills it via CSS — see globals.css).
+    const vb = svg.viewBox?.baseVal
+    let w = vb && vb.width && vb.height ? vb.width : parseFloat(svg.getAttribute('width') ?? '')
+    let h = vb && vb.width && vb.height ? vb.height : parseFloat(svg.getAttribute('height') ?? '')
+    if (!w || !h) {
       const bb = svg.getBoundingClientRect()
-      naturalRef.current = { w: bb.width, h: bb.height }
+      w = bb.width
+      h = bb.height
     }
+    naturalRef.current = { w, h }
+    setNatural({ w, h })
     // Fit to screen whenever the diagram changes (fresh render). `fit()` clears
     // the interacted flag, so a subsequent resize won't refit until the user
     // pans/zooms again.
@@ -212,7 +243,13 @@ export default function Preview({ text, colors, paintBackground = true }: Previe
             <div
               ref={svgHostRef}
               className="preview-svg absolute top-0 left-0 origin-top-left"
-              style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+              style={{
+                transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                // Explicit natural-size box so the SVG (forced to 100% in CSS)
+                // renders at full size regardless of mermaid's own width/max-width.
+                width: natural.w || undefined,
+                height: natural.h || undefined,
+              }}
               // eslint-disable-next-line react/no-danger
               dangerouslySetInnerHTML={{ __html: result.svg }}
             />

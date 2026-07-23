@@ -8,8 +8,10 @@ import type { TreeNode } from '@/lib/types'
 export interface FileTreeProps {
   nodes: TreeNode[]
   activePath: string | null
-  /** Path with unsaved changes (shown with a dot); may be a not-yet-saved file. */
-  dirtyPath: string | null
+  /** Paths with unsaved changes (shown with a dot); may include not-yet-saved files. */
+  dirtyPaths: ReadonlySet<string>
+  /** The branch being browsed, for the empty-state copy. */
+  branch: string
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   /** Create a new file inside this directory (path prefilled). */
@@ -20,7 +22,8 @@ export interface FileTreeProps {
 export default function FileTree({
   nodes,
   activePath,
-  dirtyPath,
+  dirtyPaths,
+  branch,
   onOpenFile,
   onDelete,
   onNewFile,
@@ -30,7 +33,7 @@ export default function FileTree({
     return (
       <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">
         No <code>.md</code> / <code>.mmd</code> / <code>.mermaid</code> files found on{' '}
-        <code>main</code>.
+        <code>{branch}</code>.
       </p>
     )
   }
@@ -42,7 +45,7 @@ export default function FileTree({
           node={node}
           depth={0}
           activePath={activePath}
-          dirtyPath={dirtyPath}
+          dirtyPaths={dirtyPaths}
           onOpenFile={onOpenFile}
           onDelete={onDelete}
           onNewFile={onNewFile}
@@ -57,7 +60,7 @@ interface ItemProps {
   node: TreeNode
   depth: number
   activePath: string | null
-  dirtyPath: string | null
+  dirtyPaths: ReadonlySet<string>
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string) => void
@@ -65,14 +68,14 @@ interface ItemProps {
 }
 
 function TreeItem(props: ItemProps) {
-  const { node, depth, activePath, dirtyPath, onOpenFile, onDelete, onNewFile, onRename } =
+  const { node, depth, activePath, dirtyPaths, onOpenFile, onDelete, onNewFile, onRename } =
     props
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
   if (node.type === 'dir') {
     // Dot when an unsaved file lives somewhere inside this folder.
-    const dirty = !!dirtyPath && dirtyPath.startsWith(`${node.path}/`)
+    const dirty = Array.from(dirtyPaths).some((p) => p.startsWith(`${node.path}/`))
     return (
       <li>
         <div className="group flex items-center rounded-md text-muted-foreground hover:bg-accent">
@@ -89,20 +92,22 @@ function TreeItem(props: ItemProps) {
             )}
             <span className="truncate">{node.name}</span>
           </button>
-          {dirty ? <UnsavedDot /> : null}
-          <IconAction
-            title={`New file in ${node.name}`}
-            onClick={() => onNewFile(node.path)}
-          >
-            <Plus className="size-3.5" />
-          </IconAction>
-          <IconAction
-            title={`Delete folder ${node.name}`}
-            danger
-            onClick={() => onDelete(node)}
-          >
-            <Trash2 className="size-3.5" />
-          </IconAction>
+          <div className="relative flex shrink-0 items-center">
+            {dirty ? <UnsavedDot /> : null}
+            <IconAction
+              title={`New file in ${node.name}`}
+              onClick={() => onNewFile(node.path)}
+            >
+              <Plus className="size-3.5" />
+            </IconAction>
+            <IconAction
+              title={`Delete folder ${node.name}`}
+              danger
+              onClick={() => onDelete(node)}
+            >
+              <Trash2 className="size-3.5" />
+            </IconAction>
+          </div>
         </div>
         {open && node.children ? (
           <ul>
@@ -116,7 +121,7 @@ function TreeItem(props: ItemProps) {
   }
 
   const active = activePath === node.path
-  const dirty = dirtyPath === node.path
+  const dirty = dirtyPaths.has(node.path)
   return (
     <li>
       <div
@@ -135,26 +140,30 @@ function TreeItem(props: ItemProps) {
           <FileCode className="size-3.5 shrink-0 opacity-70" />
           <span className="truncate">{node.name}</span>
         </button>
-        {dirty ? <UnsavedDot /> : null}
-        <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
-          <Pencil className="size-3.5" />
-        </IconAction>
-        <IconAction title={`Delete ${node.name}`} danger onClick={() => onDelete(node)}>
-          <Trash2 className="size-3.5" />
-        </IconAction>
+        <div className="relative flex shrink-0 items-center">
+          {dirty ? <UnsavedDot /> : null}
+          <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
+            <Pencil className="size-3.5" />
+          </IconAction>
+          <IconAction title={`Delete ${node.name}`} danger onClick={() => onDelete(node)}>
+            <Trash2 className="size-3.5" />
+          </IconAction>
+        </div>
       </div>
     </li>
   )
 }
 
-/** Amber dot marking unsaved changes; hidden on hover to reveal the actions. */
+/** Amber dot marking unsaved changes; overlays the action buttons, hidden on hover to reveal them. */
 function UnsavedDot() {
   return (
     <span
-      className="mr-1.5 size-1.5 shrink-0 rounded-full bg-amber-500 group-hover:hidden"
+      className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
       title="Unsaved changes"
       aria-label="Unsaved changes"
-    />
+    >
+      <span className="size-1.5 rounded-full bg-amber-500" />
+    </span>
   )
 }
 

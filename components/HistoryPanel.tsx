@@ -1,8 +1,8 @@
 'use client'
 
 import { Loader2 } from 'lucide-react'
-import type { DiagramColors } from 'beautiful-mermaid'
 import type { FileCommit } from '@/lib/types'
+import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import Preview from './Preview'
 import { cn } from '@/lib/utils'
 import {
@@ -23,7 +23,7 @@ export interface HistoryPanelProps {
   selectedSha: string | null
   versionContent: string | null
   versionLoading: boolean
-  colors: DiagramColors | null
+  config: MermaidUserConfig | null
   onSelect: (commit: FileCommit) => void
   onRecover: () => void
   onFork: () => void
@@ -51,7 +51,7 @@ export default function HistoryPanel({
   selectedSha,
   versionContent,
   versionLoading,
-  colors,
+  config,
   onSelect,
   onRecover,
   onFork,
@@ -114,7 +114,7 @@ export default function HistoryPanel({
             ) : (
               <>
                 <div className="min-h-0 flex-1">
-                  <Preview text={versionContent} colors={colors} />
+                  <Preview text={versionContent} config={config} />
                 </div>
                 <div className="flex justify-end gap-2 border-t p-3">
                   <Button variant="secondary" onClick={onFork}>
