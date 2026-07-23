@@ -1,4 +1,5 @@
 import { load, YAMLException } from 'js-yaml'
+import { THEME_PRESETS, type ThemePreset } from './themes'
 
 /**
  * The user-editable mermaid config (the cogwheel next to the layout dropdown).
@@ -188,6 +189,124 @@ export function setLayoutInYaml(yaml: string, layout: string): string {
     break
   }
   lines.splice(insertAt, 0, `layout: ${layout}`)
+  return lines.join(nl)
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme presets (the dropdown edits the YAML)                        */
+/* ------------------------------------------------------------------ */
+
+/** A stable, order-independent signature of a `themeVariables` map, used to tell
+ *  which preset (if any) a config currently matches. */
+function themeVarsSignature(vars: unknown): string | null {
+  if (!isPlainObject(vars)) return null
+  const entries = Object.entries(vars)
+    .filter((e): e is [string, string] => typeof e[1] === 'string')
+    .map(([k, val]) => [k, val.trim()] as const)
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  return entries.length ? JSON.stringify(entries) : null
+}
+
+/**
+ * Identify which preset theme the config currently reflects, by matching its
+ * `themeVariables` against each preset's. Returns null when nothing matches (a
+ * hand-tuned palette or no theme at all) so the dropdown can show "Custom".
+ */
+export function themeFromConfig(config: MermaidUserConfig | null): ThemePreset | null {
+  const sig = themeVarsSignature(config?.themeVariables)
+  if (sig == null) return null
+  return THEME_PRESETS.find((p) => themeVarsSignature(p.themeVariables) === sig) ?? null
+}
+
+/**
+ * Write a preset theme (its `theme` + `themeVariables`) into the raw YAML text,
+ * the single source of truth — or, with `preset === null`, strip both keys to
+ * revert to the default look. Like `setLayoutInYaml`, this edits the raw string
+ * rather than round-tripping through a parse → dump, so unrelated keys (layout,
+ * sequence, …), comments, and formatting survive. Handles both the bare-body
+ * form (keys at the root) and the frontmatter form (keys nested under `config:`),
+ * replacing an existing `themeVariables` block in place or inserting a fresh one.
+ */
+export function setThemeInYaml(yaml: string, preset: ThemePreset | null): string {
+  const nl = yaml.includes('\r\n') ? '\r\n' : '\n'
+  const indentOf = (line: string): number => line.match(/^\s*/)?.[0].length ?? 0
+
+  let lines = yaml ? yaml.split(/\r?\n/) : []
+
+  // Where do the theme keys live: under a top-level `config:` mapping
+  // (frontmatter form) or at the document root (bare-body form)?
+  const configIdx = lines.findIndex((l) => /^config\s*:\s*(#.*)?$/.test(l))
+  const frontmatter = configIdx >= 0
+
+  // The indentation of the `theme` / `themeVariables` keys themselves.
+  let keyIndent = ''
+  if (frontmatter) {
+    keyIndent = '  '
+    for (let i = configIdx + 1; i < lines.length; i++) {
+      const line = lines[i] ?? ''
+      if (line.trim() === '' || /^\s*#/.test(line)) continue
+      if (indentOf(line) === 0) break // block has no children
+      keyIndent = line.match(/^\s*/)?.[0] ?? '  '
+      break
+    }
+  }
+  const keyLen = keyIndent.length
+
+  // Remove any existing `theme:` scalar and `themeVariables:` block at that level
+  // (the block being the key line plus every more-indented line beneath it).
+  const kept: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    const trimmed = line.trim()
+    if (indentOf(line) === keyLen && /^theme\s*:/.test(trimmed)) continue
+    if (indentOf(line) === keyLen && /^themeVariables\s*:/.test(trimmed)) {
+      let j = i + 1
+      while (j < lines.length) {
+        const child = lines[j] ?? ''
+        if (child.trim() === '' || indentOf(child) > keyLen) {
+          j++
+          continue
+        }
+        break
+      }
+      i = j - 1
+      continue
+    }
+    kept.push(line)
+  }
+  lines = kept
+
+  if (!preset) {
+    const out = lines.join(nl)
+    return out.trim() ? out : ''
+  }
+
+  const subIndent = keyIndent + '  '
+  const themeLines = [
+    `${keyIndent}theme: ${preset.theme}`,
+    `${keyIndent}themeVariables:`,
+    ...Object.entries(preset.themeVariables).map(([k, val]) => `${subIndent}${k}: '${val}'`),
+  ]
+
+  if (frontmatter) {
+    const idx = lines.findIndex((l) => /^config\s*:\s*(#.*)?$/.test(l))
+    lines.splice(idx + 1, 0, ...themeLines)
+    return lines.join(nl)
+  }
+
+  // Bare-body form. An empty (or whitespace/comment-only) config gets a fresh
+  // block; otherwise insert after any leading fences / comments / blank lines.
+  if (!lines.join('').trim()) return themeLines.join(nl) + nl
+  let insertAt = 0
+  for (let i = 0; i < lines.length; i++) {
+    const t = (lines[i] ?? '').trim()
+    if (t === '' || t.startsWith('#') || /^(---|\.\.\.)$/.test(t)) {
+      insertAt = i + 1
+      continue
+    }
+    break
+  }
+  lines.splice(insertAt, 0, ...themeLines)
   return lines.join(nl)
 }
 

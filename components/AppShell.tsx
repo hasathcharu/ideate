@@ -38,8 +38,11 @@ import {
   applyThemeToSite,
   layoutFromConfig,
   setLayoutInYaml,
+  setThemeInYaml,
+  themeFromConfig,
   type MermaidUserConfig,
 } from '@/lib/mermaidConfig'
+import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue } from '@/lib/hooks'
 import {
   loadConfig,
@@ -81,6 +84,12 @@ const SAMPLE = `flowchart TD
 const NEW_TEMPLATE = `flowchart LR
   A[Start] --> B[End]
 `
+
+// Sentinel Select values for the theme dropdown: "None" strips the theme (revert
+// to the default look), "Custom" is the read-only display state when the config's
+// palette matches no preset (e.g. hand-edited themeVariables).
+const NONE_THEME = '__none__'
+const CUSTOM_THEME = '__custom__'
 
 type PromptSpec = Pick<
   PromptModalProps,
@@ -153,6 +162,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // (see the Select's onValueChange, which calls setLayoutInYaml).
   const layoutValues = useMemo(() => LAYOUT_ENGINES.map((e) => e.value), [])
   const currentLayout = layoutFromConfig(appliedConfig, layoutValues, DEFAULT_LAYOUT)
+
+  // The theme dropdown, like layout, reflects and writes back the YAML config.
+  // Show the matching preset if the config's palette matches one; "Custom" if it
+  // has a palette matching none (hand-tuned); "None" if it sets no theme at all.
+  const currentTheme = useMemo(() => {
+    const matched = themeFromConfig(appliedConfig)
+    if (matched) return matched.value
+    const tv = appliedConfig?.themeVariables
+    const hasVars = !!tv && typeof tv === 'object' && Object.keys(tv).length > 0
+    return hasVars ? CUSTOM_THEME : NONE_THEME
+  }, [appliedConfig])
 
   const repo = githubEnabled ? config.repo : null
   const dirty = text !== baseline
@@ -767,6 +787,33 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <span>Local mode — edits stay in your browser (localStorage).</span>
             )}
             <div className="ml-auto flex items-center gap-1.5">
+              <span className="text-muted-foreground">Theme</span>
+              <Select
+                value={currentTheme}
+                onValueChange={(v) => {
+                  if (v === CUSTOM_THEME) return
+                  const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
+                  if (v !== NONE_THEME && !preset) return
+                  updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
+                }}
+              >
+                <SelectTrigger size="sm" className="h-7 w-40" aria-label="Diagram theme">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value={NONE_THEME}>None (default)</SelectItem>
+                  {currentTheme === CUSTOM_THEME ? (
+                    <SelectItem value={CUSTOM_THEME} disabled>
+                      Custom
+                    </SelectItem>
+                  ) : null}
+                  {THEME_PRESETS.map((preset) => (
+                    <SelectItem key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <span className="text-muted-foreground">Layout</span>
               <Select
                 value={currentLayout}
