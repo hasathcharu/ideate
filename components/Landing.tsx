@@ -12,7 +12,7 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <div className="flex items-center justify-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-center text-xs text-amber-700 md:hidden dark:text-amber-400">
         <TriangleAlert className="size-3.5 shrink-0" />
-        {APP_NAME} isn&apos;t built for phone-sized screens — try a larger one for the full
+        {APP_NAME}&nbsp;isn&apos;t built for phone-sized screens — try a larger one for the full
         editor experience.
       </div>
       <header className="mx-auto flex w-full max-w-3xl items-end gap-2 px-6 py-5">
