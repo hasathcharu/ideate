@@ -257,6 +257,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
   }, [openPath, dirty])
 
+  // Which directories are expanded in the file tree — kept in memory only (not
+  // persisted), reset whenever the selected repo/branch changes so a stale
+  // expand/collapse layout from the previous repo can't bleed into the next one.
+  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set())
+  const onToggleDir = useCallback((path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }, [])
+
   const displayNodes = useMemo(() => {
     const base = tree?.tree ?? []
     if (!pendingPath) return base
@@ -292,6 +305,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const content = hasFiles ? '' : SAMPLE
     setText(content)
     setBaseline(content)
+  }, [])
+
+  // Invalidate everything scoped to the previously-selected repo/branch — called
+  // synchronously before the new tree fetch even starts, so nothing from the old
+  // repo (stale editor content, dirty markers, expanded folders) can linger if
+  // that fetch is slow or fails.
+  const resetForRepoSwitch = useCallback(() => {
+    setOpenPath(null)
+    setLoadedSha(null)
+    setText('')
+    setBaseline('')
+    setDirtyPaths(new Set())
+    setExpandedPaths(new Set())
   }, [])
 
   useEffect(() => {
@@ -455,13 +481,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       updateConfig({ repo: next })
       setRepoPickerOpen(false)
-      setOpenPath(null)
-      setLoadedSha(null)
+      resetForRepoSwitch()
       void refreshTree(next).then((data) => {
         if (data) showRepoStartState(data)
       })
     },
-    [updateConfig, refreshTree, showRepoStartState],
+    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
   )
 
   const onSelectBranch = useCallback(
@@ -470,13 +495,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const next: RepoRef = { ...repo, branch }
       updateConfig({ repo: next })
       setBranchPickerOpen(false)
-      setOpenPath(null)
-      setLoadedSha(null)
+      resetForRepoSwitch()
       void refreshTree(next).then((data) => {
         if (data) showRepoStartState(data)
       })
     },
-    [repo, updateConfig, refreshTree, showRepoStartState],
+    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
   )
 
   const onCreateBranch = useCallback(
@@ -1041,6 +1065,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   nodes={displayNodes}
                   activePath={openPath}
                   dirtyPaths={dirtyPaths}
+                  expandedPaths={expandedPaths}
+                  onToggleDir={onToggleDir}
                   branch={repo?.branch ?? ''}
                   onOpenFile={openFile}
                   onDelete={requestDelete}

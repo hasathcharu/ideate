@@ -1,6 +1,5 @@
 'use client'
 
-import { useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode, Pencil, Plus, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TreeNode } from '@/lib/types'
@@ -10,6 +9,10 @@ export interface FileTreeProps {
   activePath: string | null
   /** Paths with unsaved changes (shown with a dot); may include not-yet-saved files. */
   dirtyPaths: ReadonlySet<string>
+  /** Directory paths currently expanded — lifted to the caller so it can be
+   *  invalidated (e.g. on repo/branch switch) independently of this component. */
+  expandedPaths: ReadonlySet<string>
+  onToggleDir: (path: string) => void
   /** The branch being browsed, for the empty-state copy. */
   branch: string
   onOpenFile: (path: string) => void
@@ -23,6 +26,8 @@ export default function FileTree({
   nodes,
   activePath,
   dirtyPaths,
+  expandedPaths,
+  onToggleDir,
   branch,
   onOpenFile,
   onDelete,
@@ -46,6 +51,8 @@ export default function FileTree({
           depth={0}
           activePath={activePath}
           dirtyPaths={dirtyPaths}
+          expandedPaths={expandedPaths}
+          onToggleDir={onToggleDir}
           onOpenFile={onOpenFile}
           onDelete={onDelete}
           onNewFile={onNewFile}
@@ -61,6 +68,8 @@ interface ItemProps {
   depth: number
   activePath: string | null
   dirtyPaths: ReadonlySet<string>
+  expandedPaths: ReadonlySet<string>
+  onToggleDir: (path: string) => void
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string) => void
@@ -68,12 +77,22 @@ interface ItemProps {
 }
 
 function TreeItem(props: ItemProps) {
-  const { node, depth, activePath, dirtyPaths, onOpenFile, onDelete, onNewFile, onRename } =
-    props
-  const [open, setOpen] = useState(false)
+  const {
+    node,
+    depth,
+    activePath,
+    dirtyPaths,
+    expandedPaths,
+    onToggleDir,
+    onOpenFile,
+    onDelete,
+    onNewFile,
+    onRename,
+  } = props
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
   if (node.type === 'dir') {
+    const open = expandedPaths.has(node.path)
     // Dot when an unsaved file lives somewhere inside this folder.
     const dirty = Array.from(dirtyPaths).some((p) => p.startsWith(`${node.path}/`))
     return (
@@ -83,7 +102,7 @@ function TreeItem(props: ItemProps) {
             type="button"
             className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
             style={pad}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => onToggleDir(node.path)}
           >
             {open ? (
               <ChevronDown className="size-3.5 shrink-0" />
