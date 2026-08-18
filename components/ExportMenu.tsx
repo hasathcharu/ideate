@@ -11,7 +11,16 @@ import {
   exportSource,
   exportSVG,
 } from '@/lib/export'
+import {
+  copySceneSource,
+  copyScenePNG,
+  copySceneSVG,
+  exportSceneSource,
+  exportScenePNG,
+  exportSceneSVG,
+} from '@/lib/exportScene'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
+import { EXCALIDRAW_EXTENSION, type FileKind } from '@/lib/tree'
 import type { ExportBackground } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -64,6 +73,9 @@ export interface ExportMenuProps {
   onBackgroundChange: (value: ExportBackground) => void
   /** Global mermaid config (theme, layout, per-diagram settings) to render exports with. */
   config?: MermaidUserConfig | null
+  /** Which exporter to use. Excalidraw ships its own, so scenes don't go through
+   *  the mermaid render path at all. */
+  kind?: FileKind
 }
 
 export default function ExportMenu({
@@ -73,8 +85,10 @@ export default function ExportMenu({
   background,
   onBackgroundChange,
   config = null,
+  kind = 'mermaid',
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
+  const isScene = kind === 'excalidraw'
   const disabled = !text.trim()
 
   const run = async (key: string, label: string, fn: () => Promise<void>) => {
@@ -143,7 +157,7 @@ export default function ExportMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>Export diagram</DropdownMenuLabel>
+        <DropdownMenuLabel>{isScene ? 'Export canvas' : 'Export diagram'}</DropdownMenuLabel>
         <div className="flex items-center justify-between gap-2 px-2 py-1.5">
           <span className="text-sm">Background</span>
           <div className="flex items-center gap-1.5">
@@ -169,25 +183,51 @@ export default function ExportMenu({
           </div>
         </div>
         <DropdownMenuSeparator />
-        <Row
-          label="SVG"
-          format="SVG"
-          onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
-          onCopy={() => copySVG(text, background, config)}
-        />
-        <Row
-          label="PNG"
-          format="PNG"
-          onDownload={() => exportPNG(text, `${name}.png`, background, config)}
-          onCopy={() => copyPNG(text, background, config)}
-        />
-        <DropdownMenuSeparator />
-        <Row
-          label="Mermaid + Config"
-          format="MMD"
-          onDownload={() => exportSource(text, `${name}.mmd`, configYaml)}
-          onCopy={() => copySource(text, configYaml)}
-        />
+        {isScene ? (
+          <>
+            <Row
+              label="SVG"
+              format="SVG"
+              onDownload={() => exportSceneSVG(text, `${name}.svg`, background, config)}
+              onCopy={() => copySceneSVG(text, background, config)}
+            />
+            <Row
+              label="PNG"
+              format="PNG"
+              onDownload={() => exportScenePNG(text, `${name}.png`, background, config)}
+              onCopy={() => copyScenePNG(text, background, config)}
+            />
+            <DropdownMenuSeparator />
+            <Row
+              label="Excalidraw scene"
+              format="Scene"
+              onDownload={() => exportSceneSource(text, `${name}${EXCALIDRAW_EXTENSION}`)}
+              onCopy={() => copySceneSource(text)}
+            />
+          </>
+        ) : (
+          <>
+            <Row
+              label="SVG"
+              format="SVG"
+              onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
+              onCopy={() => copySVG(text, background, config)}
+            />
+            <Row
+              label="PNG"
+              format="PNG"
+              onDownload={() => exportPNG(text, `${name}.png`, background, config)}
+              onCopy={() => copyPNG(text, background, config)}
+            />
+            <DropdownMenuSeparator />
+            <Row
+              label="Mermaid + Config"
+              format="MMD"
+              onDownload={() => exportSource(text, `${name}.mmd`, configYaml)}
+              onCopy={() => copySource(text, configYaml)}
+            />
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

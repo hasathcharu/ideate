@@ -1,11 +1,39 @@
 import type { TreeNode } from './types'
 
+/** Which editor a file opens in. Mermaid files are text edited beside a rendered
+ *  preview; Excalidraw files are JSON scenes edited on a full-bleed canvas. Both
+ *  are plain text on disk, so every GitHub read/write path treats them alike —
+ *  only the editing surface differs. */
+export type FileKind = 'mermaid' | 'excalidraw'
+
 /** File extensions treated as Mermaid diagrams. */
-export const DIAGRAM_EXTENSIONS = ['.md', '.mmd', '.mermaid'] as const
+export const MERMAID_EXTENSIONS = ['.md', '.mmd', '.mermaid'] as const
+
+/** File extension treated as an Excalidraw scene. */
+export const EXCALIDRAW_EXTENSION = '.excalidraw'
+
+/** Every extension the file tree surfaces, both kinds. */
+export const DIAGRAM_EXTENSIONS = [...MERMAID_EXTENSIONS, EXCALIDRAW_EXTENSION] as const
+
+/** Human-readable list of the accepted extensions, for validation messages. */
+export const DIAGRAM_EXTENSIONS_LABEL = DIAGRAM_EXTENSIONS.join(', ')
 
 export function isDiagramFile(path: string): boolean {
   const lower = path.toLowerCase()
   return DIAGRAM_EXTENSIONS.some((ext) => lower.endsWith(ext))
+}
+
+export function isExcalidrawFile(path: string): boolean {
+  return path.toLowerCase().endsWith(EXCALIDRAW_EXTENSION)
+}
+
+/**
+ * Which editor `path` opens in. Mermaid is the fallback: an unknown (or absent)
+ * extension lands in the text editor, which degrades to "edit the raw text"
+ * rather than to a canvas that can't parse the file.
+ */
+export function fileKind(path: string | null): FileKind {
+  return path && isExcalidrawFile(path) ? 'excalidraw' : 'mermaid'
 }
 
 /**

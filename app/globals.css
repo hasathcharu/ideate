@@ -186,8 +186,113 @@
   height: 100% !important;
   max-width: none !important;
 }
-/* The zoomed diagram fills the viewport; browsers show black by default. */
-.preview-zoom:fullscreen {
-  width: 100vw;
-  height: 100vh;
+
+/* Hide Excalidraw's hamburger (main) menu: every item in it is either redundant
+   with the app's chrome (export lives in the Export menu, saving is Commit) or
+   controlled by the app (canvas background follows the active theme).
+
+   Target `main-menu-trigger` specifically. The generic `dropdown-menu-button`
+   class — and the `dropdown-menu-button` data-testid — are ALSO worn by the
+   toolbar's "More tools" trigger (`App-toolbar__extra-tools-trigger`), so matching
+   on those hides the frame/embed/laser tools instead of the menu. */
+.excalidraw .main-menu-trigger,
+.excalidraw [data-testid='main-menu-trigger'] {
+  display: none !important;
+}
+/* The trigger's only purpose is that button, so drop the wrapper too — otherwise
+   the surrounding Stack keeps contributing its 6px gap above the properties panel. */
+.excalidraw .App-menu_top__left > div:has(> .main-menu-trigger) {
+  display: none !important;
+}
+
+/* Dress Excalidraw's UI in the app's active palette.
+
+   Excalidraw themes its chrome through CSS custom properties, so the whole editor
+   can adopt the diagram theme by remapping them onto the shadcn tokens that
+   `applyThemeToSite` already writes onto <body>. Prefixed with `body` so these beat
+   Excalidraw's own `.excalidraw` / `.excalidraw.theme--dark` definitions on
+   specificity — the two stylesheets' load order isn't guaranteed, since
+   Excalidraw's arrives with the lazy chunk.
+
+   Colour *swatches* are deliberately left alone: they opt into `--theme-filter`,
+   which is Excalidraw's own mechanism for showing stored light-mode colours in a
+   dark UI. */
+body .excalidraw,
+body .excalidraw.theme--dark {
+  /* Surfaces */
+  --default-bg-color: var(--background);
+  --island-bg-color: var(--card);
+  --sidebar-bg-color: var(--card);
+  --popup-bg-color: var(--popover);
+  --popup-secondary-bg-color: var(--card);
+  --input-bg-color: var(--background);
+  --input-hover-bg-color: var(--accent);
+  --overlay-bg-color: color-mix(in srgb, var(--background) 70%, transparent);
+  --color-surface-lowest: var(--background);
+  --color-surface-low: var(--muted);
+  --color-surface-mid: var(--secondary);
+  --color-surface-high: var(--accent);
+
+  /* Text and icons */
+  --text-primary-color: var(--foreground);
+  --popup-text-color: var(--popover-foreground);
+  --color-on-surface: var(--foreground);
+  --icon-fill-color: var(--foreground);
+  --label-color: var(--muted-foreground);
+  --input-label-color: var(--muted-foreground);
+  --keybinding-color: var(--muted-foreground);
+  --color-muted: var(--muted-foreground);
+  --color-disabled: var(--muted-foreground);
+  --link-color: var(--primary);
+
+  /* Borders */
+  --default-border-color: var(--border);
+  --sidebar-border-color: var(--border);
+  --dialog-border-color: var(--border);
+  --list-border-color: var(--border);
+  --input-border-color: var(--input);
+
+  /* Accent. The darker/lighter steps are mixed rather than aliased so hover and
+     active states stay distinguishable from the base accent. */
+  --color-primary: var(--primary);
+  --color-primary-hover: color-mix(in oklab, var(--primary) 85%, var(--foreground));
+  --color-primary-darker: color-mix(in oklab, var(--primary) 80%, var(--foreground));
+  --color-primary-darkest: color-mix(in oklab, var(--primary) 65%, var(--foreground));
+  --color-primary-light: var(--accent);
+  --color-primary-light-darker: color-mix(in oklab, var(--accent) 85%, var(--foreground));
+  --color-surface-primary-container: var(--accent);
+  --color-on-primary-container: var(--accent-foreground);
+  --color-selection: var(--primary);
+  --select-highlight-color: var(--ring);
+  --focus-highlight-color: color-mix(in srgb, var(--ring) 40%, transparent);
+
+  /* Buttons */
+  --button-hover-bg: var(--accent);
+  --button-active-bg: var(--accent);
+  --button-border: var(--border);
+  --button-hover-border: var(--border);
+  --button-active-border: var(--ring);
+}
+/* Fullscreen toggle injected into Excalidraw's top-right UI via renderTopRightUI.
+   Styled from Excalidraw's own island tokens so it reads as part of the canvas UI
+   next to the Library button, rather than app chrome dropped on top of it. */
+.excalidraw .canvas-fullscreen-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: none;
+  border-radius: var(--border-radius-lg, 0.5rem);
+  background-color: var(--island-bg-color, #ffffff);
+  color: var(--icon-fill-color, #1b1b1f);
+  box-shadow: var(--shadow-island);
+  cursor: pointer;
+}
+.excalidraw .canvas-fullscreen-button:hover {
+  background-color: var(--button-hover-bg, rgb(0 0 0 / 6%));
+}
+.excalidraw .canvas-fullscreen-button svg {
+  width: 1rem;
+  height: 1rem;
 }

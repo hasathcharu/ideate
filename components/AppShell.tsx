@@ -17,15 +17,18 @@ import {
 import { toast } from 'sonner'
 import Editor from './Editor'
 import Preview from './Preview'
+import Canvas from './Canvas'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
 import RepoPicker from './RepoPicker'
 import BranchPicker from './BranchPicker'
-import FileTree from './FileTree'
+import FileTree, { FileTreeSkeleton } from './FileTree'
 import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
+import NewFileMenu from './NewFileMenu'
+import { ExcalidrawIcon, MermaidIcon } from './icons'
 import ConfigModal from './ConfigModal'
 import MobileWarningModal from './MobileWarningModal'
 import { Button } from '@/components/ui/button'
@@ -45,8 +48,10 @@ import {
   parseMermaidConfig,
   applyThemeToSite,
   layoutFromConfig,
+  resolveThemeMode,
   setLayoutInYaml,
   setThemeInYaml,
+  themeBackgroundColor,
   themeFromConfig,
   type MermaidUserConfig,
 } from '@/lib/mermaidConfig'
@@ -60,9 +65,20 @@ import {
   clearDraft,
   docIdForFile,
   SCRATCH_DOC_ID,
+  SCRATCH_SCENE_DOC_ID,
 } from '@/lib/storage'
 import { APP_NAME } from '@/lib/config'
-import { buildTree, collectFilePaths, isDiagramFile } from '@/lib/tree'
+import {
+  buildTree,
+  collectFilePaths,
+  fileKind,
+  isDiagramFile,
+  isExcalidrawFile,
+  DIAGRAM_EXTENSIONS_LABEL,
+  EXCALIDRAW_EXTENSION,
+  type FileKind,
+} from '@/lib/tree'
+import { EMPTY_SCENE, scenesEqual } from '@/lib/excalidraw'
 import { cn } from '@/lib/utils'
 import {
   listTree,
@@ -94,6 +110,13 @@ const NEW_TEMPLATE = `flowchart LR
   A[Start] --> B[End]
 `
 
+/** Starter content for a newly created file, by kind. A new Excalidraw file is a
+ *  blank scene rather than a sample drawing — there's no equivalent of "example
+ *  syntax to edit" on a canvas. */
+function templateFor(kind: FileKind): string {
+  return kind === 'excalidraw' ? EMPTY_SCENE : NEW_TEMPLATE
+}
+
 // Sentinel Select values for the theme dropdown: "None" strips the theme (revert
 // to the default look), "Custom" is the read-only display state when the config's
 // palette matches no preset (e.g. hand-edited themeVariables).
@@ -122,6 +145,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     exportBackground: 'white',
     splitRatio: 0.5,
     sidebarWidth: 256,
+    scratchKind: 'mermaid',
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
@@ -150,6 +174,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const [tree, setTree] = useState<TreeResult | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
+  // Tracked separately from `tree === null` so a refresh can spin the button and
+  // report failure without blanking a list that's still perfectly valid.
+  const [treeLoading, setTreeLoading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
 
   const [saving, setSaving] = useState(false)
@@ -182,8 +209,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [versionContent, setVersionContent] = useState<string | null>(null)
   const [versionLoading, setVersionLoading] = useState(false)
-
-  const debouncedText = useDebouncedValue(text, 350)
 
   // Parse the user's YAML config. The memo keeps a stable object reference until
   // the raw text changes, so it's safe to feed into the Preview render effect's
@@ -229,9 +254,40 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const repo = githubEnabled ? config.repo : null
-  const dirty = text !== baseline
+
+  // Which editor the current document gets. For a repo file the extension decides;
+  // with nothing open (local mode, or before picking a file) it's the user's
+  // scratch choice. Everything else about a document — reading, committing,
+  // drafts, conflicts, history — is identical across kinds; only the editing
+  // surface and the export path differ.
+  const kind: FileKind = openPath ? fileKind(openPath) : config.scratchKind
+
+  // Excalidraw's theme is a binary light/dark switch, not an arbitrary palette,
+  // so the canvas follows the *mode* of whichever diagram theme is active. That
+  // keeps a scene from flashing a white canvas inside dark chrome when the user
+  // opens it while a dark theme is selected.
+  const canvasTheme = useMemo(() => resolveThemeMode(appliedConfig), [appliedConfig])
+
+  // The canvas paints the active theme's background, so the drawing surface matches
+  // the app chrome around it. Imposed for display only — never written to the file.
+  const canvasBackground = useMemo(() => themeBackgroundColor(appliedConfig), [appliedConfig])
+
+  // Mermaid files compare byte-for-byte, but scene JSON can't: re-serializing a
+  // scene we just loaded legitimately changes the bytes (key order, the `source`
+  // field, a renarrowed appState), so a freshly opened file would read as unsaved
+  // before the user touched it. `scenesEqual` compares the drawing instead.
+  const dirty =
+    kind === 'excalidraw' ? !scenesEqual(text, baseline) : text !== baseline
+  // Each scratch kind gets its own draft slot, so toggling between diagram and
+  // canvas in local mode parks the current work rather than overwriting it.
+  const scratchDocId =
+    config.scratchKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
   const docId =
-    repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : SCRATCH_DOC_ID
+    repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : scratchDocId
+
+  // Keyed on the open document: edits within a file debounce, but switching files
+  // takes effect at once so nothing downstream ever sees the outgoing file's text.
+  const debouncedText = useDebouncedValue(text, 350, docId)
   // Export/download file name: the open file's name (folder + extension stripped).
   // Falls back to "diagram" only when nothing is open (local mode / fresh scratch).
   const baseName =
@@ -278,8 +334,29 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return buildTree(paths)
   }, [tree, pendingPath])
 
+  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
+    setConfig((prev) => {
+      const next = { ...prev, ...patch }
+      saveConfig(next)
+      return next
+    })
+  }, [])
+
+  /**
+   * Fetch the tree and swap it in once it arrives.
+   *
+   * Deliberately does NOT clear `tree` first. Most callers are incidental
+   * refreshes — after a commit, delete, rename, or the refresh button — where
+   * blanking the list replaced it with a loading state for the duration of a round
+   * trip, even though the list on screen was still almost entirely correct.
+   *
+   * Discarding the stale list is the caller's decision, and only two situations
+   * warrant it: the very first load (where `tree` is already null) and a
+   * repo/branch switch, where `resetForRepoSwitch` clears it because the paths
+   * genuinely no longer apply.
+   */
   const refreshTree = useCallback(async (target: RepoRef) => {
-    setTree(null)
+    setTreeLoading(true)
     setTreeError(null)
     const res = await listTree(
       target.owner,
@@ -287,6 +364,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       target.branch,
       target.branch === target.defaultBranch,
     )
+    setTreeLoading(false)
     if (res.ok) {
       setTree(res.data)
       return res.data
@@ -298,14 +376,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Editor/canvas state for a freshly-opened repo: an empty repo (no diagram
   // files yet) gets a starter example to edit; a repo that already has files
   // opens blank so the user picks one from the tree.
-  const showRepoStartState = useCallback((treeData: TreeResult) => {
-    const hasFiles = treeData.tree.flatMap(collectFilePaths).length > 0
-    setOpenPath(null)
-    setLoadedSha(null)
-    const content = hasFiles ? '' : SAMPLE
-    setText(content)
-    setBaseline(content)
-  }, [])
+  const showRepoStartState = useCallback(
+    (treeData: TreeResult) => {
+      const hasFiles = treeData.tree.flatMap(collectFilePaths).length > 0
+      setOpenPath(null)
+      setLoadedSha(null)
+      const content = hasFiles ? '' : SAMPLE
+      setText(content)
+      setBaseline(content)
+      // This content is mermaid source, so the scratch surface has to be the text
+      // editor — otherwise a leftover canvas choice would try to parse it as a scene.
+      updateConfig({ scratchKind: 'mermaid' })
+    },
+    [updateConfig],
+  )
 
   // Invalidate everything scoped to the previously-selected repo/branch — called
   // synchronously before the new tree fetch even starts, so nothing from the old
@@ -318,7 +402,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setBaseline('')
     setDirtyPaths(new Set())
     setExpandedPaths(new Set())
-  }, [])
+    // The outgoing repo/branch's paths are meaningless now, so this is one of the
+    // few places the list *should* go back to a loading state.
+    setTree(null)
+    setTreeError(null)
+    updateConfig({ scratchKind: 'mermaid' })
+  }, [updateConfig])
 
   useEffect(() => {
     const stored = loadConfig()
@@ -328,8 +417,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setHydrated(true)
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
-    // reloads rather than clobbering it with the start state.
-    const draft = loadDraft(SCRATCH_DOC_ID)
+    // reloads rather than clobbering it with the start state. Which slot to read
+    // depends on the scratch surface the user last had open.
+    const scratchId =
+      stored.scratchKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
+    const draft = loadDraft(scratchId)
     const restorable = draft && draft.content.trim().length > 0 ? draft.content : null
 
     if (githubEnabled && stored.repo) {
@@ -341,6 +433,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
           showRepoStartState(data)
         }
       })
+    } else if (stored.scratchKind === 'excalidraw') {
+      setText(restorable ?? EMPTY_SCENE)
+      setBaseline(EMPTY_SCENE)
     } else if (restorable !== null && restorable !== SAMPLE) {
       setText(restorable)
       setBaseline(SAMPLE)
@@ -361,14 +456,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
-
-  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...patch }
-      saveConfig(next)
-      return next
-    })
-  }, [])
 
   const MIN_RATIO = 0.2
   const MAX_RATIO = 0.8
@@ -466,6 +553,29 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [updateConfig],
   )
 
+  /**
+   * Switch the scratch document between the text editor and the canvas.
+   *
+   * Nothing is lost either way: the outgoing text is parked in its own draft slot
+   * first, and the incoming kind's parked draft (if any) is restored. Only
+   * meaningful with no file open — an open file's kind comes from its extension.
+   */
+  const switchScratchKind = useCallback(
+    (nextKind: FileKind) => {
+      if (openPath || nextKind === config.scratchKind) return
+      saveDraft(scratchDocId, text)
+      const nextId = nextKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
+      const parked = loadDraft(nextId)
+      const fresh = templateFor(nextKind)
+      updateConfig({ scratchKind: nextKind })
+      setText(parked && parked.content.trim().length > 0 ? parked.content : fresh)
+      // Baseline is the pristine template, so a restored draft correctly reads as
+      // unsaved work while a fresh switch reads as clean.
+      setBaseline(fresh)
+    },
+    [openPath, config.scratchKind, scratchDocId, text, updateConfig],
+  )
+
   const openPrompt = useCallback((spec: PromptSpec) => {
     setPrompt(spec)
     setPromptOpen(true)
@@ -532,13 +642,22 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setBaseline(res.data.content)
       setLoadedSha(res.data.sha)
       setOpenPath(path)
-      setText(draft && draft.content !== res.data.content ? draft.content : res.data.content)
+      // Only prefer the draft when it actually differs from what's committed. For
+      // scenes that comparison has to be semantic: a draft the canvas wrote is in
+      // canonical form and so rarely matches the committed bytes exactly, even
+      // when it's the identical drawing.
+      const draftDiffers =
+        draft !== null &&
+        (fileKind(path) === 'excalidraw'
+          ? !scenesEqual(draft.content, res.data.content)
+          : draft.content !== res.data.content)
+      setText(draftDiffers && draft ? draft.content : res.data.content)
     },
     [repo],
   )
 
   const newDiagram = useCallback(
-    (dirPath?: string) => {
+    (dirPath?: string, newKind: FileKind = 'mermaid') => {
       if (!repo) {
         setOpenPath(null)
         setLoadedSha(null)
@@ -549,9 +668,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // Root-level create defaults to the repo root (no forced `diagrams/`);
       // a folder's "+" prefills that folder. Either way the user can type any
       // repo-relative path.
-      const defaultValue = dirPath ? `${dirPath}/untitled.mmd` : 'untitled.mmd'
+      const suggested = newKind === 'excalidraw' ? `untitled${EXCALIDRAW_EXTENSION}` : 'untitled.mmd'
+      const defaultValue = dirPath ? `${dirPath}/${suggested}` : suggested
       openPrompt({
-        title: 'New diagram',
+        title: newKind === 'excalidraw' ? 'New canvas' : 'New diagram',
         description: `Create a new diagram file on ${repo.branch}.`,
         label: 'File path',
         defaultValue,
@@ -562,7 +682,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
-          setText(NEW_TEMPLATE)
+          // Derive the starter content from the extension actually submitted,
+          // not from `newKind` — the user may have retyped it in the prompt.
+          setText(templateFor(fileKind(path)))
         },
       })
     },
@@ -626,7 +748,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setLoadedSha(null)
     setBaseline('')
     setText(NEW_TEMPLATE)
-  }, [docId])
+    updateConfig({ scratchKind: 'mermaid' })
+  }, [docId, updateConfig])
 
   const requestDelete = useCallback((node: TreeNode) => {
     setDeleteTarget(node)
@@ -694,9 +817,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         title: 'Save to repository',
         description: `Choose a path on ${repo.branch} for this diagram.`,
         label: 'File path',
-        defaultValue: 'untitled.mmd',
+        defaultValue: kind === 'excalidraw' ? `untitled${EXCALIDRAW_EXTENSION}` : 'untitled.mmd',
         submitLabel: 'Save',
-        validate: validatePath,
+        validate: validatePathForKind(kind),
         onSubmit: (path) => {
           setPromptOpen(false)
           void commitCurrent(path, undefined, text)
@@ -705,7 +828,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return
     }
     void commitCurrent(openPath, loadedSha ?? undefined, text)
-  }, [repo, dirty, saving, openPath, loadedSha, text, commitCurrent, openPrompt])
+  }, [repo, dirty, saving, openPath, loadedSha, text, kind, commitCurrent, openPrompt])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
   // commit. Only meaningful once there is an actual commit to fall back to
@@ -889,9 +1012,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
       title: 'Create new diagram from this version',
       description: 'Save this version’s content as a separate new file.',
       label: 'New file path',
-      defaultValue: 'copy.mmd',
+      defaultValue: kind === 'excalidraw' ? `copy${EXCALIDRAW_EXTENSION}` : 'copy.mmd',
       submitLabel: 'Start editing',
-      validate: validatePath,
+      validate: validatePathForKind(kind),
       onSubmit: (path) => {
         setPromptOpen(false)
         setOpenPath(path)
@@ -900,7 +1023,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setText(content)
       },
     })
-  }, [versionContent, repo, openPrompt])
+  }, [versionContent, repo, kind, openPrompt])
 
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
   const showSidebar = githubEnabled && !!repo && sidebarOpen
@@ -1006,6 +1129,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             background={config.exportBackground}
             onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
             config={appliedConfig}
+            kind={kind}
           />
           <Separator orientation="vertical" className="h-6" />
           <AuthButton user={user} />
@@ -1034,19 +1158,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   size="icon-xs"
                   variant="ghost"
                   onClick={() => repo && void refreshTree(repo)}
-                  disabled={!repo || tree === null}
+                  disabled={!repo || treeLoading}
                   title="Refresh files"
                 >
-                  <RefreshCw className={cn(tree === null && 'animate-spin')} />
+                  <RefreshCw className={cn(treeLoading && 'animate-spin')} />
                 </Button>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => newDiagram()}
-                  title={`New diagram at root (${newHint})`}
-                >
-                  <Plus />
-                </Button>
+                <NewFileMenu onSelect={(k) => newDiagram(undefined, k)}>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    title={`New file at root (${newHint})`}
+                  >
+                    <Plus />
+                  </Button>
+                </NewFileMenu>
               </div>
             </div>
             <Separator />
@@ -1056,10 +1181,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   ⚠ Large repo; some files may be hidden.
                 </p>
               ) : null}
-              {treeError ? (
+              {/* A refresh that fails while a list is already on screen shows the
+                  error as a banner and keeps the list — the stale list is far more
+                  useful than an empty pane, and the next refresh clears this. */}
+              {treeError && tree !== null ? (
+                <p className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
+                  {treeError}
+                </p>
+              ) : null}
+              {treeError && tree === null ? (
                 <p className="p-2 text-sm text-destructive">{treeError}</p>
               ) : tree === null ? (
-                <p className="p-2 text-sm text-muted-foreground">Loading files…</p>
+                <FileTreeSkeleton />
               ) : (
                 <FileTree
                   nodes={displayNodes}
@@ -1070,7 +1203,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   branch={repo?.branch ?? ''}
                   onOpenFile={openFile}
                   onDelete={requestDelete}
-                  onNewFile={(dir) => newDiagram(dir)}
+                  onNewFile={(dir, k) => newDiagram(dir, k)}
                   onRename={requestRename}
                 />
               )}
@@ -1104,6 +1237,29 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <span>Local mode — edits stay in your browser (localStorage).</span>
             )}
             <div className="ml-auto flex items-center gap-1.5">
+              {/* With no file open there's no extension to infer from, so the user
+                  picks the surface. Each kind keeps its own draft, so toggling is
+                  non-destructive. */}
+              {!openPath ? (
+                <div className="mr-1 flex items-center gap-0.5 rounded-md border p-0.5">
+                  <Button
+                    size="sm"
+                    variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
+                    className="h-6 gap-1 px-2 text-xs"
+                    onClick={() => switchScratchKind('mermaid')}
+                  >
+                    <MermaidIcon className="size-3" /> Diagram
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={kind === 'excalidraw' ? 'secondary' : 'ghost'}
+                    className="h-6 gap-1 px-2 text-xs"
+                    onClick={() => switchScratchKind('excalidraw')}
+                  >
+                    <ExcalidrawIcon className="size-3" /> Canvas
+                  </Button>
+                </div>
+              ) : null}
               <span className="text-muted-foreground">Theme</span>
               <Select value={currentTheme} onValueChange={applyTheme}>
                 <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
@@ -1151,68 +1307,90 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <span className="text-muted-foreground">Layout</span>
-              <Select
-                value={currentLayout}
-                onValueChange={(v) =>
-                  updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
-                }
-              >
-                <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  {LAYOUT_ENGINES.map((engine) => (
-                    <SelectItem key={engine.value} value={engine.value}>
-                      {engine.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                className="size-7"
-                onClick={() => setConfigOpen(true)}
-                aria-label="Diagram configuration"
-                title="Diagram configuration"
-              >
-                <Settings2 />
-              </Button>
+              {/* Layout engine and the mermaid YAML config have no meaning for a
+                  canvas. The Theme dropdown above stays, because it still recolors
+                  the app chrome — and drives the canvas's light/dark mode. */}
+              {kind === 'mermaid' ? (
+                <>
+                  <span className="text-muted-foreground">Layout</span>
+                  <Select
+                    value={currentLayout}
+                    onValueChange={(v) =>
+                      updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
+                    }
+                  >
+                    <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="end">
+                      {LAYOUT_ENGINES.map((engine) => (
+                        <SelectItem key={engine.value} value={engine.value}>
+                          {engine.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="size-7"
+                    onClick={() => setConfigOpen(true)}
+                    aria-label="Diagram configuration"
+                    title="Diagram configuration"
+                  >
+                    <Settings2 />
+                  </Button>
+                </>
+              ) : null}
             </div>
           </div>
 
-          <div
-            ref={paneRowRef}
-            className="grid min-h-0 flex-1"
-            style={{
-              gridTemplateColumns: `minmax(0,${editorRatio}fr) 6px minmax(0,${1 - editorRatio}fr)`,
-            }}
-          >
-            <section className="min-h-0 overflow-auto" aria-label="Editor">
-              <Editor value={text} onChange={setText} dark={false} />
-            </section>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize editor and preview"
-              aria-valuemin={20}
-              aria-valuemax={80}
-              aria-valuenow={Math.round(editorRatio * 100)}
-              tabIndex={0}
-              onPointerDown={startDividerDrag}
-              onKeyDown={onDividerKeyDown}
-              className="group flex cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
-            >
-              <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
-            </div>
-            <section className="min-h-0 overflow-auto" aria-label="Preview">
-              <Preview
-                text={debouncedText}
-                config={appliedConfig}
+          {kind === 'excalidraw' ? (
+            // A canvas is its own editor *and* its own preview, so it takes the
+            // full pane — no split, no divider. `key` remounts it per file so one
+            // document's undo history and scroll position can't leak into the next.
+            <section className="min-h-0 flex-1" aria-label="Canvas">
+              <Canvas
+                key={openPath ?? 'scratch'}
+                value={text}
+                onChange={setText}
+                theme={canvasTheme}
+                backgroundColor={canvasBackground}
               />
             </section>
-          </div>
+          ) : (
+            <div
+              ref={paneRowRef}
+              className="grid min-h-0 flex-1"
+              style={{
+                gridTemplateColumns: `minmax(0,${editorRatio}fr) 6px minmax(0,${1 - editorRatio}fr)`,
+              }}
+            >
+              <section className="min-h-0 overflow-auto" aria-label="Editor">
+                <Editor value={text} onChange={setText} dark={false} />
+              </section>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize editor and preview"
+                aria-valuemin={20}
+                aria-valuemax={80}
+                aria-valuenow={Math.round(editorRatio * 100)}
+                tabIndex={0}
+                onPointerDown={startDividerDrag}
+                onKeyDown={onDividerKeyDown}
+                className="group flex cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
+              >
+                <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
+              </div>
+              <section className="min-h-0 overflow-auto" aria-label="Preview">
+                <Preview
+                  text={debouncedText}
+                  config={appliedConfig}
+                />
+              </section>
+            </div>
+          )}
         </main>
       </div>
 
@@ -1288,6 +1466,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
           versionContent={versionContent}
           versionLoading={versionLoading}
           config={appliedConfig}
+          kind={kind}
+          canvasTheme={canvasTheme}
+          canvasBackground={canvasBackground}
           onSelect={selectVersion}
           onLoadMore={loadMoreCommits}
           onViewBeforeRename={viewHistoryBeforeRename}
@@ -1308,9 +1489,31 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 }
 
+/** Accepts any recognized extension — used when *creating* a file, where the
+ *  extension the user types is what chooses the editor. */
 function validatePath(value: string): string | null {
   if (!value) return 'Enter a file path.'
   if (value.startsWith('/') || value.includes('..')) return 'Use a repo-relative path.'
-  if (!isDiagramFile(value)) return 'Use a .md, .mmd, or .mermaid extension.'
+  if (!isDiagramFile(value)) return `Use one of: ${DIAGRAM_EXTENSIONS_LABEL}.`
   return null
+}
+
+/**
+ * Requires an extension matching `kind` — used when an *existing* document is
+ * written to a new path (save-as, fork from history). The content's kind is
+ * already fixed there, so a mismatched extension would commit, say, mermaid
+ * source into a `.excalidraw` file that then opens as a broken canvas.
+ */
+function validatePathForKind(kind: FileKind): (value: string) => string | null {
+  return (value: string) => {
+    const base = validatePath(value)
+    if (base) return base
+    if (kind === 'excalidraw' && !isExcalidrawFile(value)) {
+      return `This is a canvas — use a ${EXCALIDRAW_EXTENSION} extension.`
+    }
+    if (kind === 'mermaid' && isExcalidrawFile(value)) {
+      return 'This is a Mermaid diagram — use a .md, .mmd, or .mermaid extension.'
+    }
+    return null
+  }
 }

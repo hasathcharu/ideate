@@ -1,8 +1,62 @@
 'use client'
 
-import { ChevronDown, ChevronRight, FileCode, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
+import NewFileMenu from './NewFileMenu'
+import { ExcalidrawIcon, MermaidIcon } from './icons'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { DIAGRAM_EXTENSIONS, fileKind, type FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
+
+/** Shared styling for the hover-revealed row actions. Extracted so the "new file"
+ *  dropdown trigger can match the plain icon buttons beside it. */
+const ICON_ACTION_CLASS =
+  'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition last:mr-1 hover:bg-accent-foreground/10 focus-visible:opacity-100 group-hover:opacity-100'
+
+/** The file's icon, matching the one shown for its kind in `NewFileMenu` so the
+ *  picker and the resulting file read as the same thing. Full opacity, unlike the
+ *  generic glyph it replaced — these carry brand color, so dimming them muddies it. */
+function FileKindIcon({ kind }: { kind: FileKind }) {
+  const Icon = kind === 'excalidraw' ? ExcalidrawIcon : MermaidIcon
+  return <Icon className="size-3.5 shrink-0" />
+}
+
+/** Row shapes for the loading skeleton: indent depth and label width, picked to
+ *  look like a plausible small tree (two folders, a few files) rather than a
+ *  uniform stack of identical bars. */
+const SKELETON_ROWS = [
+  { depth: 0, width: 'w-28' },
+  { depth: 1, width: 'w-36' },
+  { depth: 1, width: 'w-24' },
+  { depth: 0, width: 'w-32' },
+  { depth: 1, width: 'w-40' },
+  { depth: 0, width: 'w-20' },
+  { depth: 0, width: 'w-32' },
+] as const
+
+/**
+ * Placeholder shown while the first tree for a repo/branch loads.
+ *
+ * Geometry deliberately mirrors `TreeItem`: same `depth * 12 + 8` indent, same
+ * `py-1` row height and `gap-1.5`, so the real list doesn't visibly jump when it
+ * replaces this.
+ */
+export function FileTreeSkeleton() {
+  return (
+    <ul className="text-sm" aria-hidden>
+      {SKELETON_ROWS.map((row, i) => (
+        <li
+          key={i}
+          className="flex items-center gap-1.5 py-1 pr-1"
+          style={{ paddingLeft: `${row.depth * 12 + 8}px` }}
+        >
+          <Skeleton className="size-3.5 shrink-0" />
+          <Skeleton className={cn('h-3.5', row.width)} />
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 export interface FileTreeProps {
   nodes: TreeNode[]
@@ -17,8 +71,8 @@ export interface FileTreeProps {
   branch: string
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
-  /** Create a new file inside this directory (path prefilled). */
-  onNewFile: (dirPath: string) => void
+  /** Create a new file of `kind` inside this directory (path prefilled). */
+  onNewFile: (dirPath: string, kind: FileKind) => void
   onRename: (node: TreeNode) => void
 }
 
@@ -37,8 +91,14 @@ export default function FileTree({
   if (nodes.length === 0) {
     return (
       <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">
-        No <code>.md</code> / <code>.mmd</code> / <code>.mermaid</code> files found on{' '}
-        <code>{branch}</code>.
+        No{' '}
+        {DIAGRAM_EXTENSIONS.map((ext, i) => (
+          <span key={ext}>
+            {i > 0 ? ' / ' : ''}
+            <code>{ext}</code>
+          </span>
+        ))}{' '}
+        files found on <code>{branch}</code>.
       </p>
     )
   }
@@ -72,7 +132,7 @@ interface ItemProps {
   onToggleDir: (path: string) => void
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
-  onNewFile: (dirPath: string) => void
+  onNewFile: (dirPath: string, kind: FileKind) => void
   onRename: (node: TreeNode) => void
 }
 
@@ -113,12 +173,16 @@ function TreeItem(props: ItemProps) {
           </button>
           <div className="relative flex shrink-0 items-center">
             {dirty ? <UnsavedDot /> : null}
-            <IconAction
-              title={`New file in ${node.name}`}
-              onClick={() => onNewFile(node.path)}
-            >
-              <Plus className="size-3.5" />
-            </IconAction>
+            <NewFileMenu onSelect={(kind) => onNewFile(node.path, kind)}>
+              <button
+                type="button"
+                className={ICON_ACTION_CLASS}
+                title={`New file in ${node.name}`}
+                aria-label={`New file in ${node.name}`}
+              >
+                <Plus className="size-3.5" />
+              </button>
+            </NewFileMenu>
             <IconAction
               title={`Delete folder ${node.name}`}
               danger
@@ -156,7 +220,7 @@ function TreeItem(props: ItemProps) {
           title={node.path}
           onClick={() => onOpenFile(node.path)}
         >
-          <FileCode className="size-3.5 shrink-0 opacity-70" />
+          <FileKindIcon kind={fileKind(node.path)} />
           <span className="truncate">{node.name}</span>
         </button>
         <div className="relative flex shrink-0 items-center">
@@ -201,7 +265,7 @@ function IconAction({
     <button
       type="button"
       className={cn(
-        'flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition last:mr-1 hover:bg-accent-foreground/10 focus-visible:opacity-100 group-hover:opacity-100',
+        ICON_ACTION_CLASS,
         danger && 'hover:bg-destructive/15 hover:text-destructive',
       )}
       title={title}

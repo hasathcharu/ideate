@@ -12,6 +12,12 @@ const DRAFT_PREFIX = 'km:draft:'
 /** Stable id for the local-only scratch document (before a repo is connected). */
 export const SCRATCH_DOC_ID = 'local:scratch'
 
+/** Scratch slot for an Excalidraw canvas. Deliberately separate from
+ *  `SCRATCH_DOC_ID`: the two kinds hold incompatible content, so giving each its
+ *  own draft means toggling between them in local mode preserves both rather
+ *  than overwriting one with the other. */
+export const SCRATCH_SCENE_DOC_ID = 'local:scratch-scene'
+
 /** Stable id for a repo file's draft. Includes branch so the same path on two
  *  different branches never collides on the same draft. */
 export function docIdForFile(owner: string, repo: string, branch: string, path: string): string {
@@ -27,6 +33,7 @@ const DEFAULT_CONFIG: AppConfig = {
   exportBackground: 'white',
   splitRatio: 0.5,
   sidebarWidth: 256,
+  scratchKind: 'mermaid',
   mermaidConfig: '',
 }
 

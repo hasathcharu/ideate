@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Lock, Loader2, PackagePlus, RefreshCw, Settings2 } from 'lucide-react'
+import { Lock, PackagePlus, RefreshCw, Settings2 } from 'lucide-react'
 import { listRepos } from '@/app/actions/github'
 import { loginWithGitHub } from '@/app/actions/auth'
 import { GITHUB_APP_INSTALL_URL } from '@/lib/config'
@@ -18,6 +18,25 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+
+/** Varied name widths, since `owner/name` lengths differ a lot in practice. */
+const REPO_SKELETON_WIDTHS = ['w-52', 'w-36', 'w-60', 'w-44', 'w-56', 'w-40'] as const
+
+/** Placeholder repo rows, matching the real row's `px-2.5 py-2` and its
+ *  name-plus-visibility-badge layout so the list doesn't shift when it loads. */
+function RepoListSkeleton() {
+  return (
+    <ul className="flex flex-col gap-0.5" aria-hidden>
+      {REPO_SKELETON_WIDTHS.map((width, i) => (
+        <li key={i} className="flex items-center justify-between gap-2 px-2.5 py-2">
+          <Skeleton className={cn('h-4', width)} />
+          <Skeleton className="h-5 w-16 shrink-0" />
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 export interface RepoPickerProps {
   open: boolean
@@ -129,9 +148,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
               )}
             </div>
           ) : repos === null ? (
-            <p className="flex items-center justify-center gap-2 px-2 py-6 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Loading your repositories…
-            </p>
+            <RepoListSkeleton />
           ) : notInstalled ? (
             <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
               <PackagePlus className="size-8 text-muted-foreground" />

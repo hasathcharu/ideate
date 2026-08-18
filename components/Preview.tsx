@@ -10,6 +10,7 @@ import {
 } from '@/lib/mermaid'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export interface PreviewProps {
   text: string
@@ -72,7 +73,11 @@ export default function Preview({
   const dragRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null)
 
   const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 })
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  // "Maximized" fills the browser window rather than entering real fullscreen: the
+  // Fullscreen API takes over the whole screen and hides the browser's own chrome,
+  // which is more than is wanted for expanding one pane. A fixed, inset-0 overlay
+  // gives the same working area while leaving tabs and the URL bar in place.
+  const [isMaximized, setIsMaximized] = useState(false)
 
   // Mirror of the latest view for imperative reads (pointer drag start).
   const viewRef = useRef(view)
@@ -138,19 +143,16 @@ export default function Preview({
     return () => ro.disconnect()
   }, [fit])
 
-  // Track fullscreen state (via the Fullscreen API on the viewport element).
+  // Escape leaves the maximized view, matching what real fullscreen did. Safe to
+  // bind here: the preview pane has no other Escape behaviour of its own.
   useEffect(() => {
-    const onChange = () => {
-      const fs = document.fullscreenElement === viewportRef.current
-      setIsFullscreen(fs)
-      // Give layout a tick to settle, then refit to the new size.
-      requestAnimationFrame(() => {
-        if (!interactedRef.current) fit()
-      })
+    if (!isMaximized) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsMaximized(false)
     }
-    document.addEventListener('fullscreenchange', onChange)
-    return () => document.removeEventListener('fullscreenchange', onChange)
-  }, [fit])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isMaximized])
 
   /** Zoom by `factor` keeping the point (cx, cy) in viewport space fixed. */
   const zoomAt = useCallback((cx: number, cy: number, factor: number) => {
@@ -217,17 +219,15 @@ export default function Preview({
     }
   }, [])
 
-  const toggleFullscreen = useCallback(() => {
-    const vp = viewportRef.current
-    if (!vp) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void vp.requestFullscreen()
-  }, [])
+  const toggleMaximized = useCallback(() => setIsMaximized((v) => !v), [])
 
   return (
     <div
       ref={viewportRef}
-      className="preview-zoom relative h-full w-full overflow-hidden"
+      className={cn(
+        'preview-zoom relative overflow-hidden',
+        isMaximized ? 'fixed inset-0 z-50 h-screen w-screen' : 'h-full w-full',
+      )}
       style={wrapperStyle}
     >
       {!result ? null : result.ok ? (
@@ -288,10 +288,10 @@ export default function Preview({
             <Button
               size="icon-xs"
               variant="ghost"
-              onClick={toggleFullscreen}
-              title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+              onClick={toggleMaximized}
+              title={isMaximized ? 'Exit full window (Esc)' : 'Fill window'}
             >
-              {isFullscreen ? <Minimize2 /> : <Maximize2 />}
+              {isMaximized ? <Minimize2 /> : <Maximize2 />}
             </Button>
           </div>
         </>
