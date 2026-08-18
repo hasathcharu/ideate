@@ -228,6 +228,17 @@ fences that fail to parse. Hence the prose runs are wrapped in `.md-prose-run`,
 which is `display: contents` so its children still lay out and match the
 `.md-prose > *` selectors as if they were direct children.
 
+**A maximized viewport must be opaque.** "Fill window" turns the box into a
+`fixed inset-0` overlay, so whatever `background` resolves to becomes the whole
+screen — and an *omitted* background (the natural value for an inline figure that
+should show the document through it) left the editor and prose visible around the
+diagram. `DiagramViewport` therefore substitutes an opaque fallback whenever it is
+maximized with no background (or `'transparent'`), and `Preview`/`MarkdownPreview`
+each resolve one surface color that they use for their own pane *and* hand to the
+diagrams on it, so the two can't disagree. The fallback is white, not
+`var(--background)`: an untuned diagram uses mermaid's dark-on-light default
+palette and would be unreadable on a dark surface.
+
 `DiagramViewport`'s one behavioral fork is the wheel: full-pane zooms on a bare
 wheel, embedded requires Ctrl/⌘ (the platform zoom modifier, and what a trackpad
 pinch reports). An embedded diagram sits inside a scrolling document, so trapping

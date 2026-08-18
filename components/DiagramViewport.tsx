@@ -36,6 +36,12 @@ const EMBEDDED_FIT_PADDING = 12
 const EMBEDDED_MIN_HEIGHT = 120
 const EMBEDDED_MAX_HEIGHT = 460
 
+/** Painted behind a maximized diagram when the caller asked for no background at
+ *  all. White rather than `var(--background)` because an untuned diagram renders
+ *  in mermaid's own dark-on-light default palette, which would be unreadable on a
+ *  dark surface — the same resolution `Preview` and `MarkdownPreview` apply. */
+const OPAQUE_FALLBACK = '#ffffff'
+
 function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
 }
@@ -43,7 +49,9 @@ function clampScale(s: number): number {
 export interface DiagramViewportProps {
   /** Rendered mermaid SVG markup. */
   svg: string
-  /** Painted behind the diagram — also fills the screen when maximized. */
+  /** Painted behind the diagram — also fills the screen when maximized. May be
+   *  omitted (or `'transparent'`) for an inline figure that should show the
+   *  document through it; maximizing then falls back to {@link OPAQUE_FALLBACK}. */
   background?: string
   /** `pane` fills its parent (the editor's preview pane); `embedded` derives its
    *  height from the diagram and sits inline in a document. */
@@ -214,8 +222,15 @@ export default function DiagramViewport({
     }
   }, [])
 
+  // A maximized viewport is a `fixed inset-0` overlay covering the whole window,
+  // so it has to be opaque no matter what the caller asked for. Left transparent
+  // (which is what an omitted `background` produced) the editor, the prose and
+  // the rest of the page stayed visible around and behind the diagram.
+  const surface =
+    isMaximized && (!background || background === 'transparent') ? OPAQUE_FALLBACK : background
+
   const boxStyle: CSSProperties = {}
-  if (background) boxStyle.background = background
+  if (surface) boxStyle.background = surface
   if (isEmbedded && !isMaximized) {
     boxStyle.height = Math.min(
       EMBEDDED_MAX_HEIGHT,

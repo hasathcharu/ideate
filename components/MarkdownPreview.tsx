@@ -65,9 +65,12 @@ export default function MarkdownPreview({
       ? config.themeVariables.background
       : undefined
 
-  const wrapperStyle: CSSProperties = {
-    background: paintBackground ? (themeBackground ?? '#ffffff') : 'transparent',
-  }
+  // One resolved surface color for the whole pane — the document behind the prose
+  // and the box behind each embedded diagram. Resolving it here (rather than
+  // handing `DiagramViewport` a possibly-undefined theme color) is what keeps a
+  // maximized diagram opaque; the two can no longer disagree about the surface.
+  const surface = paintBackground ? (themeBackground ?? '#ffffff') : 'transparent'
+  const wrapperStyle: CSSProperties = { background: surface }
 
   const isEmpty = !text.trim()
 
@@ -98,7 +101,7 @@ export default function MarkdownPreview({
                     className="md-mermaid"
                     svg={part.svg}
                     variant="embedded"
-                    background={themeBackground}
+                    background={surface}
                   />
                 ) : (
                   <div
