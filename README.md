@@ -5,14 +5,18 @@ There is no application database. You sign in with GitHub, connect a repo, edit
 diagrams, export to PNG/SVG, and commit your work straight to the repo. Every
 diagram's commit history doubles as its version history.
 
-Two kinds of diagram live side by side in the same repo, chosen by file extension:
+Three kinds of document live side by side in the same repo, chosen by file
+extension:
 
-- **Mermaid** (`.md`, `.mmd`, `.mermaid`) — text, in a split-pane editor with a
-  live preview.
+- **Mermaid** (`.mmd`, `.mermaid`) — diagram source, in a split-pane editor with
+  a live preview.
+- **Markdown** (`.md`, `.markdown`) — prose, in the same split-pane editor with a
+  rendered preview. Any ` ```mermaid ` fence renders inline as a themed diagram,
+  while the file on disk stays plain markdown that GitHub renders too.
 - **Excalidraw** (`.excalidraw`) — a hand-drawn-style canvas, using the real
   Excalidraw editor.
 
-Because an `.excalidraw` file is just JSON, both kinds ride the same git flow:
+Because an `.excalidraw` file is just JSON, all three ride the same git flow:
 open, commit, rename, delete, branch, diff, version history.
 
 ## Mental model
@@ -37,12 +41,13 @@ open, commit, rename, delete, branch, diff, version history.
   to match; switch the layout engine between Dagre and ELK. The canvas follows the
   same palette — background, editor chrome, and light/dark mode all derived from
   the active theme, so it doesn't look like an embedded third-party widget.
-- **Export** to SVG and PNG (high-DPI raster) for both kinds, with a choice of
-  background (white / black / transparent / the theme's own). Downloads stand
-  alone: mermaid bakes literal colors into its SVG, and Excalidraw inlines the
-  fonts it used. PNG resolution scales with the diagram so small drawings still
-  export sharp. Source export too — mermaid with the config baked in as
-  frontmatter, or the raw `.excalidraw` scene.
+- **Export** to SVG and PNG (high-DPI raster) for diagrams and canvases, with a
+  choice of background (white / black / transparent / the theme's own). Downloads
+  stand alone: mermaid bakes literal colors into its SVG, and Excalidraw inlines
+  the fonts it used. PNG resolution scales with the diagram so small drawings
+  still export sharp. Source export too — mermaid with the config baked in as
+  frontmatter, or the raw `.excalidraw` scene. Markdown exports as markdown —
+  the document verbatim, so what leaves matches what's in the repo.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   to whichever branch is selected. Access is scoped by a **GitHub App
   installation** — the picker lists only the repositories you chose to share, and
@@ -179,9 +184,9 @@ Open <http://localhost:3000>. You land on a start page with two choices:
 
 The whole UI recolors to match the selected diagram theme (built with Tailwind v4
 + shadcn/ui). The file-tree sidebar is collapsible and marks each file with its
-kind; the **+** buttons (at the root or on any folder) let you start either a
-mermaid diagram or a canvas. Exports can be downloaded or copied to the clipboard
-(SVG/PNG), and either surface can be expanded to fill the browser window.
+kind; the **+** buttons (at the root or on any folder) let you start a mermaid
+diagram, a markdown document or a canvas. Exports can be downloaded or copied to
+the clipboard, and any surface can be expanded to fill the browser window.
 
 ## Scripts
 

@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import type { FileCommit } from '@/lib/types'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import Preview from './Preview'
+import MarkdownPreview from './MarkdownPreview'
 import Canvas from './Canvas'
 import type { FileKind } from '@/lib/tree'
 import { cn } from '@/lib/utils'
@@ -41,7 +42,7 @@ export interface HistoryPanelProps {
   versionLoading: boolean
   config: MermaidUserConfig | null
   /** Which renderer previews a selected version — scenes get a read-only canvas
-   *  rather than the mermaid preview. */
+   *  and markdown its document preview, rather than the mermaid preview. */
   kind: FileKind
   /** Light/dark mode for the read-only canvas, derived from the active theme. */
   canvasTheme: 'light' | 'dark'
@@ -222,13 +223,19 @@ export default function HistoryPanel({
                       backgroundColor={canvasBackground}
                       viewMode
                     />
+                  ) : kind === 'markdown' ? (
+                    <MarkdownPreview text={versionContent} config={config} />
                   ) : (
                     <Preview text={versionContent} config={config} />
                   )}
                 </div>
                 <div className="flex justify-end gap-2 border-t p-3">
                   <Button variant="secondary" onClick={onFork}>
-                    {kind === 'excalidraw' ? 'Create new canvas from this' : 'Create new diagram from this'}
+                    {kind === 'excalidraw'
+                      ? 'Create new canvas from this'
+                      : kind === 'markdown'
+                        ? 'Create new document from this'
+                        : 'Create new diagram from this'}
                   </Button>
                   <Button onClick={onRecover}>Recover to working tree</Button>
                 </div>

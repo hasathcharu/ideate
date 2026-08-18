@@ -9,14 +9,21 @@ no app database. localStorage holds the uncommitted working copy; GitHub holds t
 committed state, on whichever branch is currently selected. Save = commit; open
 old version = checkout.
 
-Two kinds of document, decided purely by file extension (`fileKind` in
+Three kinds of document, decided purely by file extension (`fileKind` in
 `lib/tree.ts`):
 
-- **Mermaid** (`.md` / `.mmd` / `.mermaid`) — text, edited in CodeMirror beside a
-  live rendered preview.
+- **Mermaid** (`.mmd` / `.mermaid`) — pure diagram source, edited in CodeMirror
+  beside a live rendered diagram.
+- **Markdown** (`.md` / `.markdown`) — a prose document, edited in CodeMirror
+  beside rendered HTML. Any ```mermaid fence inside it renders as a themed
+  diagram (`lib/markdown.ts`).
 - **Excalidraw** (`.excalidraw`) — a JSON scene, edited on a full-bleed canvas.
 
-Both are plain text on disk, which is why they share *every* GitHub path
+`.md` is **markdown, not mermaid**. A `.md` file holding bare mermaid source
+(how this app treated the extension before markdown support) now renders as a
+paragraph of text — wrap it in a ```mermaid fence or rename it to `.mmd`.
+
+All three are plain text on disk, which is why they share *every* GitHub path
 (read/commit/rename/delete/history/conflicts) with no branching. Only the editing
 surface and the export pipeline differ.
 
@@ -89,8 +96,6 @@ surface and the export pipeline differ.
 
 ## UI stack
 
-Tailwind CSS v4 + shadcn/ui (Radix, `components/ui/*`) + lucide-react. `cn()` is in
-`lib/utils.ts`. Global tokens + `@theme inline` mapping live in `app/globals.css`.
 Prefer shadcn primitives and Tailwind utilities over bespoke CSS.
 
 ## Routing / modes
@@ -104,12 +109,28 @@ Prefer shadcn primitives and Tailwind utilities over bespoke CSS.
 
 With a file open, its extension picks the editing surface. With nothing open —
 local mode, or before picking a file — there is no extension to read, so the user
-chooses via a Diagram/Canvas toggle backed by `AppConfig.scratchKind`. **Each kind
-gets its own localStorage draft slot** (`SCRATCH_DOC_ID` /
-`SCRATCH_SCENE_DOC_ID`), so toggling parks the current work instead of overwriting
-it with incompatible content. Anything that forces mermaid content into the scratch
-doc (`showRepoStartState`, `resetForRepoSwitch`, `detachEditor`) also resets
-`scratchKind` to `'mermaid'`.
+chooses via a Diagram/Markdown/Canvas toggle backed by `AppConfig.scratchKind`.
+**Each kind gets its own localStorage draft slot** (`SCRATCH_DOC_ID` /
+`SCRATCH_MARKDOWN_DOC_ID` / `SCRATCH_SCENE_DOC_ID`, resolved through
+`scratchDocIdFor`), so toggling parks the current work instead of overwriting it
+with content the other surface can't read. Route every scratch-slot lookup through
+`scratchDocIdFor` rather than re-deriving it — a fourth kind must not be able to
+silently land in another kind's slot. Anything that forces mermaid content into the
+scratch doc (`showRepoStartState`, `resetForRepoSwitch`, `detachEditor`) also
+resets `scratchKind` to `'mermaid'`.
+
+### Selecting a repository is a precondition, not a setting
+
+Signed in with `config.repo === null` the app can do nothing — no tree, no open,
+no commit — so `AppShell` opens `RepoPicker` automatically once per mount rather
+than leaving an inert editor on screen. It is a ref-guarded one-shot, so
+dismissing it to use the local scratch document doesn't reopen it immediately.
+
+A **fresh sign-in always clears the stored repository**: `loginWithGitHub`
+redirects to `/editor?connect=1`, and the hydration effect consumes that flag,
+nulls `repo`, persists it, and strips the param via `history.replaceState`.
+Stripping matters — without it a reload (or a shared link) would wipe the
+selection the user just made. `?mode=local` never carries the flag.
 
 ## Auth
 
@@ -141,59 +162,17 @@ may touch at install time and can change that later. Consequences to keep in min
   `GITHUB_APP_INSTALL_URL` in `lib/config.ts`) builds the install links. It's the
   App's public URL name, not a secret.
 
-## Layout
+## Non-obvious file facts
 
-```
-auth.ts                     NextAuth v5 config (GitHub App); lazy per-request
-                            config + the token-refresh implementation
-proxy.ts                    Next 16 request hook (the old `middleware.ts`
-                            convention); `export { auth as proxy }` — the ONLY
-                            place the refreshed token is written to the cookie.
-                            Never redirects; local mode passes straight through
-app/
-  layout.tsx                fonts + TooltipProvider + <Toaster/> (sonner)
-  page.tsx                  landing; editor/page.tsx gates on auth + mode
-  globals.css               shadcn tokens, @theme inline, minimal custom CSS;
-                            also maps the palette onto Excalidraw's own CSS vars
-                            and hides its main menu (see "Rendering & theming")
-  api/auth/[...nextauth]/    Auth.js route handlers
-  actions/{auth,github}.ts  server actions (github.ts = ALL GitHub I/O)
-components/
-  ui/                       shadcn components (incl. skeleton.tsx, used by the
-                            file tree / repo list / commit list loading states)
-  AppShell.tsx              orchestrator; collapsible sidebar; controlled modals
-  Canvas.tsx                dynamic-import shim: ssr:false + sets
-                            window.EXCALIDRAW_ASSET_PATH before the chunk loads
-  CanvasInner.tsx           the real Excalidraw editor — the ONLY module that may
-                            import the library's component/CSS (rule 8)
-  NewFileMenu.tsx           mermaid-vs-canvas picker, shared by the sidebar's root
-                            "+" and every folder's "+"
-  Editor, Preview, Landing, ExportMenu, RepoPicker, BranchPicker, FileTree,
-  ConflictModal, ConfigModal, DeleteModal, PromptModal, HistoryPanel,
-  AuthButton, icons.tsx     (icons.tsx also ships the Mermaid + Excalidraw brand
-                            marks, taken from each project's own favicon)
-lib/
-  session.server.ts         server-only token reader (import 'server-only');
-                            PURE reader — no refresh, no cookie writes
-  mermaid.ts                official-mermaid init + async render (renderToSvg / renderPreview)
-  mermaidConfig.ts          global YAML config: parse, layout/theme YAML editing,
-                            applyThemeToSite; also resolveThemeMode /
-                            themeBackgroundColor / isDarkColor (the color math the
-                            canvas + scene export read)
-  excalidraw.ts             scene parse + semantic comparison (rule 9). NO value
-                            imports from @excalidraw/excalidraw (rule 8)
-  exportScene.ts            scene SVG/PNG/JSON export; loads the library lazily
-  themes.ts                 preset theme palettes (THEME_PRESETS) for the theme dropdown
-  export.ts                 standalone SVG + SVG/PNG download & copy; owns
-                            rasterScale(), shared with the scene exporter
-  config.ts                 app name / repo URL / commit sha / GitHub App slug
-  tree.ts, storage.ts, hooks.ts, types.ts
-scripts/
-  vendor-excalidraw-assets.mjs
-                            copies Excalidraw's fonts into public/ on install and
-                            build so nothing is fetched from a CDN at runtime.
-                            Output is gitignored and regenerated
-```
+- `proxy.ts` — Next 16 request hook (the old `middleware.ts` convention);
+  `export { auth as proxy }`. Never redirects; local mode passes straight through.
+- `components/Canvas.tsx` — sets `window.EXCALIDRAW_ASSET_PATH` *before* the
+  lazy chunk loads; ordering matters.
+- `components/icons.tsx` — ships the Mermaid, Markdown and Excalidraw brand
+  marks taken from each project's own favicon, normalized to bare filled glyphs
+  in `currentColor`: no badge, no brand hue, so the three read as one family and
+  follow the active theme.
+- `app/actions/github.ts` — ALL GitHub I/O.
 
 ## Rendering & theming
 
@@ -216,6 +195,54 @@ every diagram render **and** recolors the app chrome, via `applyThemeToSite`
 mapping the diagram palette onto the shadcn CSS custom properties on `<body>`.
 `app/globals.css`'s `:root`/`.dark` blocks are only the fallback palette used
 when no theme is set — they are not fixed/static in practice.
+
+### Markdown documents borrow the same config
+
+A ```mermaid fence inside a `.md` renders through the very same `renderToSvg` and
+the very same global config, so an embedded diagram is themed identically to a
+standalone one — the Theme *and* Layout dropdowns and the config cogwheel all stay
+visible for markdown for exactly that reason (`kind !== 'excalidraw'` in
+`AppShell.tsx`). **The config is injected at render time and never written into
+the document**: the file in the repo holds bare ```mermaid fences, which is what
+lets GitHub render it too. Only the "Markdown + Theme" export bakes it in, into a
+copy.
+
+Embedded diagrams get the same zoom/pan/fit controls as the diagram pane, because
+they are literally the same component. To make that possible `renderMarkdown`
+returns a **list of parts** (`MarkdownPart[]`) rather than one HTML string:
+`MarkdownPreview` renders each prose run as a `dangerouslySetInnerHTML` div and
+each diagram as a real `DiagramViewport` sibling, so React owns every diagram
+outright.
+
+**Do not go back to portaling a viewport into a node that innerHTML created.**
+That was tried and it fails: React replaces the whole subtree when the HTML
+changes, so the portal keeps rendering into a node it has already detached — the
+SVG lands in an orphan and the document shows an empty box. The bug is invisible
+to typecheck and only reproduces on re-render.
+
+Splitting is only legal at `token.level === 0`. A fence nested in a list item or
+blockquote sits between an unclosed `<ul>`/`<blockquote>` and its closing tag, so
+cutting there would produce two fragments of invalid HTML — those stay **inline**
+as plain SVG (rendered and themed identically, just without zoom controls), as do
+fences that fail to parse. Hence the prose runs are wrapped in `.md-prose-run`,
+which is `display: contents` so its children still lay out and match the
+`.md-prose > *` selectors as if they were direct children.
+
+`DiagramViewport`'s one behavioral fork is the wheel: full-pane zooms on a bare
+wheel, embedded requires Ctrl/⌘ (the platform zoom modifier, and what a trackpad
+pinch reports). An embedded diagram sits inside a scrolling document, so trapping
+a bare wheel would turn every diagram into a scroll dead-zone. Maximized, an
+embedded figure owns the screen and reverts to bare-wheel zoom.
+
+The prose itself is styled by `.md-prose` in `app/globals.css`, written against
+the shadcn tokens rather than literal colors, so a rendered document follows
+`applyThemeToSite` like the rest of the chrome. markdown-it runs with
+`html: false` — raw HTML in the source is escaped, not passed through, which is
+what keeps this safe without a separate sanitizer; the only markup reaching the
+DOM is markdown-it's own output plus mermaid's SVG. Diagrams render
+**sequentially**, not through `Promise.all`: mermaid re-`initialize()`s one global
+instance and measures against the live DOM, so overlapping renders are a race with
+nothing to gain.
 
 ### The canvas follows the same palette
 
@@ -248,6 +275,28 @@ Three pieces make the canvas look like part of the app rather than an embed:
   `dropdown-menu-button`, and not that `data-testid`, both of which the toolbar's
   "More tools" trigger also carries. Matching on those hides the frame/embed/laser
   tools instead of the menu.
+- **Right-click menu restyled.** Excalidraw's context menu is its own component, so
+  it can't be swapped for `components/ui/dropdown-menu.tsx` — `globals.css` instead
+  `@apply`s the very same utilities `DropdownMenuContent`/`Item`/`Separator` use, so
+  the two can't drift apart. Remapping variables wasn't enough here: it hardcodes a
+  `#adb5bd` separator, `#f03e3e` danger text and a `--button-gray-3` border, and its
+  hover *inverts* (highlight fill + popup-colored text) where shadcn tints.
+
+**The read-only preview strips what's left.** A `viewMode` canvas (the history
+panel's version preview) gets `canvas-host--view-mode`, which hides
+`.App-menu_bottom` (zoom + help) and `.App-bottom-bar`. Two traps live here:
+
+- Excalidraw switches to its **mobile** layout below ~730px, and the history sheet's
+  preview pane is narrower than that — so `.App-bottom-bar` appears, holding nothing
+  in view mode, and reads as an empty white card over the drawing.
+- Unlike the other menus, `.App-bottom-bar` is a direct child of `.excalidraw`, not
+  of `.layer-ui__wrapper`, so a selector aimed at the menu containers misses it.
+
+Both rules must stay scoped to view mode: while *editing* at a narrow width,
+`.App-bottom-bar` is where the mobile property panel lives. `renderTopRightUI` (the
+fill-window button) is omitted in view mode too — that preview sits inside the
+history sheet, so filling the window would cover the sheet that opened it and leave
+the button as the only way back.
 
 `CanvasInner.tsx` also imposes `exportScale: 3` (Excalidraw's own maximum) so its
 built-in right-click "Copy as PNG" isn't left at the display's `devicePixelRatio`,
@@ -265,6 +314,18 @@ color). Both exporters (SVG / PNG) share the single `resolveStandaloneSvg` step;
 PNG rasterizes it via `Image` → `<canvas>`. Exporting the mermaid source
 (`exportSource`/`copySource`) bakes the global YAML config in as a real
 frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
+
+### Markdown exports the source, not a rendering
+
+A markdown document already *is* the portable artifact — GitHub and every other
+renderer draw the ```mermaid fences themselves — so there is no render step and no
+image format. The menu offers a single **Markdown** row (download + copy) that
+emits the document verbatim. The background swatches are hidden for markdown: the
+output is text, so there is no surface to paint.
+
+Deliberately *no* theme-baking variant: the theme is a render-time concern, and
+an export that rewrote every fence to carry `themeVariables` would hand the user
+a file that no longer matches what is in their repo.
 
 PNG resolution comes from `rasterScale(width, height)` (`lib/export.ts`), shared by
 both exporters so the two formats don't differ in density. It is size-aware on
@@ -313,6 +374,13 @@ records (rule 10).
   delay window — which rendered mermaid's parse-error dump for the scene JSON on
   every canvas→diagram switch, and wrote the previous file's text into the new
   file's localStorage draft slot.
+- **The scratch/file draft is written only while the document is dirty**, and
+  cleared the moment it isn't (the autosave effect in `AppShell`). Saving
+  unconditionally persisted the auto-inserted starter template as a draft as soon
+  as it was displayed; that draft then won on every later load, so anyone who had
+  merely *opened* a scratch document was pinned to the template text of that day
+  and edits to `templateFor` never reached them. Keep the `dirty` gate on any new
+  autosave path.
 - **`refreshTree` never blanks the list.** Discarding the stale list is the caller's
   decision, and only the first load and a repo/branch switch
   (`resetForRepoSwitch`) want it; the incidental refreshes after a
@@ -328,6 +396,13 @@ records (rule 10).
 ```bash
 npm run typecheck && npm run build
 ```
+
+Excalidraw chrome that only appears in a particular state is easy to get wrong from
+a CSS grep alone (both the main-menu and bottom-bar selectors were wrong on the first
+attempt). Reproduce the state instead: resize the viewport below ~730px to force the
+mobile layout, and toggle `canvas-host--view-mode` on the live host element from the
+console to test view-mode rules — neither needs a connected repo, so both are
+reachable in `?mode=local`.
 
 `build` and `dev` both run `vendor:excalidraw` first, and it also runs on
 `postinstall`, so `public/excalidraw-assets/` is always present and current. It's

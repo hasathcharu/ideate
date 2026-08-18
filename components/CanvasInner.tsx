@@ -242,6 +242,11 @@ export default function CanvasInner({
       ref={hostRef}
       className={cn(
         'canvas-host relative bg-background',
+        // Marks the read-only preview so globals.css can strip Excalidraw's
+        // remaining chrome — `viewModeEnabled` hides the toolbar and panels but
+        // leaves the bottom zoom/help island, an opaque card that reads as a stray
+        // white box over a history preview.
+        viewMode && 'canvas-host--view-mode',
         isMaximized ? 'fixed inset-0 z-50 h-screen w-screen' : 'size-full',
       )}
       // The canvas above this is cleared to transparent, so this is what actually
@@ -277,17 +282,24 @@ export default function CanvasInner({
                 },
               }
         }
-        renderTopRightUI={() => (
-          <button
-            type="button"
-            className="canvas-fullscreen-button"
-            onClick={toggleMaximized}
-            title={isMaximized ? 'Exit full window' : 'Fill window'}
-            aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
-          >
-            {isMaximized ? <Minimize2 /> : <Maximize2 />}
-          </button>
-        )}
+        // Omitted in the read-only preview: it lives inside the history sheet, so
+        // filling the window would cover the sheet that opened it, leaving this
+        // button as the only way back.
+        renderTopRightUI={
+          viewMode
+            ? undefined
+            : () => (
+                <button
+                  type="button"
+                  className="canvas-fullscreen-button"
+                  onClick={toggleMaximized}
+                  title={isMaximized ? 'Exit full window' : 'Fill window'}
+                  aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
+                >
+                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                </button>
+              )
+        }
         onChange={viewMode ? undefined : handleChange}
         theme={theme}
         viewModeEnabled={viewMode}

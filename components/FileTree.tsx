@@ -2,7 +2,7 @@
 
 import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
 import NewFileMenu from './NewFileMenu'
-import { ExcalidrawIcon, MermaidIcon } from './icons'
+import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { DIAGRAM_EXTENSIONS, fileKind, type FileKind } from '@/lib/tree'
@@ -17,7 +17,8 @@ const ICON_ACTION_CLASS =
  *  picker and the resulting file read as the same thing. Full opacity, unlike the
  *  generic glyph it replaced — these carry brand color, so dimming them muddies it. */
 function FileKindIcon({ kind }: { kind: FileKind }) {
-  const Icon = kind === 'excalidraw' ? ExcalidrawIcon : MermaidIcon
+  const Icon =
+    kind === 'excalidraw' ? ExcalidrawIcon : kind === 'markdown' ? MarkdownIcon : MermaidIcon
   return <Icon className="size-3.5 shrink-0" />
 }
 

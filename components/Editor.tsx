@@ -21,7 +21,9 @@ import {
   HighlightStyle,
   syntaxHighlighting,
 } from '@codemirror/language'
+import { markdown as markdownLanguage } from '@codemirror/lang-markdown'
 import { tags as t } from '@lezer/highlight'
+import type { FileKind } from '@/lib/tree'
 
 /** A small stream tokenizer that gives Mermaid source enough structure to read
  *  well in the editor. Not a full grammar — just keywords, arrows, labels. */
@@ -66,7 +68,27 @@ function highlightStyle(): HighlightStyle {
     { tag: [t.atom, t.bool], color: blend(40) },
     { tag: t.number, color: blend(40) },
     { tag: t.variableName, color: 'var(--foreground)' },
+    // Markdown tags. The mermaid tokenizer never emits these and the markdown
+    // parser never emits most of the ones above, so one style serves both
+    // languages and the two surfaces stay visually consistent.
+    { tag: t.heading, color: accent, fontWeight: '700' },
+    { tag: t.strong, color: 'var(--foreground)', fontWeight: '700' },
+    { tag: t.emphasis, color: 'var(--foreground)', fontStyle: 'italic' },
+    { tag: t.strikethrough, textDecoration: 'line-through' },
+    { tag: [t.link, t.url], color: blend(55), textDecoration: 'underline' },
+    { tag: t.monospace, color: blend(55) },
+    { tag: t.quote, color: 'var(--muted-foreground)', fontStyle: 'italic' },
+    { tag: t.list, color: accent },
+    // The syntax marks themselves (`#`, `*`, list bullets, fence delimiters) —
+    // muted so the prose they wrap stays the thing you read.
+    { tag: [t.processingInstruction, t.contentSeparator], color: 'var(--muted-foreground)' },
   ])
+}
+
+/** The language extension for a document kind. Excalidraw never reaches the text
+ *  editor (it has its own canvas), so its scene JSON has no entry here. */
+function languageFor(kind: FileKind) {
+  return kind === 'markdown' ? markdownLanguage() : mermaidLanguage
 }
 
 /* Inline icons for the custom search panel (CodeMirror DOM is not React, so we
@@ -363,15 +385,21 @@ export interface EditorProps {
   value: string
   onChange: (value: string) => void
   dark: boolean
+  /** Which grammar to highlight with. Mermaid source and markdown prose share
+   *  this one editor, so the language is swapped through a compartment rather
+   *  than by remounting — a remount would drop undo history and cursor position
+   *  on every file switch. */
+  kind?: FileKind
 }
 
-export default function Editor({ value, onChange, dark }: EditorProps) {
+export default function Editor({ value, onChange, dark, kind = 'mermaid' }: EditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
   const lastValueRef = useRef(value)
   const themeCompartment = useRef(new Compartment())
   const highlightCompartment = useRef(new Compartment())
+  const languageCompartment = useRef(new Compartment())
 
   onChangeRef.current = onChange
 
@@ -386,7 +414,7 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
           basicSetup,
           search({ top: true, createPanel: createSearchPanel }),
           keymap.of([indentWithTab, { key: 'Mod-/', run: toggleComment }]),
-          mermaidLanguage,
+          languageCompartment.current.of(languageFor(kind)),
           themeCompartment.current.of(editorTheme(dark)),
           highlightCompartment.current.of(
             syntaxHighlighting(highlightStyle()),
@@ -420,6 +448,16 @@ export default function Editor({ value, onChange, dark }: EditorProps) {
       changes: { from: 0, to: view.state.doc.length, insert: value },
     })
   }, [value])
+
+  // Swap the grammar when the open document's kind changes (e.g. opening a .md
+  // after a .mmd), without tearing down the editor.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({
+      effects: languageCompartment.current.reconfigure(languageFor(kind)),
+    })
+  }, [kind])
 
   // React to light/dark switches without remounting. The highlight style is
   // CSS-variable based (reads :root tokens), so only the editor theme — which

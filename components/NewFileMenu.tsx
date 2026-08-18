@@ -6,7 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { ExcalidrawIcon, MermaidIcon } from './icons'
+import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import type { FileKind } from '@/lib/tree'
 
 export interface NewFileMenuProps {
@@ -36,6 +36,9 @@ export default function NewFileMenu({ onSelect, children }: NewFileMenuProps) {
       <DropdownMenuContent align="start" className="min-w-52">
         <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('mermaid')}>
           <MermaidIcon /> Mermaid diagram
+        </DropdownMenuItem>
+        <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('markdown')}>
+          <MarkdownIcon /> Markdown document
         </DropdownMenuItem>
         <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('excalidraw')}>
           <ExcalidrawIcon /> Excalidraw canvas

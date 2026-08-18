@@ -4,9 +4,11 @@ import { useState, type CSSProperties } from 'react'
 import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
+  copyMarkdownSource,
   copyPNG,
   copySource,
   copySVG,
+  exportMarkdownSource,
   exportPNG,
   exportSource,
   exportSVG,
@@ -89,6 +91,7 @@ export default function ExportMenu({
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const isScene = kind === 'excalidraw'
+  const isMarkdown = kind === 'markdown'
   const disabled = !text.trim()
 
   const run = async (key: string, label: string, fn: () => Promise<void>) => {
@@ -157,33 +160,51 @@ export default function ExportMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>{isScene ? 'Export canvas' : 'Export diagram'}</DropdownMenuLabel>
-        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-          <span className="text-sm">Background</span>
-          <div className="flex items-center gap-1.5">
-            {BACKGROUND_OPTIONS.map((opt) => (
-              <Tooltip key={opt.value}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={opt.label}
-                    aria-pressed={background === opt.value}
-                    onClick={() => onBackgroundChange(opt.value)}
-                    className={cn(
-                      'size-6 rounded-md border border-input transition-shadow',
-                      background === opt.value &&
-                        'ring-2 ring-primary ring-offset-1 ring-offset-popover',
-                    )}
-                    style={swatchStyle(opt.value, themeBg)}
-                  />
-                </TooltipTrigger>
-                <TooltipContent>{opt.label}</TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-        <DropdownMenuSeparator />
-        {isScene ? (
+        <DropdownMenuLabel>
+          {isScene ? 'Export canvas' : isMarkdown ? 'Export document' : 'Export diagram'}
+        </DropdownMenuLabel>
+        {/* Both markdown exports are the source text itself, and text has no
+            background to paint — the swatches would be a control that changes
+            nothing. The preview still paints the theme background on screen. */}
+        {isMarkdown ? null : (
+          <>
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <span className="text-sm">Background</span>
+              <div className="flex items-center gap-1.5">
+                {BACKGROUND_OPTIONS.map((opt) => (
+                  <Tooltip key={opt.value}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={opt.label}
+                        aria-pressed={background === opt.value}
+                        onClick={() => onBackgroundChange(opt.value)}
+                        className={cn(
+                          'size-6 rounded-md border border-input transition-shadow',
+                          background === opt.value &&
+                            'ring-2 ring-primary ring-offset-1 ring-offset-popover',
+                        )}
+                        style={swatchStyle(opt.value, themeBg)}
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{opt.label}</TooltipContent>
+                  </Tooltip>
+                ))}
+              </div>
+            </div>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {isMarkdown ? (
+          <>
+            <Row
+              label="Markdown"
+              format="Markdown"
+              onDownload={() => exportMarkdownSource(text, `${name}.md`)}
+              onCopy={() => copyMarkdownSource(text)}
+            />
+          </>
+        ) : isScene ? (
           <>
             <Row
               label="SVG"

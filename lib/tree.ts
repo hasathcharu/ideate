@@ -1,19 +1,32 @@
 import type { TreeNode } from './types'
 
-/** Which editor a file opens in. Mermaid files are text edited beside a rendered
- *  preview; Excalidraw files are JSON scenes edited on a full-bleed canvas. Both
- *  are plain text on disk, so every GitHub read/write path treats them alike —
- *  only the editing surface differs. */
-export type FileKind = 'mermaid' | 'excalidraw'
+/** Which editor a file opens in.
+ *
+ *  - `mermaid` — pure diagram source, edited beside a rendered diagram.
+ *  - `markdown` — a prose document, edited beside rendered HTML. Any
+ *    ```mermaid fence inside it renders as a diagram (see lib/markdown.ts).
+ *  - `excalidraw` — a JSON scene, edited on a full-bleed canvas.
+ *
+ *  All three are plain text on disk, so every GitHub read/write path treats
+ *  them alike — only the editing surface and the export pipeline differ. */
+export type FileKind = 'mermaid' | 'markdown' | 'excalidraw'
 
-/** File extensions treated as Mermaid diagrams. */
-export const MERMAID_EXTENSIONS = ['.md', '.mmd', '.mermaid'] as const
+/** File extensions treated as pure Mermaid diagrams. `.md` is deliberately NOT
+ *  here: it is a markdown document, which may *contain* mermaid fences. */
+export const MERMAID_EXTENSIONS = ['.mmd', '.mermaid'] as const
+
+/** File extensions treated as markdown documents. */
+export const MARKDOWN_EXTENSIONS = ['.md', '.markdown'] as const
 
 /** File extension treated as an Excalidraw scene. */
 export const EXCALIDRAW_EXTENSION = '.excalidraw'
 
-/** Every extension the file tree surfaces, both kinds. */
-export const DIAGRAM_EXTENSIONS = [...MERMAID_EXTENSIONS, EXCALIDRAW_EXTENSION] as const
+/** Every extension the file tree surfaces, across all kinds. */
+export const DIAGRAM_EXTENSIONS = [
+  ...MERMAID_EXTENSIONS,
+  ...MARKDOWN_EXTENSIONS,
+  EXCALIDRAW_EXTENSION,
+] as const
 
 /** Human-readable list of the accepted extensions, for validation messages. */
 export const DIAGRAM_EXTENSIONS_LABEL = DIAGRAM_EXTENSIONS.join(', ')
@@ -27,13 +40,21 @@ export function isExcalidrawFile(path: string): boolean {
   return path.toLowerCase().endsWith(EXCALIDRAW_EXTENSION)
 }
 
+export function isMarkdownFile(path: string): boolean {
+  const lower = path.toLowerCase()
+  return MARKDOWN_EXTENSIONS.some((ext) => lower.endsWith(ext))
+}
+
 /**
  * Which editor `path` opens in. Mermaid is the fallback: an unknown (or absent)
- * extension lands in the text editor, which degrades to "edit the raw text"
- * rather than to a canvas that can't parse the file.
+ * extension lands in the plain text editor, which degrades to "edit the raw
+ * text" rather than to a canvas that can't parse the file.
  */
 export function fileKind(path: string | null): FileKind {
-  return path && isExcalidrawFile(path) ? 'excalidraw' : 'mermaid'
+  if (!path) return 'mermaid'
+  if (isExcalidrawFile(path)) return 'excalidraw'
+  if (isMarkdownFile(path)) return 'markdown'
+  return 'mermaid'
 }
 
 /**

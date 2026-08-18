@@ -262,3 +262,24 @@ export async function exportSource(
 export async function copySource(text: string, configYaml: string): Promise<void> {
   await navigator.clipboard.writeText(buildExportSource(text, configYaml))
 }
+
+/* ------------------------------------------------------------------ */
+/* Markdown documents                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A markdown document exports as itself — there is no render step, because the
+ * file already *is* the portable artifact (GitHub, and every other markdown
+ * renderer, will draw the ```mermaid fences themselves). The theme stays a
+ * render-time concern and never enters the file.
+ */
+
+const MARKDOWN_MIME = 'text/markdown;charset=utf-8'
+
+export async function exportMarkdownSource(text: string, filename: string): Promise<void> {
+  triggerDownload(new Blob([text], { type: MARKDOWN_MIME }), filename)
+}
+
+export async function copyMarkdownSource(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text)
+}

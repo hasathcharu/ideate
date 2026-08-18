@@ -17,6 +17,7 @@ import {
 import { toast } from 'sonner'
 import Editor from './Editor'
 import Preview from './Preview'
+import MarkdownPreview from './MarkdownPreview'
 import Canvas from './Canvas'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
@@ -28,7 +29,7 @@ import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import HistoryPanel from './HistoryPanel'
 import NewFileMenu from './NewFileMenu'
-import { ExcalidrawIcon, MermaidIcon } from './icons'
+import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import ConfigModal from './ConfigModal'
 import MobileWarningModal from './MobileWarningModal'
 import { Button } from '@/components/ui/button'
@@ -64,8 +65,7 @@ import {
   saveDraft,
   clearDraft,
   docIdForFile,
-  SCRATCH_DOC_ID,
-  SCRATCH_SCENE_DOC_ID,
+  scratchDocIdFor,
 } from '@/lib/storage'
 import { APP_NAME } from '@/lib/config'
 import {
@@ -73,7 +73,6 @@ import {
   collectFilePaths,
   fileKind,
   isDiagramFile,
-  isExcalidrawFile,
   DIAGRAM_EXTENSIONS_LABEL,
   EXCALIDRAW_EXTENSION,
   type FileKind,
@@ -106,15 +105,80 @@ const SAMPLE = `flowchart TD
   E --> D
 `
 
-const NEW_TEMPLATE = `flowchart LR
-  A[Start] --> B[End]
+// Starter diagram for a new mermaid file. A worked example rather than a bare
+// `A --> B`: the fastest way to learn the syntax is to edit something that
+// already uses branches, labelled edges and a few node shapes.
+const NEW_TEMPLATE = `flowchart TD
+  A[Idea] --> B{How to capture it?}
+  B -->|Describe it| C[Mermaid diagram]
+  B -->|Draw it| D[Excalidraw canvas]
+  C --> E[Commit to GitHub]
+  D --> E
 `
+
+// Starter markdown document. Deliberately a tour of *markdown* — headings,
+// lists, a checklist, a table, a quote, code — since the diagram kinds already
+// cover diagrams. The mermaid capability gets a one-line prose mention instead
+// of a worked fence, so the sample stays a markdown sample.
+const NEW_MARKDOWN_TEMPLATE = [
+  '# Untitled',
+  '',
+  'Write here — the rendered document appears on the right. A fenced `mermaid`',
+  'code block renders inline as a themed diagram.',
+  '',
+  '## Notes',
+  '',
+  '- A bullet point',
+  '- Another one',
+  '  - And a nested detail',
+  '',
+  '## Checklist',
+  '',
+  '- [x] Something already done',
+  '- [ ] Something still to do',
+  '',
+  '## Reference',
+  '',
+  '| Option | Meaning |',
+  '| --- | --- |',
+  '| First | Does one thing |',
+  '| Second | Does another |',
+  '',
+  '> Use a quote for an aside.',
+  '',
+  'Inline `code`, a [link](https://example.com), and a block:',
+  '',
+  '```ts',
+  'export const answer = 42',
+  '```',
+  '',
+].join('\n')
 
 /** Starter content for a newly created file, by kind. A new Excalidraw file is a
  *  blank scene rather than a sample drawing — there's no equivalent of "example
  *  syntax to edit" on a canvas. */
 function templateFor(kind: FileKind): string {
-  return kind === 'excalidraw' ? EMPTY_SCENE : NEW_TEMPLATE
+  switch (kind) {
+    case 'excalidraw':
+      return EMPTY_SCENE
+    case 'markdown':
+      return NEW_MARKDOWN_TEMPLATE
+    case 'mermaid':
+      return NEW_TEMPLATE
+  }
+}
+
+/** The filename prefilled in a save/create prompt, so the extension always
+ *  matches the content's kind. */
+function defaultFileName(kind: FileKind, base: string): string {
+  switch (kind) {
+    case 'excalidraw':
+      return `${base}${EXCALIDRAW_EXTENSION}`
+    case 'markdown':
+      return `${base}.md`
+    case 'mermaid':
+      return `${base}.mmd`
+  }
 }
 
 // Sentinel Select values for the theme dropdown: "None" strips the theme (revert
@@ -278,10 +342,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // before the user touched it. `scenesEqual` compares the drawing instead.
   const dirty =
     kind === 'excalidraw' ? !scenesEqual(text, baseline) : text !== baseline
-  // Each scratch kind gets its own draft slot, so toggling between diagram and
-  // canvas in local mode parks the current work rather than overwriting it.
-  const scratchDocId =
-    config.scratchKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
+  // Each scratch kind gets its own draft slot, so toggling between diagram,
+  // document and canvas in local mode parks the current work rather than
+  // overwriting it with content the other surface can't read.
+  const scratchDocId = scratchDocIdFor(config.scratchKind)
   const docId =
     repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : scratchDocId
 
@@ -410,7 +474,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [updateConfig])
 
   useEffect(() => {
-    const stored = loadConfig()
+    // `loginWithGitHub` redirects here with `?connect=1`, which marks this
+    // arrival as a fresh sign-in: drop whatever repository was selected before so
+    // the user always picks one after logging in (the auto-open effect below then
+    // shows the picker). The flag is consumed and stripped from the URL right
+    // away, so reloading the page afterwards keeps the new selection.
+    const url = new URL(window.location.href)
+    const freshLogin = githubEnabled && url.searchParams.get('connect') === '1'
+    if (url.searchParams.has('connect')) {
+      url.searchParams.delete('connect')
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+
+    const loaded = loadConfig()
+    const stored = freshLogin ? { ...loaded, repo: null } : loaded
+    if (freshLogin) saveConfig(stored)
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
     setSidebarWidth(stored.sidebarWidth)
@@ -419,9 +497,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // A non-empty scratch draft is unsaved working-copy work — restore it across
     // reloads rather than clobbering it with the start state. Which slot to read
     // depends on the scratch surface the user last had open.
-    const scratchId =
-      stored.scratchKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
-    const draft = loadDraft(scratchId)
+    const draft = loadDraft(scratchDocIdFor(stored.scratchKind))
     const restorable = draft && draft.content.trim().length > 0 ? draft.content : null
 
     if (githubEnabled && stored.repo) {
@@ -436,16 +512,40 @@ export default function AppShell({ user, mode }: AppShellProps) {
     } else if (stored.scratchKind === 'excalidraw') {
       setText(restorable ?? EMPTY_SCENE)
       setBaseline(EMPTY_SCENE)
+    } else if (stored.scratchKind === 'markdown') {
+      setText(restorable ?? NEW_MARKDOWN_TEMPLATE)
+      setBaseline(NEW_MARKDOWN_TEMPLATE)
     } else if (restorable !== null && restorable !== SAMPLE) {
       setText(restorable)
       setBaseline(SAMPLE)
     }
   }, [githubEnabled, refreshTree, showRepoStartState])
 
+  // Signed in with no repository selected, the app can't read, commit or browse
+  // anything — so lead with the picker instead of an inert editor and a hint in
+  // the status bar. Fires once per mount (the ref), so dismissing it to poke at
+  // the local scratch document doesn't immediately reopen it.
+  const repoPickerAutoOpened = useRef(false)
+  useEffect(() => {
+    if (!hydrated || !githubEnabled || config.repo || repoPickerAutoOpened.current) return
+    repoPickerAutoOpened.current = true
+    setRepoPickerOpen(true)
+  }, [hydrated, githubEnabled, config.repo])
+
+  // The draft slot holds *divergence from the committed/starter state*, so it is
+  // written only while the document is dirty and cleared as soon as it isn't.
+  //
+  // Saving unconditionally meant the auto-inserted starter template was itself
+  // persisted as a draft the moment it was shown. That draft then won on every
+  // subsequent load, so a user who had merely *looked* at a scratch document was
+  // pinned to whatever the template said on that day — editing the template here
+  // had no effect on them, forever. Gating on `dirty` also means committing,
+  // restoring or reverting no longer leaves a redundant copy behind.
   useEffect(() => {
     if (!hydrated) return
-    saveDraft(docId, debouncedText)
-  }, [debouncedText, docId, hydrated])
+    if (dirty) saveDraft(docId, debouncedText)
+    else clearDraft(docId)
+  }, [debouncedText, docId, hydrated, dirty])
 
   useEffect(() => {
     if (!dirty) return
@@ -564,8 +664,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     (nextKind: FileKind) => {
       if (openPath || nextKind === config.scratchKind) return
       saveDraft(scratchDocId, text)
-      const nextId = nextKind === 'excalidraw' ? SCRATCH_SCENE_DOC_ID : SCRATCH_DOC_ID
-      const parked = loadDraft(nextId)
+      const parked = loadDraft(scratchDocIdFor(nextKind))
       const fresh = templateFor(nextKind)
       updateConfig({ scratchKind: nextKind })
       setText(parked && parked.content.trim().length > 0 ? parked.content : fresh)
@@ -668,11 +767,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // Root-level create defaults to the repo root (no forced `diagrams/`);
       // a folder's "+" prefills that folder. Either way the user can type any
       // repo-relative path.
-      const suggested = newKind === 'excalidraw' ? `untitled${EXCALIDRAW_EXTENSION}` : 'untitled.mmd'
+      const suggested = defaultFileName(newKind, 'untitled')
       const defaultValue = dirPath ? `${dirPath}/${suggested}` : suggested
       openPrompt({
-        title: newKind === 'excalidraw' ? 'New canvas' : 'New diagram',
-        description: `Create a new diagram file on ${repo.branch}.`,
+        title:
+          newKind === 'excalidraw'
+            ? 'New canvas'
+            : newKind === 'markdown'
+              ? 'New document'
+              : 'New diagram',
+        description: `Create a new file on ${repo.branch}.`,
         label: 'File path',
         defaultValue,
         submitLabel: 'Start editing',
@@ -799,7 +903,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setBaseline(content)
         setLoadedSha(res.data.sha)
         setOpenPath(path)
-        clearDraft(SCRATCH_DOC_ID)
+        // Committing an untitled scratch document promotes it to a real file, so
+        // its parked draft is spent — clear the slot for the kind it came from,
+        // not just the mermaid one.
+        clearDraft(scratchDocId)
         toast.success(`Committed ${path}`)
         void refreshTree(repo)
         return
@@ -807,7 +914,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (res.error.kind === 'conflict') setConflictOpen(true)
       else toast.error(res.error.message)
     },
-    [repo, refreshTree],
+    [repo, refreshTree, scratchDocId],
   )
 
   const onSave = useCallback(() => {
@@ -815,9 +922,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (openPath === null) {
       openPrompt({
         title: 'Save to repository',
-        description: `Choose a path on ${repo.branch} for this diagram.`,
+        description: `Choose a path on ${repo.branch} for this document.`,
         label: 'File path',
-        defaultValue: kind === 'excalidraw' ? `untitled${EXCALIDRAW_EXTENSION}` : 'untitled.mmd',
+        defaultValue: defaultFileName(kind, 'untitled'),
         submitLabel: 'Save',
         validate: validatePathForKind(kind),
         onSubmit: (path) => {
@@ -1012,7 +1119,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       title: 'Create new diagram from this version',
       description: 'Save this version’s content as a separate new file.',
       label: 'New file path',
-      defaultValue: kind === 'excalidraw' ? `copy${EXCALIDRAW_EXTENSION}` : 'copy.mmd',
+      defaultValue: defaultFileName(kind, 'copy'),
       submitLabel: 'Start editing',
       validate: validatePathForKind(kind),
       onSubmit: (path) => {
@@ -1236,30 +1343,43 @@ export default function AppShell({ user, mode }: AppShellProps) {
             ) : (
               <span>Local mode — edits stay in your browser (localStorage).</span>
             )}
+            {/* With no file open there's no extension to infer from, so the user
+                picks the surface. Each kind keeps its own draft, so toggling is
+                non-destructive.
+
+                Deliberately on the LEFT, outside the `ml-auto` group: it only
+                exists while no file is open, and inside that group its appearing
+                and disappearing shunted the theme and layout controls sideways
+                every time a file was opened or closed. */}
+            {!openPath ? (
+              <div className="ml-1 flex items-center gap-0.5 rounded-md border p-0.5">
+                <Button
+                  size="sm"
+                  variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
+                  className="h-6 gap-1 px-2 text-xs"
+                  onClick={() => switchScratchKind('mermaid')}
+                >
+                  <MermaidIcon className="size-3" /> Diagram
+                </Button>
+                <Button
+                  size="sm"
+                  variant={kind === 'markdown' ? 'secondary' : 'ghost'}
+                  className="h-6 gap-1 px-2 text-xs"
+                  onClick={() => switchScratchKind('markdown')}
+                >
+                  <MarkdownIcon className="size-3" /> Markdown
+                </Button>
+                <Button
+                  size="sm"
+                  variant={kind === 'excalidraw' ? 'secondary' : 'ghost'}
+                  className="h-6 gap-1 px-2 text-xs"
+                  onClick={() => switchScratchKind('excalidraw')}
+                >
+                  <ExcalidrawIcon className="size-3" /> Canvas
+                </Button>
+              </div>
+            ) : null}
             <div className="ml-auto flex items-center gap-1.5">
-              {/* With no file open there's no extension to infer from, so the user
-                  picks the surface. Each kind keeps its own draft, so toggling is
-                  non-destructive. */}
-              {!openPath ? (
-                <div className="mr-1 flex items-center gap-0.5 rounded-md border p-0.5">
-                  <Button
-                    size="sm"
-                    variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
-                    className="h-6 gap-1 px-2 text-xs"
-                    onClick={() => switchScratchKind('mermaid')}
-                  >
-                    <MermaidIcon className="size-3" /> Diagram
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={kind === 'excalidraw' ? 'secondary' : 'ghost'}
-                    className="h-6 gap-1 px-2 text-xs"
-                    onClick={() => switchScratchKind('excalidraw')}
-                  >
-                    <ExcalidrawIcon className="size-3" /> Canvas
-                  </Button>
-                </div>
-              ) : null}
               <span className="text-muted-foreground">Theme</span>
               <Select value={currentTheme} onValueChange={applyTheme}>
                 <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
@@ -1309,8 +1429,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
               </Select>
               {/* Layout engine and the mermaid YAML config have no meaning for a
                   canvas. The Theme dropdown above stays, because it still recolors
-                  the app chrome — and drives the canvas's light/dark mode. */}
-              {kind === 'mermaid' ? (
+                  the app chrome — and drives the canvas's light/dark mode.
+                  Markdown keeps both: they drive its embedded ```mermaid fences. */}
+              {kind !== 'excalidraw' ? (
                 <>
                   <span className="text-muted-foreground">Layout</span>
                   <Select
@@ -1367,7 +1488,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
               }}
             >
               <section className="min-h-0 overflow-auto" aria-label="Editor">
-                <Editor value={text} onChange={setText} dark={false} />
+                <Editor value={text} onChange={setText} dark={false} kind={kind} />
               </section>
               <div
                 role="separator"
@@ -1384,10 +1505,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
               </div>
               <section className="min-h-0 overflow-auto" aria-label="Preview">
-                <Preview
-                  text={debouncedText}
-                  config={appliedConfig}
-                />
+                {kind === 'markdown' ? (
+                  <MarkdownPreview text={debouncedText} config={appliedConfig} />
+                ) : (
+                  <Preview text={debouncedText} config={appliedConfig} />
+                )}
               </section>
             </div>
           )}
@@ -1508,11 +1630,15 @@ function validatePathForKind(kind: FileKind): (value: string) => string | null {
   return (value: string) => {
     const base = validatePath(value)
     if (base) return base
-    if (kind === 'excalidraw' && !isExcalidrawFile(value)) {
-      return `This is a canvas — use a ${EXCALIDRAW_EXTENSION} extension.`
-    }
-    if (kind === 'mermaid' && isExcalidrawFile(value)) {
-      return 'This is a Mermaid diagram — use a .md, .mmd, or .mermaid extension.'
+    if (fileKind(value) !== kind) {
+      switch (kind) {
+        case 'excalidraw':
+          return `This is a canvas — use a ${EXCALIDRAW_EXTENSION} extension.`
+        case 'markdown':
+          return 'This is a Markdown document — use a .md or .markdown extension.'
+        case 'mermaid':
+          return 'This is a Mermaid diagram — use a .mmd or .mermaid extension.'
+      }
     }
     return null
   }
