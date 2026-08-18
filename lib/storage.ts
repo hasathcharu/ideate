@@ -1,4 +1,5 @@
 import type { AppConfig } from './types'
+import type { FileKind } from './tree'
 
 /**
  * localStorage is the WORKING COPY: uncommitted drafts + app config only.
@@ -11,6 +12,29 @@ const DRAFT_PREFIX = 'km:draft:'
 
 /** Stable id for the local-only scratch document (before a repo is connected). */
 export const SCRATCH_DOC_ID = 'local:scratch'
+
+/** Scratch slot for an Excalidraw canvas. Deliberately separate from
+ *  `SCRATCH_DOC_ID`: the kinds hold incompatible content, so giving each its
+ *  own draft means toggling between them in local mode preserves all of them
+ *  rather than overwriting one with the other. */
+export const SCRATCH_SCENE_DOC_ID = 'local:scratch-scene'
+
+/** Scratch slot for a markdown document — same reasoning as the scene slot. */
+export const SCRATCH_MARKDOWN_DOC_ID = 'local:scratch-markdown'
+
+/** The scratch draft slot for `kind`. Every caller that parks or restores the
+ *  unsaved scratch document goes through this, so a new kind can never end up
+ *  sharing another kind's slot. */
+export function scratchDocIdFor(kind: FileKind): string {
+  switch (kind) {
+    case 'excalidraw':
+      return SCRATCH_SCENE_DOC_ID
+    case 'markdown':
+      return SCRATCH_MARKDOWN_DOC_ID
+    case 'mermaid':
+      return SCRATCH_DOC_ID
+  }
+}
 
 /** Stable id for a repo file's draft. Includes branch so the same path on two
  *  different branches never collides on the same draft. */
@@ -27,6 +51,7 @@ const DEFAULT_CONFIG: AppConfig = {
   exportBackground: 'white',
   splitRatio: 0.5,
   sidebarWidth: 256,
+  scratchKind: 'mermaid',
   mermaidConfig: '',
 }
 

@@ -44,6 +44,11 @@ export interface AppConfig {
   splitRatio: number
   /** File-tree sidebar width in pixels. */
   sidebarWidth: number
+  /** Which editor the unsaved scratch document uses (local mode, or before a
+   *  file is opened). Persisted so a reload reopens the same surface. Mirrors
+   *  `FileKind` (lib/tree.ts), spelled out here so the storage layer doesn't
+   *  depend on the tree module. */
+  scratchKind: 'mermaid' | 'markdown' | 'excalidraw'
   /** Raw YAML text of the global mermaid config — the single source of truth for
    *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
    *  the layout dropdown writes the `layout` key into it. Empty = mermaid

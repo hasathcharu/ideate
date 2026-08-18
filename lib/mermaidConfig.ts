@@ -457,3 +457,128 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
     set('--font-mono', font)
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Theme → light/dark mode                                            */
+/* ------------------------------------------------------------------ */
+
+/** Whether the active palette reads as a light or a dark theme. */
+export type ThemeMode = 'light' | 'dark'
+
+/**
+ * Relative luminance (WCAG 2.x) of a CSS color, or null if it isn't a form we
+ * can read statically. Handles the notations the theme presets and hand-edited
+ * `themeVariables` realistically use: #rgb / #rgba / #rrggbb / #rrggbbaa and
+ * rgb()/rgba(). Anything else (hsl(), named colors, color-mix(), var()) returns
+ * null so the caller can fall back rather than guess.
+ */
+function relativeLuminance(color: string): number | null {
+  const rgb = parseRgb(color)
+  if (!rgb) return null
+  // Linearize each channel out of sRGB's gamma curve, then weight by the
+  // luminous efficiency of each primary.
+  const linear = rgb.map((channel) => {
+    const c = channel / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }) as [number, number, number]
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+}
+
+/** `[r, g, b]` in 0–255, or null when the notation isn't statically parseable. */
+function parseRgb(color: string): [number, number, number] | null {
+  const value = color.trim().toLowerCase()
+
+  const hex = value.match(/^#([0-9a-f]{3,8})$/)
+  if (hex) {
+    const digits = hex[1]!
+    // #rgb / #rgba — each digit is a doubled nibble.
+    if (digits.length === 3 || digits.length === 4) {
+      const [r, g, b] = [...digits.slice(0, 3)].map((d) => parseInt(d + d, 16))
+      return [r!, g!, b!]
+    }
+    // #rrggbb / #rrggbbaa — alpha (if present) is ignored; we only need hue/value.
+    if (digits.length === 6 || digits.length === 8) {
+      return [
+        parseInt(digits.slice(0, 2), 16),
+        parseInt(digits.slice(2, 4), 16),
+        parseInt(digits.slice(4, 6), 16),
+      ]
+    }
+    return null
+  }
+
+  const fn = value.match(/^rgba?\(([^)]+)\)$/)
+  if (fn) {
+    const parts = fn[1]!.split(/[\s,/]+/).filter(Boolean).slice(0, 3)
+    if (parts.length < 3) return null
+    const channels = parts.map((part) => {
+      const n = parseFloat(part)
+      if (Number.isNaN(n)) return null
+      // Percentages are relative to 255; bare numbers already are.
+      return part.endsWith('%') ? (n / 100) * 255 : n
+    })
+    if (channels.some((c) => c === null)) return null
+    return channels as [number, number, number]
+  }
+
+  return null
+}
+
+/**
+ * Whether `color` reads as a dark surface — i.e. whether light-on-dark is the
+ * legible pairing. `null` when the notation isn't statically parseable.
+ *
+ * The threshold is the WCAG break-even point where white text starts to
+ * out-contrast black text against the colour (L ≈ 0.179).
+ */
+export function isDarkColor(color: string): boolean | null {
+  const luminance = relativeLuminance(color)
+  if (luminance === null) return null
+  return luminance < DARK_LUMINANCE_THRESHOLD
+}
+
+const DARK_LUMINANCE_THRESHOLD = 0.179
+
+/**
+ * The active palette's own background color, or undefined when no theme sets one.
+ * Both the canvas background and the "Theme" export background read this, so the
+ * drawing surface and its exports agree on one color.
+ */
+export function themeBackgroundColor(config: MermaidUserConfig | null): string | undefined {
+  const raw = config?.themeVariables?.background
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+}
+
+/**
+ * The light/dark mode of the active palette — used to pick the matching
+ * Excalidraw theme, which (unlike mermaid's `themeVariables`) is a binary
+ * light/dark switch rather than an arbitrary palette. Opening a scene while a
+ * dark mermaid theme is selected should hand Excalidraw its dark theme, so the
+ * canvas doesn't flash white inside dark chrome.
+ *
+ * Resolution order:
+ *  1. A palette matching a built-in preset uses that preset's declared `mode` —
+ *     exact by construction, no color math involved.
+ *  2. Otherwise (hand-edited `themeVariables`) derive it from the background's
+ *     luminance, using the WCAG break-even point where white text starts to
+ *     out-contrast black text (L ≈ 0.179).
+ *  3. With no readable background at all, `light` — matching the default
+ *     `:root` palette in globals.css that applies when no theme is set.
+ */
+export function resolveThemeMode(config: MermaidUserConfig | null): ThemeMode {
+  const preset = themeFromConfig(config)
+  if (preset) return preset.mode
+
+  const tv = config?.themeVariables
+  if (isPlainObject(tv)) {
+    for (const key of ['background', 'mainBkg', 'secondaryColor', 'primaryColor']) {
+      const raw = (tv as Record<string, unknown>)[key]
+      if (typeof raw !== 'string' || !raw.trim()) continue
+      const dark = isDarkColor(raw)
+      if (dark === null) continue
+      return dark ? 'dark' : 'light'
+    }
+  }
+
+  return 'light'
+}

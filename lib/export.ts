@@ -116,6 +116,40 @@ function ensureNamespaces(svg: SVGSVGElement): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rasterization scale                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Never rasterize below this multiplier, so large diagrams still come out at
+ *  better-than-retina density. */
+const MIN_RASTER_SCALE = 3
+/** Ceiling on the multiplier, so a tiny drawing doesn't get blown up absurdly. */
+const MAX_RASTER_SCALE = 10
+/** Grow small diagrams until their longest edge reaches this, in pixels. */
+const TARGET_LONG_EDGE = 2400
+/** Hard cap per side. Browsers refuse to allocate canvases beyond a few thousand
+ *  pixels (Safari is the strictest), and an over-large request fails outright
+ *  rather than degrading, so stay well inside it. */
+const MAX_RASTER_DIMENSION = 8192
+
+/**
+ * Pixel multiplier for rasterizing a diagram of `width` × `height` to PNG.
+ *
+ * A flat device-pixel-ratio multiplier isn't enough on its own: it makes output
+ * density proportional to the *diagram's* size, so a small diagram lands in a
+ * correspondingly small image — which is what usually reads as a "low quality"
+ * export. Scaling toward a target long edge fixes exactly that case, while the
+ * floor keeps big diagrams dense and the dimension cap keeps the canvas
+ * allocatable.
+ */
+export function rasterScale(width: number, height: number): number {
+  const longest = Math.max(width, height)
+  if (!longest || !Number.isFinite(longest)) return MIN_RASTER_SCALE
+  const toTarget = TARGET_LONG_EDGE / longest
+  const dimensionCap = MAX_RASTER_DIMENSION / longest
+  return Math.min(MAX_RASTER_SCALE, dimensionCap, Math.max(MIN_RASTER_SCALE, toTarget))
+}
+
+/* ------------------------------------------------------------------ */
 /* Downloads                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -162,7 +196,7 @@ async function renderPngBlob(
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
 
-  const scale = Math.min(4, Math.max(2, Math.round(window.devicePixelRatio || 1) + 1))
+  const scale = rasterScale(width, height)
   const img = new Image()
   const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
 
@@ -177,7 +211,10 @@ async function renderPngBlob(
   canvas.height = Math.max(1, Math.round(height * scale))
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Could not acquire a 2D canvas context.')
-  ctx.scale(scale, scale)
+  // Derive the transform from the rounded canvas size rather than reusing `scale`,
+  // which is now fractional — otherwise the rounding leaves a sub-pixel gap at the
+  // right/bottom edges.
+  ctx.scale(canvas.width / width, canvas.height / height)
   ctx.drawImage(img, 0, 0, width, height)
 
   const blob = await new Promise<Blob | null>((resolve) =>
@@ -224,4 +261,25 @@ export async function exportSource(
 /** Copy the raw mermaid diagram source (with config frontmatter) to the clipboard. */
 export async function copySource(text: string, configYaml: string): Promise<void> {
   await navigator.clipboard.writeText(buildExportSource(text, configYaml))
+}
+
+/* ------------------------------------------------------------------ */
+/* Markdown documents                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A markdown document exports as itself — there is no render step, because the
+ * file already *is* the portable artifact (GitHub, and every other markdown
+ * renderer, will draw the ```mermaid fences themselves). The theme stays a
+ * render-time concern and never enters the file.
+ */
+
+const MARKDOWN_MIME = 'text/markdown;charset=utf-8'
+
+export async function exportMarkdownSource(text: string, filename: string): Promise<void> {
+  triggerDownload(new Blob([text], { type: MARKDOWN_MIME }), filename)
+}
+
+export async function copyMarkdownSource(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text)
 }

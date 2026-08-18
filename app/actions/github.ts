@@ -33,7 +33,7 @@ function err(error: ActionError): ActionResult<never> {
 
 const UNAUTHENTICATED: ActionError = {
   kind: 'unauthenticated',
-  message: 'You are not signed in to GitHub.',
+  message: 'You are not signed in to GitHub, or your session has expired.',
   status: 401,
 }
 
@@ -53,8 +53,17 @@ function mapError(error: unknown): ActionError {
     error instanceof Error ? error.message : 'Unexpected GitHub error.'
 
   switch (status) {
+    // 401 covers both "no credentials" and — since the GitHub App migration —
+    // "the refresh token was revoked or already spent, so the session can no
+    // longer be renewed". Either way the only cure is re-authorizing, so surface
+    // it as `unauthenticated` and let the client prompt a clean sign-in rather
+    // than showing a generic failure.
     case 401:
-      return { kind: 'unauthenticated', message: 'GitHub authentication failed or expired.', status }
+      return {
+        kind: 'unauthenticated',
+        message: 'Your GitHub session has expired. Please sign in again.',
+        status,
+      }
     case 403:
       return { kind: 'rate_limited', message: 'GitHub API access forbidden or rate-limited.', status }
     case 404:
@@ -75,23 +84,95 @@ function decodeBase64(b64: string): string {
   return Buffer.from(b64.replace(/\n/g, ''), 'base64').toString('utf8')
 }
 
-/** Repo picker — repositories the signed-in user can push to. */
-export async function listRepos(): Promise<ActionResult<Repo[]>> {
+export interface ReposResult {
+  /** The repositories this app can actually read/write, newest activity first. */
+  repos: Repo[]
+  /**
+   * How many installations of the GitHub App the signed-in user can see.
+   *
+   * Authorization is not installation: a user can authorize the App and still
+   * have it installed nowhere, in which case `repos` is legitimately empty rather
+   * than broken. The picker uses this to tell those two states apart and show the
+   * "install / configure repository access" onboarding instead.
+   */
+  installationCount: number
+}
+
+/**
+ * Repo picker — the repositories the GitHub App installation grants access to.
+ *
+ * With a GitHub App, `GET /user/repos` is the wrong primitive: it lists every
+ * repo the *user* can reach, most of which the App has no permission on, so the
+ * picker would offer repos whose every write 404s. The installation endpoints
+ * return exactly the set the user chose at install time ("All repositories" or a
+ * hand-picked subset), which is the whole point of the migration.
+ *
+ * A user may have several installations (their own account plus organizations),
+ * so every installation is walked and the results de-duplicated. Neither
+ * endpoint supports `sort`, so ordering is done here to keep the previous
+ * "recently touched first" feel.
+ */
+export async function listRepos(): Promise<ActionResult<ReposResult>> {
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    const repos = await octokit.paginate(octokit.repos.listForAuthenticatedUser, {
-      per_page: 100,
-      sort: 'updated',
-      affiliation: 'owner,collaborator,organization_member',
+    // GET /user/installations
+    const installations = await octokit.paginate(
+      octokit.apps.listInstallationsForAuthenticatedUser,
+      { per_page: 100 },
+    )
+
+    const seen = new Set<string>()
+    const rows: { repo: Repo; activity: string }[] = []
+    let unreadable: ActionError | null = null
+    let unreadableCount = 0
+
+    for (const installation of installations) {
+      // GET /user/installations/{installation_id}/repositories
+      let repos
+      try {
+        repos = await octokit.paginate(octokit.apps.listInstallationReposForAuthenticatedUser, {
+          installation_id: installation.id,
+          per_page: 100,
+        })
+      } catch (error) {
+        // One unreadable installation (e.g. suspended by an org admin) must not
+        // take down the whole picker — skip it and keep the others. A bad token
+        // would already have failed on `/user/installations` above.
+        const mapped = mapError(error)
+        if (mapped.kind !== 'not_found' && mapped.kind !== 'rate_limited') throw error
+        unreadable = mapped
+        unreadableCount += 1
+        continue
+      }
+      for (const r of repos) {
+        const owner = r.owner?.login
+        if (!owner) continue
+        const key = `${owner}/${r.name}`.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        rows.push({
+          repo: {
+            owner,
+            name: r.name,
+            private: r.private,
+            defaultBranch: r.default_branch ?? 'main',
+          },
+          activity: r.pushed_at ?? r.updated_at ?? '',
+        })
+      }
+    }
+
+    // Every installation failed: an empty picker would read as "you have nothing
+    // shared", which is wrong and unactionable. Surface the real error instead.
+    if (unreadable && unreadableCount === installations.length) return err(unreadable)
+
+    rows.sort((a, b) => b.activity.localeCompare(a.activity))
+
+    return ok({
+      repos: rows.map((row) => row.repo),
+      installationCount: installations.length,
     })
-    const mapped: Repo[] = repos.map((r) => ({
-      owner: r.owner.login,
-      name: r.name,
-      private: r.private,
-      defaultBranch: r.default_branch ?? 'main',
-    }))
-    return ok(mapped)
   } catch (error) {
     return err(mapError(error))
   }
@@ -125,11 +206,16 @@ export async function listTree(
       .filter(isDiagramFile)
     return ok({ tree: buildTree(filePaths), truncated: Boolean(data.truncated) })
   } catch (error) {
-    // An empty repo (no commits on its default branch yet) 404s here — that
-    // isn't an error, it just means there are no files yet, so surface an empty
-    // tree. A 404 on a *non-default* branch more likely means the branch was
-    // deleted/mistyped, so only swallow the 404 for the default branch.
+    // A repo with no commits yet isn't an error here — it just has no files —
+    // so surface an empty tree instead of failing the sidebar. GitHub reports
+    // that state two different ways: 404 (the branch ref doesn't resolve) and
+    // 409 "Git Repository is empty." A 404 on a *non-default* branch more
+    // likely means the branch was deleted/mistyped, so only swallow that one
+    // for the default branch; the 409 is unambiguous — an empty repo has no
+    // branches at all — and would otherwise surface mapError's write-oriented
+    // "The file changed on GitHub since you loaded it." copy.
     const mapped = mapError(error)
+    if (mapped.status === 409) return ok({ tree: [], truncated: false })
     if (isDefaultBranch && mapped.kind === 'not_found') return ok({ tree: [], truncated: false })
     return err(mapped)
   }

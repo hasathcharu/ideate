@@ -1,9 +1,12 @@
 'use client'
 
-import { ArrowLeft, Loader2 } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import type { FileCommit } from '@/lib/types'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import Preview from './Preview'
+import MarkdownPreview from './MarkdownPreview'
+import Canvas from './Canvas'
+import type { FileKind } from '@/lib/tree'
 import { cn } from '@/lib/utils'
 import {
   Sheet,
@@ -13,6 +16,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export interface HistoryPanelProps {
   open: boolean
@@ -37,12 +41,45 @@ export interface HistoryPanelProps {
   versionContent: string | null
   versionLoading: boolean
   config: MermaidUserConfig | null
+  /** Which renderer previews a selected version — scenes get a read-only canvas
+   *  and markdown its document preview, rather than the mermaid preview. */
+  kind: FileKind
+  /** Light/dark mode for the read-only canvas, derived from the active theme. */
+  canvasTheme: 'light' | 'dark'
+  /** The active theme's background color, painted behind the read-only canvas. */
+  canvasBackground: string | undefined
   onSelect: (commit: FileCommit) => void
   onLoadMore: () => void
   onViewBeforeRename: () => void
   onBack: () => void
   onRecover: () => void
   onFork: () => void
+}
+
+/** The read-only canvas can't emit edits (`viewMode`), so its onChange is inert. */
+function noop(): void {}
+
+/** Varied label widths so a loading commit list reads as a list of distinct
+ *  entries rather than a stack of identical bars. */
+const COMMIT_SKELETON_WIDTHS = ['w-40', 'w-28', 'w-44', 'w-32', 'w-36'] as const
+
+/**
+ * Placeholder commit rows. Returns a fragment rather than a wrapper so each row is
+ * a direct child of the list's flex container and picks up its `gap-1`; geometry
+ * matches the real commit button (`p-2.5`, message line over a meta line) so the
+ * list doesn't jump when the data lands.
+ */
+function CommitSkeleton({ rows }: { rows: number }) {
+  return (
+    <>
+      {COMMIT_SKELETON_WIDTHS.slice(0, rows).map((width, i) => (
+        <div key={i} className="border border-transparent p-2.5" aria-hidden>
+          <Skeleton className={cn('mb-1.5 h-3.5', width)} />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      ))}
+    </>
+  )
 }
 
 function formatDate(iso: string): string {
@@ -73,6 +110,9 @@ export default function HistoryPanel({
   versionContent,
   versionLoading,
   config,
+  kind,
+  canvasTheme,
+  canvasBackground,
   onSelect,
   onLoadMore,
   onViewBeforeRename,
@@ -115,9 +155,7 @@ export default function HistoryPanel({
             {error ? (
               <p className="p-4 text-sm text-destructive">{error}</p>
             ) : commits === null ? (
-              <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Loading commits…
-              </p>
+              <CommitSkeleton rows={COMMIT_SKELETON_WIDTHS.length} />
             ) : commits.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">No commits for this file.</p>
             ) : (
@@ -140,9 +178,7 @@ export default function HistoryPanel({
                 ))}
 
                 {loadingMore ? (
-                  <p className="flex items-center justify-center gap-2 p-2.5 text-xs text-muted-foreground">
-                    <Loader2 className="size-3.5 animate-spin" /> Loading more…
-                  </p>
+                  <CommitSkeleton rows={2} />
                 ) : hasMore ? (
                   <Button variant="ghost" size="sm" onClick={onLoadMore}>
                     Load more
@@ -170,17 +206,36 @@ export default function HistoryPanel({
                 Select a version to preview it read-only.
               </p>
             ) : versionLoading || versionContent === null ? (
-              <p className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Loading version…
-              </p>
+              <div className="min-h-0 flex-1 p-6" aria-hidden>
+                <Skeleton className="size-full" />
+              </div>
             ) : (
               <>
                 <div className="min-h-0 flex-1">
-                  <Preview text={versionContent} config={config} />
+                  {kind === 'excalidraw' ? (
+                    // Keyed on the sha so selecting another version remounts the
+                    // canvas rather than diffing one historical scene into another.
+                    <Canvas
+                      key={selectedSha}
+                      value={versionContent}
+                      onChange={noop}
+                      theme={canvasTheme}
+                      backgroundColor={canvasBackground}
+                      viewMode
+                    />
+                  ) : kind === 'markdown' ? (
+                    <MarkdownPreview text={versionContent} config={config} />
+                  ) : (
+                    <Preview text={versionContent} config={config} />
+                  )}
                 </div>
                 <div className="flex justify-end gap-2 border-t p-3">
                   <Button variant="secondary" onClick={onFork}>
-                    Create new diagram from this
+                    {kind === 'excalidraw'
+                      ? 'Create new canvas from this'
+                      : kind === 'markdown'
+                        ? 'Create new document from this'
+                        : 'Create new diagram from this'}
                   </Button>
                   <Button onClick={onRecover}>Recover to working tree</Button>
                 </div>

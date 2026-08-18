@@ -4,14 +4,25 @@ import { useState, type CSSProperties } from 'react'
 import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
+  copyMarkdownSource,
   copyPNG,
   copySource,
   copySVG,
+  exportMarkdownSource,
   exportPNG,
   exportSource,
   exportSVG,
 } from '@/lib/export'
+import {
+  copySceneSource,
+  copyScenePNG,
+  copySceneSVG,
+  exportSceneSource,
+  exportScenePNG,
+  exportSceneSVG,
+} from '@/lib/exportScene'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
+import { EXCALIDRAW_EXTENSION, type FileKind } from '@/lib/tree'
 import type { ExportBackground } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import {
@@ -64,6 +75,9 @@ export interface ExportMenuProps {
   onBackgroundChange: (value: ExportBackground) => void
   /** Global mermaid config (theme, layout, per-diagram settings) to render exports with. */
   config?: MermaidUserConfig | null
+  /** Which exporter to use. Excalidraw ships its own, so scenes don't go through
+   *  the mermaid render path at all. */
+  kind?: FileKind
 }
 
 export default function ExportMenu({
@@ -73,8 +87,11 @@ export default function ExportMenu({
   background,
   onBackgroundChange,
   config = null,
+  kind = 'mermaid',
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
+  const isScene = kind === 'excalidraw'
+  const isMarkdown = kind === 'markdown'
   const disabled = !text.trim()
 
   const run = async (key: string, label: string, fn: () => Promise<void>) => {
@@ -143,51 +160,95 @@ export default function ExportMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuLabel>Export diagram</DropdownMenuLabel>
-        <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-          <span className="text-sm">Background</span>
-          <div className="flex items-center gap-1.5">
-            {BACKGROUND_OPTIONS.map((opt) => (
-              <Tooltip key={opt.value}>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={opt.label}
-                    aria-pressed={background === opt.value}
-                    onClick={() => onBackgroundChange(opt.value)}
-                    className={cn(
-                      'size-6 rounded-md border border-input transition-shadow',
-                      background === opt.value &&
-                        'ring-2 ring-primary ring-offset-1 ring-offset-popover',
-                    )}
-                    style={swatchStyle(opt.value, themeBg)}
-                  />
-                </TooltipTrigger>
-                <TooltipContent>{opt.label}</TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-        <DropdownMenuSeparator />
-        <Row
-          label="SVG"
-          format="SVG"
-          onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
-          onCopy={() => copySVG(text, background, config)}
-        />
-        <Row
-          label="PNG"
-          format="PNG"
-          onDownload={() => exportPNG(text, `${name}.png`, background, config)}
-          onCopy={() => copyPNG(text, background, config)}
-        />
-        <DropdownMenuSeparator />
-        <Row
-          label="Mermaid + Config"
-          format="MMD"
-          onDownload={() => exportSource(text, `${name}.mmd`, configYaml)}
-          onCopy={() => copySource(text, configYaml)}
-        />
+        <DropdownMenuLabel>
+          {isScene ? 'Export canvas' : isMarkdown ? 'Export document' : 'Export diagram'}
+        </DropdownMenuLabel>
+        {/* Both markdown exports are the source text itself, and text has no
+            background to paint — the swatches would be a control that changes
+            nothing. The preview still paints the theme background on screen. */}
+        {isMarkdown ? null : (
+          <>
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <span className="text-sm">Background</span>
+              <div className="flex items-center gap-1.5">
+                {BACKGROUND_OPTIONS.map((opt) => (
+                  <Tooltip key={opt.value}>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label={opt.label}
+                        aria-pressed={background === opt.value}
+                        onClick={() => onBackgroundChange(opt.value)}
+                        className={cn(
+                          'size-6 rounded-md border border-input transition-shadow',
+                          background === opt.value &&
+                            'ring-2 ring-primary ring-offset-1 ring-offset-popover',
+                        )}
+                        style={swatchStyle(opt.value, themeBg)}
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent>{opt.label}</TooltipContent>
+                  </Tooltip>
+                ))}
+              </div>
+            </div>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        {isMarkdown ? (
+          <>
+            <Row
+              label="Markdown"
+              format="Markdown"
+              onDownload={() => exportMarkdownSource(text, `${name}.md`)}
+              onCopy={() => copyMarkdownSource(text)}
+            />
+          </>
+        ) : isScene ? (
+          <>
+            <Row
+              label="SVG"
+              format="SVG"
+              onDownload={() => exportSceneSVG(text, `${name}.svg`, background, config)}
+              onCopy={() => copySceneSVG(text, background, config)}
+            />
+            <Row
+              label="PNG"
+              format="PNG"
+              onDownload={() => exportScenePNG(text, `${name}.png`, background, config)}
+              onCopy={() => copyScenePNG(text, background, config)}
+            />
+            <DropdownMenuSeparator />
+            <Row
+              label="Excalidraw scene"
+              format="Scene"
+              onDownload={() => exportSceneSource(text, `${name}${EXCALIDRAW_EXTENSION}`)}
+              onCopy={() => copySceneSource(text)}
+            />
+          </>
+        ) : (
+          <>
+            <Row
+              label="SVG"
+              format="SVG"
+              onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
+              onCopy={() => copySVG(text, background, config)}
+            />
+            <Row
+              label="PNG"
+              format="PNG"
+              onDownload={() => exportPNG(text, `${name}.png`, background, config)}
+              onCopy={() => copyPNG(text, background, config)}
+            />
+            <DropdownMenuSeparator />
+            <Row
+              label="Mermaid + Config"
+              format="MMD"
+              onDownload={() => exportSource(text, `${name}.mmd`, configYaml)}
+              onCopy={() => copySource(text, configYaml)}
+            />
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

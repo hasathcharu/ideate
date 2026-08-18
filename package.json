@@ -4,18 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "dev": "npm run vendor:excalidraw && next dev",
+    "build": "npm run vendor:excalidraw && next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vendor:excalidraw": "node scripts/vendor-excalidraw-assets.mjs",
+    "postinstall": "node scripts/vendor-excalidraw-assets.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.9.0",
+    "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.11.4",
     "@codemirror/search": "^6.7.1",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.39.1",
+    "@excalidraw/excalidraw": "^0.18.1",
     "@lezer/highlight": "^1.2.1",
     "@mermaid-js/layout-elk": "^0.2.2",
     "@octokit/rest": "^22.0.1",
@@ -24,6 +28,7 @@
     "codemirror": "^6.0.2",
     "js-yaml": "^4.1.0",
     "lucide-react": "^1.25.0",
+    "markdown-it": "^15.0.0",
     "mermaid": "^11.16.0",
     "next": "^16.2.11",
     "next-auth": "5.0.0-beta.32",
