@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-mono' })
 export const metadata: Metadata = {
   title: APP_NAME,
   description:
-    'A Mermaid diagram editor where your GitHub repository is the database.',
+    'A diagram, Markdown and canvas editor where your GitHub repository is the database.',
 }
 
 export default function RootLayout({

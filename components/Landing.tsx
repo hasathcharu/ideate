@@ -3,9 +3,25 @@
 import Link from 'next/link'
 import { ArrowRight, Pencil, TriangleAlert } from 'lucide-react'
 import { loginWithGitHub } from '@/app/actions/auth'
-import { GithubIcon } from '@/components/icons'
+import {
+  ExcalidrawIcon,
+  GithubIcon,
+  MarkdownIcon,
+  MermaidIcon,
+} from '@/components/icons'
 import { APP_NAME } from '@/lib/config'
 import { Button } from '@/components/ui/button'
+
+/**
+ * The three document kinds, in the order the editor's own toggle lists them.
+ * Each carries its project's own mark (see `components/icons.tsx`) — bare glyphs
+ * in `currentColor`, so the row reads as one family under the active theme.
+ */
+const KINDS = [
+  { icon: MermaidIcon, label: 'Mermaid', ext: '.mmd' },
+  { icon: MarkdownIcon, label: 'Markdown', ext: '.md' },
+  { icon: ExcalidrawIcon, label: 'Excalidraw', ext: '.excalidraw' },
+]
 
 export default function Landing({ signedIn }: { signedIn: boolean }) {
   return (
@@ -31,13 +47,26 @@ export default function Landing({ signedIn }: { signedIn: boolean }) {
       </header>
 
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center px-6 pb-24 text-center">
-    <h1 className="text-4xl leading-tight font-bold tracking-tight md:text-5xl">
-          Draw Mermaid diagrams. Commit them to GitHub.
+        <h1 className="text-4xl leading-tight font-bold tracking-tight md:text-5xl">
+          Diagrams, docs and sketches. Committed to GitHub.
         </h1>
         <p className="mt-4 max-w-md text-muted-foreground">
-          A diagram editor with a live preview that saves straight to your
-          repo — every commit is a version you can revisit.
+          Mermaid diagrams, Markdown documents and Excalidraw canvases — edited
+          with a live preview and saved straight to your repo, where every commit
+          is a version you can revisit.
         </p>
+        <ul className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          {KINDS.map(({ icon: Icon, label, ext }) => (
+            <li
+              key={ext}
+              className="flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-sm text-card-foreground"
+            >
+              <Icon className="size-4 shrink-0 text-muted-foreground" />
+              {label}
+              <span className="font-mono text-xs text-muted-foreground">{ext}</span>
+            </li>
+          ))}
+        </ul>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row">
           {signedIn ? (
             <Button asChild size="lg">
