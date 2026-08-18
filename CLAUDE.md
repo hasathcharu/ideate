@@ -13,12 +13,13 @@ Save = commit; open old version = checkout.
 
 1. **All GitHub API calls go through Next.js Server Actions** in
    `app/actions/github.ts` (each `'use server'`). Octokit is server-side only.
-2. **The GitHub access token never reaches the browser.** It is persisted into
-   the encrypted session JWT in the `jwt` callback (`auth.ts`) and read
-   server-side via `getGitHubToken()` (`lib/session.server.ts`). It must **not**
-   be added to the object returned by the `session` callback (that object is
-   serialized to the client at `/api/auth/session`), nor stored in localStorage,
-   nor passed as a client-component prop.
+2. **The GitHub access token — and the refresh token — never reach the browser.**
+   Both are persisted into the encrypted session JWT in the `jwt` callback
+   (`auth.ts`); the access token is read server-side via `getGitHubToken()`
+   (`lib/session.server.ts`). Neither may be added to the object returned by the
+   `session` callback (that object is serialized to the client at
+   `/api/auth/session`), stored in localStorage, or passed as a client-component
+   prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
    (selected repo, active theme, export prefs). Never tokens/secrets.
 4. **Every read/write server action takes a caller-supplied `branch`** — there
@@ -37,6 +38,14 @@ Save = commit; open old version = checkout.
    on the built-in `base` theme so the global YAML config's `themeVariables` can
    retune it. Rendering is async and browser-only. Any diagram type mermaid
    supports works.
+8. **Token refresh happens in `proxy.ts` and nowhere else.** GitHub App user
+   tokens expire in 8h and refresh tokens **rotate** (each use invalidates the
+   previous one), so a refresh whose result isn't written back to the session
+   cookie locks the user out. `cookies().set()` throws during a render, so
+   `getGitHubToken()` must stay a pure reader and `auth.ts`'s `jwt` callback only
+   refreshes when its lazy-config `request` argument is present (proxy / auth
+   route handlers), never when it is `undefined` (RSC render). Do not add a
+   refresh path anywhere else, and do not add a DB/KV lock for it — see "Auth".
 
 ## UI stack
 
@@ -53,10 +62,45 @@ Prefer shadcn primitives and Tailwind utilities over bespoke CSS.
   signed-in → `mode="github"` (repo features on); `?mode=local` without a session
   → `mode="local"` (editor + export only); otherwise redirects to `/`.
 
+## Auth
+
+A **GitHub App** (not an OAuth App), so users choose which repositories the app
+may touch at install time and can change that later. Consequences to keep in mind:
+
+- **There is no OAuth scope.** GitHub Apps ignore the `scope` authorization
+  param; permission comes from the App registration (Contents: read & write,
+  Metadata: read) intersected with the installed repositories. The old
+  `GITHUB_OAUTH_SCOPE` constant is **gone** — don't reintroduce a scope option.
+- **Authorization ≠ installation.** A signed-in user may have the App installed
+  nowhere, so `listRepos()` returns `{ repos, installationCount }` and
+  `RepoPicker.tsx` shows an install/"Configure repository access" onboarding state
+  when `installationCount === 0`. Repos come from `GET /user/installations` +
+  `GET /user/installations/{id}/repositories`, **not** `GET /user/repos` — the
+  latter lists repos the App has no permission on.
+- **Tokens**: 8h access token + rotating 6-month refresh token, refreshed ~30 min
+  ahead of expiry (`REFRESH_SKEW_SECONDS`) in `proxy.ts` (rule 8). Session
+  `maxAge` is 10 days, *rolling* (re-issued on activity), so the refresh window
+  never expires in practice and there is no absolute-expiry machinery.
+- **Concurrent refresh is not locked** and cannot be, statelessly (no app
+  database — that's the premise of this repo). The proactive skew is the
+  mitigation: colliding requests both still hold a valid token. When a race does
+  bite, a failed refresh clears the credentials and stamps `token.error`, which
+  `getGitHubToken()` reads as signed-out → every action returns
+  `kind: 'unauthenticated'` → the UI offers a clean re-auth. No work is lost;
+  the draft is in localStorage.
+- **`NEXT_PUBLIC_GITHUB_APP_SLUG`** (→ `GITHUB_APP_SLUG` /
+  `GITHUB_APP_INSTALL_URL` in `lib/config.ts`) builds the install links. It's the
+  App's public URL name, not a secret.
+
 ## Layout
 
 ```
-auth.ts                     NextAuth v5 config; single OAuth scope config point
+auth.ts                     NextAuth v5 config (GitHub App); lazy per-request
+                            config + the token-refresh implementation
+proxy.ts                    Next 16 request hook (the old `middleware.ts`
+                            convention); `export { auth as proxy }` — the ONLY
+                            place the refreshed token is written to the cookie.
+                            Never redirects; local mode passes straight through
 app/
   layout.tsx                fonts + TooltipProvider + <Toaster/> (sonner)
   page.tsx                  landing; editor/page.tsx gates on auth + mode
@@ -70,12 +114,13 @@ components/
   ConflictModal, ConfigModal, DeleteModal, PromptModal, HistoryPanel,
   AuthButton, icons.tsx
 lib/
-  session.server.ts         server-only token reader (import 'server-only')
+  session.server.ts         server-only token reader (import 'server-only');
+                            PURE reader — no refresh, no cookie writes
   mermaid.ts                official-mermaid init + async render (renderToSvg / renderPreview)
   mermaidConfig.ts          global YAML config: parse, layout/theme YAML editing, applyThemeToSite
   themes.ts                 preset theme palettes (THEME_PRESETS) for the theme dropdown
   export.ts                 standalone SVG + SVG/PNG download & copy
-  config.ts                 app name / repo URL / commit sha constants
+  config.ts                 app name / repo URL / commit sha / GitHub App slug
   tree.ts, storage.ts, hooks.ts, types.ts
 ```
 
@@ -115,7 +160,8 @@ frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
 ## Conventions
 
 - TypeScript strict; server actions return `ActionResult<T>` so the client can
-  branch on errors (especially `kind: 'conflict'` for 409/422) without try/catch.
+  branch on errors (especially `kind: 'conflict'` for 409/422, and
+  `kind: 'unauthenticated'` for 401 / a dead session) without try/catch.
 - Keep server-only code out of client bundles; `lib/session.server.ts` imports
   `server-only` as a guard.
 
@@ -125,6 +171,8 @@ frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
 npm run typecheck && npm run build
 ```
 
-Live GitHub read/write flows require a configured OAuth app and a signed-in user
-(see README). Read-action Octokit shapes were validated against the real GitHub
-API during development.
+Live GitHub read/write flows require a registered GitHub App and a signed-in user
+(see README). Most read-action Octokit shapes were validated against the real
+GitHub API during development; the two installation endpoints used by
+`listRepos()` and the refresh-token exchange in `auth.ts` were written from the
+REST docs and are **not yet verified against live GitHub**.
