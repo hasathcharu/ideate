@@ -14,6 +14,37 @@ import {
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
+
+/** Varied name widths so a loading list reads as distinct branches. Exactly one
+ *  row carries a badge placeholder, since only one branch is the default. */
+const BRANCH_SKELETON_ROWS = [
+  { width: 'w-32', badge: true },
+  { width: 'w-44', badge: false },
+  { width: 'w-24', badge: false },
+  { width: 'w-52', badge: false },
+  { width: 'w-36', badge: false },
+  { width: 'w-28', badge: false },
+] as const
+
+/** Placeholder branch rows, matching the real row's `px-2.5 py-2` and its
+ *  icon + name (+ default badge) layout so the list doesn't shift when it loads. */
+function BranchListSkeleton() {
+  return (
+    <ul className="flex flex-col gap-0.5" aria-hidden>
+      {BRANCH_SKELETON_ROWS.map((row, i) => (
+        <li key={i} className="flex items-center justify-between gap-2 px-2.5 py-2">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Skeleton className="size-3.5 shrink-0" />
+            <Skeleton className={cn('h-4', row.width)} />
+          </span>
+          {row.badge ? <Skeleton className="h-5 w-14 shrink-0" /> : null}
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 export interface BranchPickerProps {
   open: boolean
@@ -109,9 +140,7 @@ export default function BranchPicker({
           {error ? (
             <p className="px-2 py-6 text-center text-sm text-destructive">{error}</p>
           ) : branches === null ? (
-            <p className="flex items-center justify-center gap-2 px-2 py-6 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Loading branches…
-            </p>
+            <BranchListSkeleton />
           ) : (
             <ul className="flex flex-col gap-0.5">
               {canCreate ? (
