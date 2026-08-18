@@ -206,11 +206,16 @@ export async function listTree(
       .filter(isDiagramFile)
     return ok({ tree: buildTree(filePaths), truncated: Boolean(data.truncated) })
   } catch (error) {
-    // An empty repo (no commits on its default branch yet) 404s here — that
-    // isn't an error, it just means there are no files yet, so surface an empty
-    // tree. A 404 on a *non-default* branch more likely means the branch was
-    // deleted/mistyped, so only swallow the 404 for the default branch.
+    // A repo with no commits yet isn't an error here — it just has no files —
+    // so surface an empty tree instead of failing the sidebar. GitHub reports
+    // that state two different ways: 404 (the branch ref doesn't resolve) and
+    // 409 "Git Repository is empty." A 404 on a *non-default* branch more
+    // likely means the branch was deleted/mistyped, so only swallow that one
+    // for the default branch; the 409 is unambiguous — an empty repo has no
+    // branches at all — and would otherwise surface mapError's write-oriented
+    // "The file changed on GitHub since you loaded it." copy.
     const mapped = mapError(error)
+    if (mapped.status === 409) return ok({ tree: [], truncated: false })
     if (isDefaultBranch && mapped.kind === 'not_found') return ok({ tree: [], truncated: false })
     return err(mapped)
   }
