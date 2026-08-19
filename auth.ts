@@ -65,8 +65,9 @@ interface GitHubRefreshResponse {
 /**
  * Give up on this session: drop the (now unusable) credentials and stamp an
  * error. `getGitHubToken()` reads that as "signed out", so every GitHub action
- * returns `kind: 'unauthenticated'` and the UI can offer a clean re-auth instead
- * of a generic failure. No work is lost — the uncommitted draft lives in
+ * returns `kind: 'unauthenticated'`, which the client treats as a global
+ * sign-out-and-go-home rather than a per-surface error (see
+ * `lib/sessionExpiry.ts`). No work is lost — the uncommitted draft lives in
  * localStorage.
  */
 function requireReauth(token: JWT): JWT {

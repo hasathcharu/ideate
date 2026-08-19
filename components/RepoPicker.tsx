@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Lock, PackagePlus, RefreshCw, Settings2 } from 'lucide-react'
 import { listRepos } from '@/app/actions/github'
-import { loginWithGitHub } from '@/app/actions/auth'
+import { handleExpiredSession } from '@/lib/sessionExpiry'
 import { GITHUB_APP_INSTALL_URL } from '@/lib/config'
 import { cn } from '@/lib/utils'
 import type { ActionError, Repo } from '@/lib/types'
@@ -74,7 +74,7 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
     if (res.ok) {
       setRepos(res.data.repos)
       setInstallationCount(res.data.installationCount)
-    } else {
+    } else if (!handleExpiredSession(res.error)) {
       setError(res.error)
     }
   }, [])
@@ -135,17 +135,12 @@ export default function RepoPicker({ open, onOpenChange, onSelect }: RepoPickerP
           {error ? (
             <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
               <p className="text-sm text-destructive">{error.message}</p>
-              {error.kind === 'unauthenticated' ? (
-                <form action={loginWithGitHub}>
-                  <Button type="submit" size="sm">
-                    Sign in again
-                  </Button>
-                </form>
-              ) : (
-                <Button size="sm" variant="outline" onClick={refresh} disabled={pending}>
-                  {refreshLabel}
-                </Button>
-              )}
+              {/* No `unauthenticated` branch: a dead session never reaches here —
+                  `handleExpiredSession` signs out and leaves for the landing page,
+                  which is where signing in again lives. */}
+              <Button size="sm" variant="outline" onClick={refresh} disabled={pending}>
+                {refreshLabel}
+              </Button>
             </div>
           ) : repos === null ? (
             <RepoListSkeleton />

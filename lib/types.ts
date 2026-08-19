@@ -100,7 +100,14 @@ export type ActionResult<T> =
   | { ok: false; error: ActionError }
 
 export interface ActionError {
-  kind: 'unauthenticated' | 'not_found' | 'conflict' | 'rate_limited' | 'unknown'
+  kind:
+    | 'unauthenticated'
+    /** The connected repo itself is unreachable — see `repo_unavailable` below. */
+    | 'repo_unavailable'
+    | 'not_found'
+    | 'conflict'
+    | 'rate_limited'
+    | 'unknown'
   message: string
   status?: number
 }

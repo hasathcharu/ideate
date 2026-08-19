@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { GitBranch, Loader2, Lock, Plus } from 'lucide-react'
 import { listBranches } from '@/app/actions/github'
+import { handleExpiredSession } from '@/lib/sessionExpiry'
 import type { Branch } from '@/lib/types'
 import {
   Dialog,
@@ -100,7 +101,7 @@ export default function BranchPicker({
     listBranches(owner, name).then((res) => {
       if (cancelled) return
       if (res.ok) setBranches(res.data)
-      else setError(res.error.message)
+      else if (!handleExpiredSession(res.error)) setError(res.error.message)
     })
     return () => {
       cancelled = true

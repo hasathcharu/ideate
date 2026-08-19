@@ -58,6 +58,7 @@ import {
 } from '@/lib/mermaidConfig'
 import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
+import { handleExpiredSession } from '@/lib/sessionExpiry'
 import {
   loadConfig,
   saveConfig,
@@ -433,6 +434,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setTree(res.data)
       return res.data
     }
+    if (handleExpiredSession(res.error)) return null
+    // The connected repo is unreachable (uninstalled, access narrowed, renamed or
+    // deleted). No retry fixes that and there is nothing to browse, so lead with
+    // the picker — the same remedy as having no repo selected. `config.repo` is
+    // deliberately left alone: the user may be mid-reinstall on GitHub, and
+    // nulling it would throw away a selection that is about to work again.
+    if (res.error.kind === 'repo_unavailable') setRepoPickerOpen(true)
+    // Set either way, so dismissing the picker leaves an explanation in the
+    // sidebar instead of an inert empty pane.
     setTreeError(res.error.message)
     return null
   }, [])
@@ -719,6 +729,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const res = await createBranch(repo.owner, repo.name, name, repo.branch)
       setBranchBusy(false)
       if (!res.ok) {
+        if (handleExpiredSession(res.error)) return
         toast.error(res.error.message)
         return
       }
@@ -733,6 +744,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!repo) return
       const res = await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
+        if (handleExpiredSession(res.error)) return
         toast.error(res.error.message)
         return
       }
@@ -812,6 +824,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           }
           const res = await renameFile(repo.owner, repo.name, node.path, newPath, repo.branch)
           if (!res.ok) {
+            if (handleExpiredSession(res.error)) return
             toast.error(res.error.message)
             return
           }
@@ -878,6 +891,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const res = await deletePaths(repo.owner, repo.name, committed, repo.branch)
     setDeleteBusy(false)
     if (!res.ok) {
+      if (handleExpiredSession(res.error)) return
       toast.error(res.error.message)
       return
     }
@@ -911,6 +925,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         void refreshTree(repo)
         return
       }
+      if (handleExpiredSession(res.error)) return
       if (res.error.kind === 'conflict') setConflictOpen(true)
       else toast.error(res.error.message)
     },
@@ -982,6 +997,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     if (!fresh.ok) {
       setConflictBusy(false)
+      if (handleExpiredSession(fresh.error)) return
       toast.error(fresh.error.message)
       return
     }
@@ -994,7 +1010,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       clearDraft(docId)
       toast.success('Overwritten on top of latest')
       void refreshTree(repo)
-    } else {
+    } else if (!handleExpiredSession(res.error)) {
       toast.error(res.error.message)
     }
   }, [repo, openPath, text, docId, refreshTree])
@@ -1005,6 +1021,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     setConflictBusy(false)
     if (!fresh.ok) {
+      if (handleExpiredSession(fresh.error)) return
       toast.error(fresh.error.message)
       return
     }
@@ -1025,7 +1042,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
       setVersionLoading(false)
       if (res.ok) setVersionContent(res.data)
-      else setHistoryError(res.error.message)
+      else if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
     },
     [repo],
   )
@@ -1046,7 +1063,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         HISTORY_PAGE_SIZE,
       )
       if (!res.ok) {
-        setHistoryError(res.error.message)
+        if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
         return
       }
       setCommits((prev) => (append && prev ? [...prev, ...res.data.commits] : res.data.commits))

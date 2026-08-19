@@ -77,6 +77,26 @@ function mapError(error: unknown): ActionError {
   }
 }
 
+/**
+ * Did the App lose access to this repo, as opposed to hitting a missing ref inside
+ * it? GitHub answers 404 (never 403) for a repo the token cannot see, so
+ * "uninstalled / access narrowed / repo deleted or renamed" is indistinguishable
+ * from "this branch or path doesn't exist" at the call site. Reading the repo
+ * itself separates them, at the cost of one extra request in the error path only.
+ *
+ * Only a 404 on the probe counts. A 5xx, a rate-limit or a network blip must fall
+ * through to the caller's normal handling — misreading one of those as "your repo
+ * is gone" would eject the user from a repo that is still perfectly theirs.
+ */
+async function repoAccessLost(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
+  try {
+    await octokit.repos.get({ owner, repo })
+    return false
+  } catch (error) {
+    return mapError(error).kind === 'not_found'
+  }
+}
+
 function encodeBase64(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64')
 }
@@ -216,7 +236,21 @@ export async function listTree(
     // "The file changed on GitHub since you loaded it." copy.
     const mapped = mapError(error)
     if (mapped.status === 409) return ok({ tree: [], truncated: false })
-    if (isDefaultBranch && mapped.kind === 'not_found') return ok({ tree: [], truncated: false })
+    if (mapped.kind === 'not_found') {
+      // Before treating this as "no commits yet", rule out the case where the
+      // repo is no longer ours to read at all: an empty tree would render as the
+      // ordinary "no files" sidebar, which invites the user to keep working in a
+      // repo that will reject every write. That state needs the repo picker, so
+      // it gets its own kind.
+      if (await repoAccessLost(octokit, owner, repo)) {
+        return err({
+          kind: 'repo_unavailable',
+          message: `${owner}/${repo} is no longer available to ${APP_NAME}. It may have been renamed or deleted, or the app's access to it removed on GitHub.`,
+          status: 404,
+        })
+      }
+      if (isDefaultBranch) return ok({ tree: [], truncated: false })
+    }
     return err(mapped)
   }
 }
