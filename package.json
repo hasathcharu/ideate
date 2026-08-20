@@ -13,6 +13,7 @@
     "postinstall": "node scripts/vendor-excalidraw-assets.mjs"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.9.0",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.11.4",
@@ -26,9 +27,12 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "codemirror": "^6.0.2",
+    "dompurify": "^3.4.14",
     "js-yaml": "^4.1.0",
     "lucide-react": "^1.25.0",
     "markdown-it": "^15.0.0",
+    "markdown-it-emoji": "^3.1.0",
+    "markdown-it-footnote": "^4.0.0",
     "mermaid": "^11.16.0",
     "next": "^16.2.11",
     "next-auth": "5.0.0-beta.32",
@@ -46,6 +50,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/js-yaml": "^4.0.9",
+    "@types/markdown-it-footnote": "^3.0.4",
     "@types/node": "^22.20.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

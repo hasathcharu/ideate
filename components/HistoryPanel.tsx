@@ -6,6 +6,7 @@ import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import Preview from './Preview'
 import MarkdownPreview from './MarkdownPreview'
 import Canvas from './Canvas'
+import DiffView from './DiffView'
 import type { FileKind } from '@/lib/tree'
 import { cn } from '@/lib/utils'
 import {
@@ -17,6 +18,18 @@ import {
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+
+/** Reading view for the selected version: the rendered document, or a text diff. */
+export type HistoryView = 'preview' | 'diff'
+
+/** What the selected version is diffed against. */
+export type HistoryCompare = 'previous' | 'working'
+
+/** The two sides of a diff, older first. */
+export interface HistoryDiff {
+  before: string
+  after: string
+}
 
 export interface HistoryPanelProps {
   open: boolean
@@ -48,6 +61,20 @@ export interface HistoryPanelProps {
   canvasTheme: 'light' | 'dark'
   /** The active theme's background color, painted behind the read-only canvas. */
   canvasBackground: string | undefined
+  /** Whether the selected version is being previewed or diffed. Scenes are
+   *  preview-only — a `.excalidraw` file is JSON whose bytes churn without the
+   *  drawing changing (rule 9), so a line diff of one would show changes that
+   *  aren't really there. */
+  view: HistoryView
+  onViewChange: (view: HistoryView) => void
+  compare: HistoryCompare
+  onCompareChange: (compare: HistoryCompare) => void
+  /** Both sides of the diff, once they are both available. */
+  diff: HistoryDiff | null
+  diffLoading: boolean
+  /** Why the diff isn't available — the older version hasn't been paged in yet,
+   *  or fetching it failed. */
+  diffNote: string | null
   onSelect: (commit: FileCommit) => void
   onLoadMore: () => void
   onViewBeforeRename: () => void
@@ -113,6 +140,13 @@ export default function HistoryPanel({
   kind,
   canvasTheme,
   canvasBackground,
+  view,
+  onViewChange,
+  compare,
+  onCompareChange,
+  diff,
+  diffLoading,
+  diffNote,
   onSelect,
   onLoadMore,
   onViewBeforeRename,
@@ -211,8 +245,83 @@ export default function HistoryPanel({
               </div>
             ) : (
               <>
-                <div className="min-h-0 flex-1">
-                  {kind === 'excalidraw' ? (
+                {/* Preview / Diff, and what the diff compares against. Both are
+                    per-version choices, so they live over the content rather than
+                    in the sheet header. */}
+                {kind === 'excalidraw' ? null : (
+                  <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
+                    <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                      <Button
+                        size="sm"
+                        variant={view === 'preview' ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-xs"
+                        onClick={() => onViewChange('preview')}
+                      >
+                        Preview
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={view === 'diff' ? 'secondary' : 'ghost'}
+                        className="h-6 px-2 text-xs"
+                        onClick={() => onViewChange('diff')}
+                      >
+                        Diff
+                      </Button>
+                    </div>
+                    {view === 'diff' ? (
+                      <>
+                        <span className="text-xs text-muted-foreground">Compare with</span>
+                        <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                          <Button
+                            size="sm"
+                            variant={compare === 'previous' ? 'secondary' : 'ghost'}
+                            className="h-6 px-2 text-xs"
+                            onClick={() => onCompareChange('previous')}
+                          >
+                            Previous version
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={compare === 'working' ? 'secondary' : 'ghost'}
+                            className="h-6 px-2 text-xs"
+                            onClick={() => onCompareChange('working')}
+                          >
+                            Working copy
+                          </Button>
+                        </div>
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          {compare === 'previous'
+                            ? 'What this version changed'
+                            : 'What your unsaved copy changes'}
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                )}
+                <div className="min-h-0 flex-1 overflow-auto">
+                  {view === 'diff' && kind !== 'excalidraw' ? (
+                    diffNote ? (
+                      <p className="p-6 text-sm text-muted-foreground">{diffNote}</p>
+                    ) : diffLoading || diff === null ? (
+                      <div className="space-y-2 p-6" aria-hidden>
+                        <Skeleton className="h-3 w-1/2" />
+                        <Skeleton className="h-3 w-full" />
+                        <Skeleton className="h-3 w-3/4" />
+                      </div>
+                    ) : (
+                      <DiffView
+                        before={diff.before}
+                        after={diff.after}
+                        beforeLabel={compare === 'previous' ? 'Previous version' : 'This version'}
+                        afterLabel={compare === 'previous' ? 'This version' : 'Working copy'}
+                        emptyMessage={
+                          compare === 'previous'
+                            ? 'This version left the file unchanged.'
+                            : 'Your working copy matches this version.'
+                        }
+                      />
+                    )
+                  ) : kind === 'excalidraw' ? (
                     // Keyed on the sha so selecting another version remounts the
                     // canvas rather than diffing one historical scene into another.
                     <Canvas

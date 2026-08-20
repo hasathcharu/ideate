@@ -386,8 +386,18 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   const root = document.body
   for (const token of MANAGED_TOKENS) root.style.removeProperty(token)
 
+  // `color-scheme` goes on <html>, not <body>: it decides how the browser paints
+  // the UI it draws itself — the window scrollbar, form controls, and any
+  // scrollbar in a subtree the app's CSS can't reach — and the window scrollbar
+  // belongs to the root element. Without it a dark palette left the page's own
+  // chrome rendering light, which is where the app's theming visibly stopped.
+  const html = document.documentElement
   const tv = config?.themeVariables
-  if (!isPlainObject(tv)) return
+  if (!isPlainObject(tv)) {
+    html.style.removeProperty('color-scheme')
+    return
+  }
+  html.style.colorScheme = resolveThemeMode(config)
 
   // Pull the semantically meaningful colors, coercing to strings.
   const v = (key: string): string | undefined => {

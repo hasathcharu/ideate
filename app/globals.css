@@ -39,6 +39,16 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Diff hues (the editor's dirty gutter, and DiffView's rows). Deliberately
+     fixed rather than derived from the palette: added has to stay recognizably
+     green, deleted red and modified blue whichever theme the user picked, and
+     these three mid-tones stay legible on a white and on a near-black surface
+     alike. They are NOT in `MANAGED_TOKENS` — `applyThemeToSite` must not
+     repaint them. */
+  --diff-add: #2f9e44;
+  --diff-remove: #e5484d;
+  --diff-modified: #2f74e5;
 }
 
 .dark {
@@ -99,6 +109,12 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* Diff colors — aliases of the fixed hues defined in `:root` above, so the
+     same three colors serve the Tailwind utilities (`text-diff-add`,
+     `bg-diff-add/12`) and the plain CSS of the editor's dirty gutter. */
+  --color-diff-add: var(--diff-add);
+  --color-diff-remove: var(--diff-remove);
+  --color-diff-modified: var(--diff-modified);
   --font-sans: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -125,6 +141,52 @@
   }
 }
 
+/* Scrollbars follow the active theme, everywhere.
+
+   The rule is on `*` rather than on `:root` on purpose. `scrollbar-color` is an
+   inherited property, so a single declaration high up would be resolved *there*
+   — against the fallback palette in `:root` — and every descendant would inherit
+   that already-computed color, ignoring the theme tokens `applyThemeToSite`
+   writes onto <body>. Declaring it per element makes each one resolve the vars
+   against its own values.
+
+   Standard properties only, with the `::-webkit-scrollbar` pseudo-elements kept
+   strictly as a fallback for engines that lack them. Chromium ignores those
+   pseudo-elements as soon as `scrollbar-width`/`scrollbar-color` is set, so
+   shipping both unconditionally meant the scrollbar's appearance depended on
+   which browser (and which platform's overlay-scrollbar behavior) was in play —
+   which is exactly the intermittent theming this replaces.
+
+   `color-scheme` matters here too: scrollbars the page can't reach (inside a
+   lazily-styled third-party subtree, or drawn by the OS) follow it instead.
+   `applyThemeToSite` sets it from the active palette's light/dark mode. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 25%, transparent) transparent;
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--foreground) 25%, transparent);
+    border-radius: 9999px;
+    /* Inset the thumb by painting through a transparent border. */
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--foreground) 40%, transparent);
+  }
+}
+
 /* CodeMirror fills its pane and inherits the themed surface. */
 .editor-host {
   height: 100%;
@@ -136,28 +198,85 @@
 }
 .cm-editor .cm-scroller {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  /* Firefox: thin thumb, no track color. */
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
 }
-/* WebKit: transparent track, thin rounded thumb (inset via a transparent border). */
-.cm-editor .cm-scroller::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-  background: transparent;
+
+/* The dirty gutter (components/Editor.tsx): a bar beside the line numbers for
+   every line that differs from the last commit. Sized in the stylesheet rather
+   than in the CodeMirror theme object so it can use the shared `--diff-*` hues
+   directly. */
+.cm-editor .cm-change-gutter {
+  min-width: 3px;
+  padding: 0 3px 0 2px;
 }
-.cm-editor .cm-scroller::-webkit-scrollbar-track,
-.cm-editor .cm-scroller::-webkit-scrollbar-corner {
-  background: transparent;
+.cm-editor .cm-change {
+  width: 3px;
+  height: 100%;
+  border-radius: 1px;
 }
-.cm-editor .cm-scroller::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--foreground) 22%, transparent);
-  border-radius: 9999px;
-  border: 3px solid transparent;
-  background-clip: padding-box;
+.cm-editor .cm-change-added {
+  background: var(--diff-add);
 }
-.cm-editor .cm-scroller::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in srgb, var(--foreground) 38%, transparent);
+.cm-editor .cm-change-modified {
+  background: var(--diff-modified);
+}
+/* A deletion has no line of its own in the working copy, so it marks the line
+   that now sits where the deleted ones were — a short stub at the top of it
+   rather than a full-height bar, which would read as "this line changed". */
+.cm-editor .cm-change-removed {
+  background: var(--diff-remove);
+  height: 5px;
+}
+/* Clicking a marker peeks at the change, so it has to look clickable. The widening
+   is a `scaleX` rather than a real width, so the marker can grow past the gutter's
+   3px column without reflowing the gutters beside it. */
+.cm-editor .cm-change-gutter .cm-gutterElement {
+  cursor: pointer;
+}
+.cm-editor .cm-change {
+  transform-origin: left center;
+  transition: transform 80ms ease-out;
+}
+.cm-editor .cm-change-gutter .cm-gutterElement:hover .cm-change {
+  transform: scaleX(2.2);
+}
+
+/* Fold arrows (components/Editor.tsx supplies the chevrons). Muted and revealed
+   on gutter hover, like an editor's — a chevron burned into every foldable line
+   at full strength turns the gutter into noise. A *folded* line keeps its arrow
+   visible: it is the only thing saying content is hidden there. */
+.cm-editor .cm-foldGutter .cm-gutterElement {
+  cursor: pointer;
+}
+.cm-editor .cm-fold-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Full height, so `align-items: center` centres the chevron on the line box.
+     Left to the SVG's own 12px the marker sat above the line's midpoint and read
+     as misaligned with the line number beside it. */
+  height: 100%;
+  padding: 0 1px;
+  color: var(--muted-foreground);
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+.cm-editor .cm-fold-closed {
+  opacity: 1;
+}
+.cm-editor .cm-gutters:hover .cm-fold-marker {
+  opacity: 0.75;
+}
+.cm-editor .cm-fold-marker:hover {
+  color: var(--foreground);
+  opacity: 1;
+}
+/* The inline "…" standing in for folded content. */
+.cm-editor .cm-foldPlaceholder {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--muted-foreground);
 }
 
 /* Live preview: the diagram SVG scales to fit its container. */
@@ -346,6 +465,9 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
   overflow-x: auto;
+  /* Code wants tighter leading than prose: `.md-prose`'s 1.7 is set for reading
+     sentences and leaves a code block looking double-spaced. */
+  line-height: 1.5;
 }
 .md-prose pre > code {
   padding: 0;
@@ -404,6 +526,181 @@
   margin: 0.5em 0 0;
   border: 0;
   font-size: 0.9em;
+}
+
+/* Heading permalinks, like GitHub's: revealed on hover so they don't compete
+   with the heading text, and pulled into the left margin so appearing doesn't
+   reflow the line. */
+.md-prose .md-heading {
+  position: relative;
+}
+.md-prose .md-heading-anchor {
+  position: absolute;
+  left: -1.25em;
+  display: inline-flex;
+  align-items: center;
+  height: 1em;
+  padding-right: 0.25em;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.md-prose .md-heading:hover .md-heading-anchor,
+.md-prose .md-heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+/* Alerts (`> [!NOTE]` …). GitHub's five kinds, keyed by a per-kind hue held in
+   `--md-alert`: the surrounding palette is user-chosen, so a note has to stay
+   recognizably blue and a caution recognizably red on any of them. Both the tint
+   and the rule are mixed against the hue rather than stated outright, so the box
+   sits on a light and a dark surface equally well. */
+.md-prose .md-alert {
+  --md-alert: var(--primary);
+  margin: 0 0 1em;
+  padding: 0.75em 1em;
+  border-left: 3px solid var(--md-alert);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--md-alert) 8%, transparent);
+  color: inherit;
+}
+.md-prose .md-alert-note {
+  --md-alert: #4493f8;
+}
+.md-prose .md-alert-tip {
+  --md-alert: #3fb950;
+}
+.md-prose .md-alert-important {
+  --md-alert: #ab7df8;
+}
+.md-prose .md-alert-warning {
+  --md-alert: #d29922;
+}
+.md-prose .md-alert-caution {
+  --md-alert: #f85149;
+}
+.md-prose .md-alert > *:last-child {
+  margin-bottom: 0;
+}
+.md-prose .md-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  margin: 0 0 0.5em;
+  font-weight: 650;
+  color: var(--md-alert);
+}
+.md-prose .md-alert-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+/* Footnotes (markdown-it-footnote). Rendered as GitHub does: a rule, then a
+   smaller list at the foot of the document. */
+.md-prose .footnotes-sep {
+  margin: 2.5em 0 1em;
+}
+.md-prose .footnotes {
+  font-size: 0.875em;
+  color: var(--muted-foreground);
+}
+.md-prose .footnotes ol {
+  padding-left: 1.4em;
+}
+.md-prose .footnote-item p {
+  margin: 0 0 0.5em;
+}
+.md-prose .footnote-ref a,
+.md-prose .footnote-backref {
+  text-decoration: none;
+}
+.md-prose .footnote-ref a:hover,
+.md-prose .footnote-backref:hover {
+  text-decoration: underline;
+}
+/* The anchor the browser jumps to must not land under the pane's top edge. */
+.md-prose [id] {
+  scroll-margin-top: 1rem;
+}
+
+/* Collapsed sections (`<details>`), which repo documents use constantly. */
+.md-prose details {
+  margin: 0 0 1em;
+  padding: 0.6em 1em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.md-prose details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.md-prose details[open] > summary {
+  margin-bottom: 0.6em;
+}
+.md-prose details > *:last-child {
+  margin-bottom: 0;
+}
+
+/* `<kbd>` — used by nearly every README that documents a shortcut. */
+.md-prose kbd {
+  padding: 0.15em 0.4em;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.8em;
+}
+
+/* Syntax-highlighted fences (lib/highlight.ts). Shiki colors each token inline
+   and its own `pre` background is stripped at render time, so the block keeps
+   the themed surface `.md-prose pre` gives every other code block. */
+.md-prose pre.shiki {
+  color: inherit;
+}
+.md-prose pre.shiki code {
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+}
+/* Shiki separates its `<span class="line">`s with real newline characters (so the
+   block still copies as text). In a `white-space: pre` context those newlines are
+   the line breaks — giving the spans `display: block` on top of them broke every
+   line twice and double-spaced the whole block. */
+.md-prose pre.shiki .line {
+  display: inline;
+}
+
+/* A compact rendering for the link hover preview (components/FileHoverCard.tsx):
+   the same document styling at reading-glance size, with the block spacing and
+   heading rules pulled in so a few hundred pixels can hold something useful. */
+.md-prose-compact {
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.md-prose-compact h1,
+.md-prose-compact h2,
+.md-prose-compact h3,
+.md-prose-compact h4,
+.md-prose-compact h5,
+.md-prose-compact h6 {
+  margin: 0.8em 0 0.35em;
+  padding-bottom: 0;
+  border-bottom: 0;
+  font-size: 1.1em;
+}
+.md-prose-compact p,
+.md-prose-compact ul,
+.md-prose-compact ol,
+.md-prose-compact pre,
+.md-prose-compact table,
+.md-prose-compact blockquote {
+  margin-bottom: 0.6em;
+}
+/* The permalinks are noise at this size, and there is nothing to link to. */
+.md-prose-compact .md-heading-anchor {
+  display: none;
 }
 
 /* Hide Excalidraw's hamburger (main) menu: every item in it is either redundant

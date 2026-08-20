@@ -3,16 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
+  ArrowLeft,
   Command,
+  FileDiff,
   FolderGit2,
   GitBranch,
   GitPullRequestArrow,
   History,
   PanelLeft,
+  Map,
   Plus,
   RefreshCw,
   RotateCcw,
   Settings2,
+  WrapText,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import Editor from './Editor'
@@ -27,7 +31,8 @@ import FileTree, { FileTreeSkeleton } from './FileTree'
 import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
-import HistoryPanel from './HistoryPanel'
+import HistoryPanel, { type HistoryCompare, type HistoryView } from './HistoryPanel'
+import DiffView from './DiffView'
 import NewFileMenu from './NewFileMenu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import ConfigModal from './ConfigModal'
@@ -169,17 +174,24 @@ function templateFor(kind: FileKind): string {
   }
 }
 
+/** The extension a newly created file of this kind gets. The kind is chosen
+ *  before the name is typed (in `NewFileMenu`), so the extension is fixed by then
+ *  — the create prompt shows it as an uneditable suffix. */
+function extensionFor(kind: FileKind): string {
+  switch (kind) {
+    case 'excalidraw':
+      return EXCALIDRAW_EXTENSION
+    case 'markdown':
+      return '.md'
+    case 'mermaid':
+      return '.mmd'
+  }
+}
+
 /** The filename prefilled in a save/create prompt, so the extension always
  *  matches the content's kind. */
 function defaultFileName(kind: FileKind, base: string): string {
-  switch (kind) {
-    case 'excalidraw':
-      return `${base}${EXCALIDRAW_EXTENSION}`
-    case 'markdown':
-      return `${base}.md`
-    case 'mermaid':
-      return `${base}.mmd`
-  }
+  return `${base}${extensionFor(kind)}`
 }
 
 // Sentinel Select values for the theme dropdown: "None" strips the theme (revert
@@ -199,7 +211,15 @@ function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<st
 
 type PromptSpec = Pick<
   PromptModalProps,
-  'title' | 'description' | 'label' | 'defaultValue' | 'submitLabel' | 'validate' | 'onSubmit'
+  | 'title'
+  | 'description'
+  | 'label'
+  | 'defaultValue'
+  | 'prefix'
+  | 'suffix'
+  | 'submitLabel'
+  | 'validate'
+  | 'onSubmit'
 >
 
 export default function AppShell({ user, mode }: AppShellProps) {
@@ -210,6 +230,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     exportBackground: 'white',
     splitRatio: 0.5,
     sidebarWidth: 256,
+    wrapLines: false,
+    minimap: true,
     scratchKind: 'mermaid',
     mermaidConfig: '',
   })
@@ -236,6 +258,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [baseline, setBaseline] = useState(SAMPLE)
   const [openPath, setOpenPath] = useState<string | null>(null)
   const [loadedSha, setLoadedSha] = useState<string | null>(null)
+  // Files opened by following a link inside a document, so there is a way back.
+  // Only link navigation pushes: picking a file in the tree is a fresh start, not
+  // a step in a trail, and a Back button that then jumped somewhere unrelated
+  // would be worse than none.
+  const [linkTrail, setLinkTrail] = useState<string[]>([])
 
   const [tree, setTree] = useState<TreeResult | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
@@ -259,6 +286,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [promptOpen, setPromptOpen] = useState(false)
 
   const [configOpen, setConfigOpen] = useState(false)
+  // Swaps the editor/preview split for a diff of the committed file against the
+  // working copy. Sticky across file switches (like the wrap toggle), but only
+  // *rendered* where there is a committed side to compare with — see `canDiff`.
+  const [showDiff, setShowDiff] = useState(false)
 
   const [historyOpen, setHistoryOpen] = useState(false)
   // Path segment currently displayed — starts at the open file's path, but moves
@@ -274,6 +305,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [versionContent, setVersionContent] = useState<string | null>(null)
   const [versionLoading, setVersionLoading] = useState(false)
+  // How the selected version is shown, and — in diff mode — what it is compared
+  // against. Both are sticky across selections: someone reading a file's history
+  // as a series of diffs wants the next version to open the same way.
+  const [historyView, setHistoryView] = useState<HistoryView>('preview')
+  const [historyCompare, setHistoryCompare] = useState<HistoryCompare>('previous')
+  /** Content of the version *before* the selected one, for the default diff. */
+  const [previousContent, setPreviousContent] = useState<string | null>(null)
+  const [previousLoading, setPreviousLoading] = useState(false)
+  const [compareNote, setCompareNote] = useState<string | null>(null)
 
   // Parse the user's YAML config. The memo keeps a stable object reference until
   // the raw text changes, so it's safe to feed into the Preview render effect's
@@ -399,6 +439,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return buildTree(paths)
   }, [tree, pendingPath])
 
+  // Flat list of every file in the repo, for completing markdown link targets in
+  // the editor. Derived from the same tree the sidebar shows, so a file created or
+  // deleted this session is offered (or stops being offered) without a new fetch.
+  const repoFilePaths = useMemo(
+    () => displayNodes.flatMap(collectFilePaths),
+    [displayNodes],
+  )
+
   const updateConfig = useCallback((patch: Partial<AppConfig>) => {
     setConfig((prev) => {
       const next = { ...prev, ...patch }
@@ -472,6 +520,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const resetForRepoSwitch = useCallback(() => {
     setOpenPath(null)
     setLoadedSha(null)
+    setLinkTrail([])
     setText('')
     setBaseline('')
     setDirtyPaths(new Set())
@@ -767,6 +816,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
+  /** Open a file the user picked from the tree — the start of a new trail. */
+  const openFromTree = useCallback(
+    (path: string) => {
+      setLinkTrail([])
+      void openFile(path)
+    },
+    [openFile],
+  )
+
+  /** Open a file by following a link inside the open document. */
+  const openLinkedFile = useCallback(
+    (path: string) => {
+      if (path === openPath) return
+      setLinkTrail((prev) => (openPath ? [...prev, openPath] : prev))
+      void openFile(path)
+    },
+    [openFile, openPath],
+  )
+
+  const goBack = useCallback(() => {
+    const target = linkTrail[linkTrail.length - 1]
+    if (!target) return
+    setLinkTrail(linkTrail.slice(0, -1))
+    void openFile(target)
+  }, [linkTrail, openFile])
+
   const newDiagram = useCallback(
     (dirPath?: string, newKind: FileKind = 'mermaid') => {
       if (!repo) {
@@ -776,11 +851,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setText(NEW_TEMPLATE)
         return
       }
-      // Root-level create defaults to the repo root (no forced `diagrams/`);
-      // a folder's "+" prefills that folder. Either way the user can type any
-      // repo-relative path.
-      const suggested = defaultFileName(newKind, 'untitled')
-      const defaultValue = dirPath ? `${dirPath}/${suggested}` : suggested
+      // Only the *name* is typed: the folder (the repo root, or whichever folder's
+      // "+" was used) and the extension (fixed by the kind chosen in the menu) are
+      // shown around the field but can't be edited. A name may still contain
+      // slashes, so creating a subfolder from the root "+" still works.
+      const extension = extensionFor(newKind)
+      const prefix = dirPath ? `${dirPath}/` : ''
       openPrompt({
         title:
           newKind === 'excalidraw'
@@ -788,18 +864,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
             : newKind === 'markdown'
               ? 'New document'
               : 'New diagram',
-        description: `Create a new file on ${repo.branch}.`,
-        label: 'File path',
-        defaultValue,
+        description: `Create a new file in ${dirPath || 'the repository root'} on ${repo.branch}.`,
+        label: 'File name',
+        defaultValue: 'untitled',
+        prefix,
+        suffix: extension,
         submitLabel: 'Start editing',
-        validate: validatePath,
+        validate: validateNewFilePath(extension),
         onSubmit: (path) => {
           setPromptOpen(false)
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
-          // Derive the starter content from the extension actually submitted,
-          // not from `newKind` — the user may have retyped it in the prompt.
           setText(templateFor(fileKind(path)))
         },
       })
@@ -865,6 +941,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setLoadedSha(null)
     setBaseline('')
     setText(NEW_TEMPLATE)
+    setLinkTrail([])
     updateConfig({ scratchKind: 'mermaid' })
   }, [docId, updateConfig])
 
@@ -1038,6 +1115,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setSelectedSha(commit.sha)
       setVersionLoading(true)
       setVersionContent(null)
+      // The comparison base belongs to the previously selected version.
+      setPreviousContent(null)
+      setCompareNote(null)
       // Use the path the file had at that commit (may differ across renames).
       const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
       setVersionLoading(false)
@@ -1121,6 +1201,75 @@ export default function AppShell({ user, mode }: AppShellProps) {
     await loadHistoryPage(target, 1, false)
   }, [historyPathStack, loadHistoryPage])
 
+  // The commit immediately older than the selected one, among those loaded. A
+  // file's history is paged, so "no older commit here" can mean either "this is
+  // the first commit" or "the next page hasn't been fetched yet" — which the
+  // effect below has to tell apart before claiming the file was created here.
+  const olderCommit = useMemo(() => {
+    if (!commits || !selectedSha) return null
+    const index = commits.findIndex((c) => c.sha === selectedSha)
+    return index >= 0 ? (commits[index + 1] ?? null) : null
+  }, [commits, selectedSha])
+
+  const selectedIsOldestLoaded = useMemo(() => {
+    if (!commits || !selectedSha) return false
+    const index = commits.findIndex((c) => c.sha === selectedSha)
+    return index >= 0 && index === commits.length - 1
+  }, [commits, selectedSha])
+
+  // Fetch the previous version's content — only while a diff against it is
+  // actually on screen, so browsing history in preview mode costs nothing extra.
+  useEffect(() => {
+    if (!historyOpen || historyView !== 'diff' || historyCompare !== 'previous') return
+    if (!repo || !selectedSha) return
+    if (!olderCommit) {
+      if (selectedIsOldestLoaded && (hasMoreCommits || renamedFrom)) {
+        setPreviousContent(null)
+        setCompareNote(
+          'Load more history to compare this version with the one before it.',
+        )
+      } else {
+        // Genuinely the first commit of this path: everything in it is new.
+        setPreviousContent('')
+        setCompareNote(null)
+      }
+      return
+    }
+    let cancelled = false
+    setCompareNote(null)
+    setPreviousLoading(true)
+    void readFileAtRef(repo.owner, repo.name, olderCommit.path, olderCommit.sha).then((res) => {
+      if (cancelled) return
+      setPreviousLoading(false)
+      if (res.ok) setPreviousContent(res.data)
+      else if (!handleExpiredSession(res.error)) setCompareNote(res.error.message)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    historyOpen,
+    historyView,
+    historyCompare,
+    repo,
+    selectedSha,
+    olderCommit,
+    selectedIsOldestLoaded,
+    hasMoreCommits,
+    renamedFrom,
+  ])
+
+  // The two sides of the history diff. Comparing with the previous version reads
+  // forwards (older → this version, i.e. what the commit changed); comparing with
+  // the working copy reads the other way round, since the working copy is the
+  // newer of the two.
+  const historyDiff = useMemo(() => {
+    if (historyView !== 'diff' || versionContent === null) return null
+    if (historyCompare === 'working') return { before: versionContent, after: text }
+    if (previousContent === null) return null
+    return { before: previousContent, after: versionContent }
+  }, [historyView, historyCompare, versionContent, previousContent, text])
+
   const onRecover = useCallback(() => {
     if (versionContent === null) return
     setText(versionContent)
@@ -1150,6 +1299,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [versionContent, repo, kind, openPrompt])
 
   const canSave = !!repo && dirty && text.trim().length > 0 && !saving
+  // A canvas has no text to diff, and a file with no commit behind it has nothing
+  // to diff against.
+  const canDiff = kind !== 'excalidraw' && loadedSha !== null
   const showSidebar = githubEnabled && !!repo && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
@@ -1325,7 +1477,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   expandedPaths={expandedPaths}
                   onToggleDir={onToggleDir}
                   branch={repo?.branch ?? ''}
-                  onOpenFile={openFile}
+                  onOpenFile={openFromTree}
                   onDelete={requestDelete}
                   onNewFile={(dir, k) => newDiagram(dir, k)}
                   onRename={requestRename}
@@ -1353,6 +1505,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
+            {githubEnabled && repo && linkTrail.length > 0 ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={goBack}
+                title={`Back to ${linkTrail[linkTrail.length - 1]}`}
+                aria-label={`Back to ${linkTrail[linkTrail.length - 1]}`}
+              >
+                <ArrowLeft />
+              </Button>
+            ) : null}
             {githubEnabled && repo ? (
               <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
             ) : githubEnabled ? (
@@ -1370,14 +1533,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 every time a file was opened or closed. */}
             {!openPath ? (
               <div className="ml-1 flex items-center gap-0.5 rounded-md border p-0.5">
-                <Button
-                  size="sm"
-                  variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('mermaid')}
-                >
-                  <MermaidIcon className="size-3" /> Diagram
-                </Button>
+                {/* Same order as NewFileMenu: markdown first. */}
                 <Button
                   size="sm"
                   variant={kind === 'markdown' ? 'secondary' : 'ghost'}
@@ -1385,6 +1541,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   onClick={() => switchScratchKind('markdown')}
                 >
                   <MarkdownIcon className="size-3" /> Markdown
+                </Button>
+                <Button
+                  size="sm"
+                  variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
+                  className="h-6 gap-1 px-2 text-xs"
+                  onClick={() => switchScratchKind('mermaid')}
+                >
+                  <MermaidIcon className="size-3" /> Diagram
                 </Button>
                 <Button
                   size="sm"
@@ -1397,6 +1561,54 @@ export default function AppShell({ user, mode }: AppShellProps) {
               </div>
             ) : null}
             <div className="ml-auto flex items-center gap-1.5">
+              {/* Editor-only control, so it disappears with the canvas — which has
+                  no lines to wrap. */}
+              {kind !== 'excalidraw' ? (
+                <Button
+                  size="icon-sm"
+                  variant={showDiff && canDiff ? 'secondary' : 'ghost'}
+                  className="size-7"
+                  onClick={() => setShowDiff((v) => !v)}
+                  disabled={!canDiff}
+                  aria-pressed={showDiff && canDiff}
+                  aria-label="Compare with the last commit"
+                  title={
+                    canDiff
+                      ? showDiff
+                        ? 'Back to the editor'
+                        : 'Compare with the last commit'
+                      : 'Nothing committed yet to compare with'
+                  }
+                >
+                  <FileDiff />
+                </Button>
+              ) : null}
+              {kind !== 'excalidraw' ? (
+                <Button
+                  size="icon-sm"
+                  variant={config.wrapLines ? 'secondary' : 'ghost'}
+                  className="size-7"
+                  onClick={() => updateConfig({ wrapLines: !config.wrapLines })}
+                  aria-pressed={config.wrapLines}
+                  aria-label="Wrap long lines"
+                  title={config.wrapLines ? 'Wrap long lines: on' : 'Wrap long lines: off'}
+                >
+                  <WrapText />
+                </Button>
+              ) : null}
+              {kind !== 'excalidraw' ? (
+                <Button
+                  size="icon-sm"
+                  variant={config.minimap ? 'secondary' : 'ghost'}
+                  className="size-7"
+                  onClick={() => updateConfig({ minimap: !config.minimap })}
+                  aria-pressed={config.minimap}
+                  aria-label="Viewfinder"
+                  title={config.minimap ? 'Viewfinder: on' : 'Viewfinder: off'}
+                >
+                  <Map />
+                </Button>
+              ) : null}
               <span className="text-muted-foreground">Theme</span>
               <Select value={currentTheme} onValueChange={applyTheme}>
                 <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
@@ -1496,6 +1708,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 backgroundColor={canvasBackground}
               />
             </section>
+          ) : showDiff && canDiff ? (
+            // The diff takes the whole pane row: side by side needs the width, and
+            // there is nothing to edit while reading it.
+            <section className="min-h-0 flex-1 overflow-auto" aria-label="Uncommitted changes">
+              <DiffView
+                before={baseline}
+                after={debouncedText}
+                beforeLabel="Last commit"
+                afterLabel="Working copy"
+                emptyMessage="No uncommitted changes — this document matches the last commit."
+              />
+            </section>
           ) : (
             <div
               ref={paneRowRef}
@@ -1505,7 +1729,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
               }}
             >
               <section className="min-h-0 overflow-auto" aria-label="Editor">
-                <Editor value={text} onChange={setText} dark={false} kind={kind} />
+                <Editor
+                  value={text}
+                  onChange={setText}
+                  dark={false}
+                  kind={kind}
+                  wrap={config.wrapLines}
+                  // Only a committed file has something to diverge *from*; a new
+                  // file (or the local scratch document) would otherwise show
+                  // every one of its lines as added.
+                  baseline={loadedSha !== null ? baseline : null}
+                  filePaths={repoFilePaths}
+                  docPath={openPath}
+                  minimap={config.minimap}
+                />
               </section>
               <div
                 role="separator"
@@ -1523,7 +1760,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
               </div>
               <section className="min-h-0 overflow-auto" aria-label="Preview">
                 {kind === 'markdown' ? (
-                  <MarkdownPreview text={debouncedText} config={appliedConfig} />
+                  <MarkdownPreview
+                    text={debouncedText}
+                    config={appliedConfig}
+                    path={openPath}
+                    repo={repo}
+                    onOpenFile={repo ? openLinkedFile : undefined}
+                    // Filling the window hides the toolbar's Back button, so the
+                    // reading view carries its own.
+                    onBack={linkTrail.length > 0 ? goBack : undefined}
+                    backLabel={linkTrail[linkTrail.length - 1]}
+                  />
                 ) : (
                   <Preview text={debouncedText} config={appliedConfig} />
                 )}
@@ -1608,6 +1855,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
           kind={kind}
           canvasTheme={canvasTheme}
           canvasBackground={canvasBackground}
+          view={historyView}
+          onViewChange={setHistoryView}
+          compare={historyCompare}
+          onCompareChange={setHistoryCompare}
+          diff={historyDiff}
+          diffLoading={previousLoading}
+          diffNote={compareNote}
           onSelect={selectVersion}
           onLoadMore={loadMoreCommits}
           onViewBeforeRename={viewHistoryBeforeRename}
@@ -1635,6 +1889,22 @@ function validatePath(value: string): string | null {
   if (value.startsWith('/') || value.includes('..')) return 'Use a repo-relative path.'
   if (!isDiagramFile(value)) return `Use one of: ${DIAGRAM_EXTENSIONS_LABEL}.`
   return null
+}
+
+/**
+ * The create prompt's validation. The extension is supplied by the prompt itself,
+ * so the only new failure mode is an empty name — which would otherwise assemble
+ * into a dotfile (`docs/.md`) that `validatePath` happily accepts.
+ */
+function validateNewFilePath(extension: string): (value: string) => string | null {
+  return (value: string) => {
+    const name = value.slice(0, value.length - extension.length).split('/').pop() ?? ''
+    if (!name.trim()) return 'Enter a file name.'
+    if (name.toLowerCase().endsWith(extension)) {
+      return `The ${extension} extension is added for you.`
+    }
+    return validatePath(value)
+  }
 }
 
 /**

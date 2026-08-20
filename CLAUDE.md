@@ -15,8 +15,9 @@ Three kinds of document, decided purely by file extension (`fileKind` in
 - **Mermaid** (`.mmd` / `.mermaid`) — pure diagram source, edited in CodeMirror
   beside a live rendered diagram.
 - **Markdown** (`.md` / `.markdown`) — a prose document, edited in CodeMirror
-  beside rendered HTML. Any ```mermaid fence inside it renders as a themed
-  diagram (`lib/markdown.ts`).
+  beside rendered HTML, rendered the way GitHub renders it: GFM extras, raw
+  (sanitized) HTML, syntax-highlighted fences, in-repo links. Any ```mermaid
+  fence inside it renders as a themed diagram (`lib/markdown.ts`).
 - **Excalidraw** (`.excalidraw`) — a JSON scene, edited on a full-bleed canvas.
 
 `.md` is **markdown, not mermaid**. A `.md` file holding bare mermaid source
@@ -39,8 +40,8 @@ surface and the export pipeline differ.
    `/api/auth/session`), stored in localStorage, or passed as a client-component
    prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
-   (selected repo, active theme, export prefs, scratch-document kind). Never
-   tokens/secrets.
+   (selected repo, active theme, export prefs, scratch-document kind, editor
+   line-wrap and viewfinder). Never tokens/secrets.
 4. **Every read/write server action takes a caller-supplied `branch`** — there
    is no fixed branch constant. The selected `{owner, name, defaultBranch,
    branch}` (`RepoRef`, `lib/types.ts`) lives in `AppConfig.repo`;
@@ -112,6 +113,62 @@ outlives the navigation because the `Toaster` is in the root layout and
 `redirectTo` is a client-side nav. Add the guard to any new error site — a missed
 one degrades to the old inline message, not a crash.
 
+### The text editor
+
+`components/Editor.tsx` is one CodeMirror instance for both text kinds, with every
+per-document setting swapped through a `Compartment` (language, theme, soft wrap)
+rather than by remounting — a remount drops undo history and cursor position on
+every file switch. The line-wrap toggle is an app preference
+(`AppConfig.wrapLines`), so it survives reloads.
+
+It **does not use `basicSetup`**: that bundle is spelled out as `baseSetup` because
+three of its pieces need configuring rather than accepting.
+
+- `autocompletion()` must appear **exactly once**, so the markdown link-target
+  completions can be registered as *language data* and reach it. Typing
+  `[text](` offers every file in the repo, written relative to the document being
+  edited (`relativeLink`), so the result is a link both this app and GitHub
+  resolve. The file list and the document's path arrive as a `StateEffect`, like
+  the diff baseline — they are the app's state, not the editor's.
+- `foldGutter` gets a real chevron (`foldMarker`) instead of CodeMirror's bare
+  `⌄`/`›` glyph, hidden until the gutter is hovered unless the line is actually
+  folded. It is added **at the mount site, after the dirty gutter**: gutters render
+  in extension order, and the change bar belongs beside the line numbers.
+- `defaultHighlightStyle` and the lint gutter are dropped — this editor has its
+  own highlight style, and nothing here lints.
+
+Anything added to that list has to keep the gutter order (line numbers → changes →
+folds) and the single `autocompletion()`.
+
+Beside the editor sits the **viewfinder** (`components/Minimap.tsx`,
+`AppConfig.minimap`): the whole document compressed into a 64px column, with the
+visible region marked and the uncommitted changes banded across it. Three things
+about it are deliberate:
+
+- **It is a canvas.** A thousand-line file is a thousand marks, and a thousand
+  absolutely-positioned divs would cost more to lay out than the editor itself.
+- **The scale is fixed at 3px per line, and the map slides** when the document is
+  taller than the column — the same thing VS Code does. Fitting every line into the
+  available height instead was the obvious first implementation and it is useless
+  past a few hundred lines: each line collapses to a sub-pixel smear. The slide is
+  driven by the editor's *scroll progress* (`overflow * progress`), not its scroll
+  offset, so the map reaches its own end exactly when the editor reaches the
+  document's — and the pointer→document mapping has to add `mapTop` back in, or
+  clicking a mark scrolls somewhere else once the map has slid. Only the visible
+  slice is drawn, so cost per frame is flat in file size.
+- **Its colors are read from computed style at draw time** (`color`, `--diff-*`),
+  so it follows the active palette with none of it duplicated here. A theme change
+  rewrites custom properties on `<body>` without changing a single prop, so a
+  `MutationObserver` on that element is what triggers the redraw.
+
+The scroll geometry comes from the CodeMirror scroller (`scrollDOM`), not from a
+line count, so soft-wrapped lines don't throw the viewport marker off; a document
+change re-measures through a ref the update listener calls, rather than by
+rebuilding the listener on every keystroke. The *first* measurement is synchronous
+rather than scheduled — a frame callback never runs while the tab is in the
+background, which would otherwise leave the viewport marker at zero height until
+something else nudged it.
+
 ## UI stack
 
 Prefer shadcn primitives and Tailwind utilities over bespoke CSS.
@@ -136,6 +193,24 @@ with content the other surface can't read. Route every scratch-slot lookup throu
 silently land in another kind's slot. Anything that forces mermaid content into the
 scratch doc (`showRepoStartState`, `resetForRepoSwitch`, `detachEditor`) also
 resets `scratchKind` to `'mermaid'`.
+
+### Creating a file: only the name is typed
+
+`NewFileMenu` has already chosen the kind by the time the path prompt opens, so
+the extension is settled — and the folder is whichever "+" was used. `PromptModal`
+therefore shows both as **uneditable** text around the input (`prefix`/`suffix`),
+prefills just `untitled`, and selects it, so typing replaces the name and nothing
+else. `onSubmit`/`validate` still receive the assembled path, so
+`validatePath`/`templateFor(fileKind(path))` are unchanged; `validateNewFilePath`
+adds the one new failure mode (an empty name, which would assemble into `.md`).
+
+A name may still contain `/`, so creating a subfolder from the root "+" works.
+**Rename is deliberately different** — it keeps a single free-text path field,
+because moving a file between folders is the point of it.
+
+Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
+document is the most common thing to start, and it can hold diagrams of either
+kind inside it.
 
 ### Selecting a repository is a precondition, not a setting
 
@@ -202,6 +277,10 @@ may touch at install time and can change that later. Consequences to keep in min
   in `currentColor`: no badge, no brand hue, so the three read as one family and
   follow the active theme.
 - `app/actions/github.ts` — ALL GitHub I/O.
+- `lib/highlight.ts` — the only module that touches shiki, always through
+  `await import`. Type-only imports are erased, so those are fine.
+- `lib/diff.ts` — the diff algorithm and nothing else; no React, no I/O.
+- `types/markdown-it-emoji.d.ts` — the plugin ships no types.
 
 ## Rendering & theming
 
@@ -276,13 +355,114 @@ embedded figure owns the screen and reverts to bare-wheel zoom.
 
 The prose itself is styled by `.md-prose` in `app/globals.css`, written against
 the shadcn tokens rather than literal colors, so a rendered document follows
-`applyThemeToSite` like the rest of the chrome. markdown-it runs with
-`html: false` — raw HTML in the source is escaped, not passed through, which is
-what keeps this safe without a separate sanitizer; the only markup reaching the
-DOM is markdown-it's own output plus mermaid's SVG. Diagrams render
-**sequentially**, not through `Promise.all`: mermaid re-`initialize()`s one global
-instance and measures against the live DOM, so overlapping renders are a race with
-nothing to gain.
+`applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**,
+not through `Promise.all`: mermaid re-`initialize()`s one global instance and
+measures against the live DOM, so overlapping renders are a race with nothing to
+gain. Code fences have no such constraint and are highlighted in parallel.
+
+#### Rendering a document the way GitHub does
+
+markdown-it runs with **`html: true`**, plus footnotes, `:emoji:` shortcodes,
+task lists, `> [!NOTE]`-style alerts, GitHub-compatible heading slugs, and shiki
+syntax highlighting. Raw HTML matters because real repo documents are full of it
+(`<details>`, `<kbd>`, alignment wrappers), and escaping it showed the markup
+instead of the content.
+
+That makes **sanitizing the boundary that keeps a `.md` file from running script
+in the app**, and it fixes the order of the passes in `renderMarkdown`:
+
+1. markdown-it renders, emitting a `<span data-md-mermaid|data-md-code="N">`
+   **placeholder** for every mermaid fence and every highlighted code fence.
+2. The whole string goes through DOMPurify (`sanitizeHtml`) — `<style>` and
+   `<form>` on top of its defaults, `<input>` deliberately allowed for task-list
+   checkboxes.
+3. *Then* the placeholders are swapped for our own trusted markup.
+
+So the sanitizer never sees mermaid's SVG or shiki's token spans (it would mangle
+them), and the document's own HTML never escapes it. Placeholders are elements
+rather than HTML comments precisely because the sanitizer strips comments — but
+once substitution starts, nothing sanitizes any more, which is why the top-level
+mermaid split marker *is* a comment. `sanitizeHtml` returns `''` when there is no
+DOM: rendering is browser-only by contract, so that is a caller bug, and failing
+closed is the only safe answer.
+
+Two traps in shiki's output, both of which show up as an oddly airy code block:
+it separates its `<span class="line">`s with **real newline characters** (so the
+block still copies as text), which in a `white-space: pre` context *are* the line
+breaks — giving those spans `display: block` on top of them breaks every line twice
+and double-spaces the whole block. And the fence content markdown-it hands over
+still carries its closing newline, which shiki faithfully renders as one more empty
+line; `highlightCode` trims it. Code blocks also set their own `line-height`, since
+`.md-prose`'s 1.7 is leading for sentences and leaves code looking double-spaced.
+
+**shiki is lazily imported** (`lib/highlight.ts`) and only when a fence carries a
+language — a prose-only document, and every mermaid-only user, pays nothing. It
+runs on the JS regex engine rather than Oniguruma (no WASM payload), loads both
+GitHub themes up front and picks one from `resolveThemeMode`, and its own `pre`
+background is stripped so the block keeps the themed `.md-prose pre` surface.
+Highlighting failures return `null` and fall back to the plain fence.
+
+#### The document is wired into the repository
+
+`renderMarkdown` takes the document's own path and the repo, and resolves
+relative links and images the way GitHub does:
+
+- A **repo-relative link** is tagged `data-md-repo-link="<resolved path>"`, and
+  its `href` is rewritten to the file's GitHub blob URL. `MarkdownPreview`
+  intercepts a plain click and opens the file in the editor; ⌘/Ctrl-click still
+  follows the href to GitHub. The href rewrite is not cosmetic — left as a
+  relative path, an "open in new tab" would navigate to a 404 *under `/editor`*,
+  which is why a click is `preventDefault`ed outright when no repo is connected.
+- **Following a link is undoable.** `AppShell` keeps a `linkTrail` of the files a
+  link was followed *from*, and shows a Back button while it is non-empty. Only
+  link navigation pushes onto it — opening a file from the tree clears it, because
+  a Back button that then jumped to an unrelated file is worse than none.
+- **Resting on such a link previews the file** (`components/FileHoverCard.tsx`):
+  fetched through `readFile`, cached per repo+branch+path, rendered from a
+  truncated copy of the source, and `pointer-events: none` so the card never has
+  to negotiate hover with the link that opened it. A scene shows its element
+  count — drawing a real thumbnail would mean pulling in the Excalidraw bundle
+  and its fonts (rule 8) for a hover preview. Scrolling **re-measures** the card's
+  anchor rather than dismissing it: dismissing while the pointer still rested on
+  the link left the next mouse event free to schedule it again, which flickers.
+- A **relative image** is rewritten to raw.githubusercontent.com, since a
+  repo-relative `src` would otherwise resolve against the app's own origin.
+- `#anchor` links scroll the reading pane, using the heading slugs.
+
+#### Full-window markdown gets an outline
+
+`renderMarkdown` returns `{ parts, headings }`, and maximizing the preview turns
+it into a reading view with a Contents panel (scroll-spy on the pane's own scroll
+container). It is deliberately **only** offered when maximized: beside the editor
+the pane can't spare the width, and the document is right there in the source. The
+panel **floats over** the document rather than taking a column of it — a column
+shifts the prose and re-fits every diagram in it each time the panel is toggled —
+and it sits at the top right, directly under the window controls, so the panel and
+the button that opens it are in the same place.
+
+Filling the window covers the toolbar, so the reading view carries its own **Back**
+button (`onBack`/`backLabel`) for the link trail described above. Anything else the
+toolbar owns and a reader needs has to be repeated there for the same reason.
+
+### Native chrome follows it too (scrollbars, `color-scheme`)
+
+Two things are easy to get wrong here, and both were:
+
+- **`scrollbar-color` is inherited, so it must be declared on `*`.** Declared once
+  high up, it resolves *there* — against the fallback palette in `:root`, not the
+  tokens `applyThemeToSite` writes onto `<body>` — and every descendant inherits
+  that already-computed color. The `*` rule makes each element resolve the vars
+  against its own values.
+- **Standard properties only**, with `::-webkit-scrollbar` kept behind
+  `@supports not (scrollbar-color: auto)`. Chromium ignores those pseudo-elements
+  as soon as `scrollbar-width`/`scrollbar-color` is set, so shipping both
+  unconditionally made a scrollbar's appearance depend on the browser and the
+  platform's overlay-scrollbar behavior — the intermittent theming this replaced.
+
+`applyThemeToSite` also sets **`color-scheme` on `<html>`** (not `<body>`) from
+`resolveThemeMode`: it decides how the browser paints the UI it draws itself — the
+window scrollbar, form controls, scrollbars inside subtrees the app's CSS can't
+reach — and the window scrollbar belongs to the root element.
 
 ### The canvas follows the same palette
 
@@ -343,6 +523,53 @@ built-in right-click "Copy as PNG" isn't left at the display's `devicePixelRatio
 and re-frames the scene with `scrollToContent` on mount — scroll/zoom are
 deliberately *not* persisted (panning must not dirty a file), so a reopened scene
 would otherwise land at the canvas origin.
+
+## Uncommitted changes are shown as a diff
+
+`lib/diff.ts` is a Myers line diff (what git uses), with a common prefix/suffix
+trim first and a size cap after it — past `MAX_DIFF_LINES` the result degrades to
+"all of the old, then all of the new" rather than spending seconds and hundreds of
+megabytes proving that two large files are unrelated. **No GitHub call is
+involved**: the app already holds the committed content it loaded (`baseline`)
+beside the working copy, so a diff of the open document is pure computation.
+
+It feeds three surfaces:
+
+- **The editor's dirty gutter** — a bar beside the line numbers, VS Code style
+  (`lineChanges`). The unit is a *block* of adjacent changed lines, not a line:
+  removals and additions together are a **modification**, additions alone are an
+  **addition**, and removals alone have no line in the working copy to mark, so
+  they mark the line that now sits where they were. The map is computed in React
+  and pushed into CodeMirror as a `StateEffect`, because the baseline is the
+  *app's* state — it changes on commit, restore and file switch, none of which are
+  document changes the editor would otherwise see. The gutter is empty when
+  `loadedSha === null`: a file with no commit behind it has nothing to diverge
+  from, and marking every line green is noise.
+- **A peek popup** on clicking a marker (`changeAtLine`), positioned from
+  `coordsAtPos` and re-pinned on scroll. The gutter's `mousedown` handler returns
+  `true` so the click doesn't also move the cursor, and the marker widens with a
+  `scaleX` on hover — a real width change would reflow the gutters beside it. The
+  popup's **Revert** discards that one block: every kind of change is reduced to a
+  single `LineChangeRevert` ("replace these lines with this text") in `lib/diff.ts`,
+  so `applyRevert` in the editor has one operation to perform rather than three
+  cases to re-derive. Its two line-break subtleties are invisible in the line range
+  and easy to lose: deleting lines has to take a line break with them, and
+  inserting at the end of the document puts the break *before* the text. It goes
+  through `dispatch`, so ⌘Z undoes it like any edit.
+- **`components/DiffView.tsx`** — side-by-side (default) or unified, from the same
+  hunks. Used by the editor's diff toggle (committed vs. working copy, taking the
+  whole pane row) and by version history's Preview/Diff toggle, which compares the
+  selected version either with the one before it or with the working copy.
+
+Scenes are excluded everywhere: a `.excalidraw` file is JSON whose bytes churn
+without the drawing changing (rule 9), so a line diff of one shows changes that
+aren't there.
+
+In version history, "previous version" is the next commit in the **loaded** page.
+"No older commit here" is ambiguous — first commit of the path, or next page not
+fetched yet — so the fetch effect only claims the file was created in this commit
+when there is genuinely nothing more to page in; otherwise it asks the user to
+load more history.
 
 ## Export
 

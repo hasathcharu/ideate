@@ -34,11 +34,13 @@ export default function NewFileMenu({ onSelect, children }: NewFileMenuProps) {
           sidebar. `min-w-52` + non-wrapping items keep each label on one line — at
           the default menu width "Excalidraw canvas" wraps onto a second row. */}
       <DropdownMenuContent align="start" className="min-w-52">
-        <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('mermaid')}>
-          <MermaidIcon /> Mermaid diagram
-        </DropdownMenuItem>
+        {/* Markdown first: a document is the most common thing to start, and it
+            can hold diagrams of either kind inside it. */}
         <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('markdown')}>
           <MarkdownIcon /> Markdown document
+        </DropdownMenuItem>
+        <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('mermaid')}>
+          <MermaidIcon /> Mermaid diagram
         </DropdownMenuItem>
         <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('excalidraw')}>
           <ExcalidrawIcon /> Excalidraw canvas

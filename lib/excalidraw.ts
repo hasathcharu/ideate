@@ -154,3 +154,19 @@ export function scenesEqual(a: string, b: string): boolean {
   if (left === null || right === null) return false
   return left === right
 }
+
+/**
+ * A one-line description of a scene, for surfaces that can't draw one.
+ *
+ * Rendering a real thumbnail would mean reaching for `exportToSvg`, which pulls
+ * in the whole Excalidraw bundle plus its fonts (rule 8) — far too much for a
+ * hover preview. The element count is what actually answers the question being
+ * asked there ("is this the drawing I meant, and does it have anything in it?").
+ */
+export function sceneSummary(text: string): string {
+  const scene = parseScene(text)
+  if (!scene) return 'Not a readable Excalidraw scene.'
+  const count = scene.elements.length
+  if (count === 0) return 'Excalidraw canvas — empty.'
+  return `Excalidraw canvas — ${count} element${count === 1 ? '' : 's'}.`
+}
