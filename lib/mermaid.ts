@@ -226,6 +226,37 @@ function describeRenderError(err: unknown, text: string, userConfig: MermaidUser
   return message
 }
 
+/**
+ * Syntax-check `text` without rendering it — the diagnostics Agent Link
+ * reports back after an edit (`ideate_check`).
+ *
+ * Parse rather than render, for two reasons. It touches no DOM and lays nothing
+ * out, so a check triggered by an agent edit cannot race the live preview's
+ * render against mermaid's single global instance and invent a failure that isn't
+ * there. And it is the check that matters: a diagram an agent wrote fails on
+ * syntax, essentially never on layout — and layout failures are already visible
+ * to the human in the preview pane.
+ */
+export type ParseResult = { ok: true } | { ok: false; message: string }
+
+export async function parseDiagram(
+  text: string,
+  userConfig: MermaidUserConfig | null = null,
+): Promise<ParseResult> {
+  const trimmed = text.trim()
+  if (!trimmed) return { ok: false, message: 'Empty diagram.' }
+  applyConfig(userConfig)
+  installCircularSafeStringify()
+  try {
+    await mermaid.parse(text)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, message: describeRenderError(err, text, userConfig) }
+  } finally {
+    restoreStringify()
+  }
+}
+
 /** Render the diagram, returning a discriminated result instead of throwing so
  *  the preview can show inline error messages. */
 export async function renderPreview(

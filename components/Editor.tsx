@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { ChangeSet, EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
 import {
   EditorView,
   GutterMarker,
@@ -65,6 +65,8 @@ import {
 } from '@/lib/diff'
 import Minimap from './Minimap'
 import type { FileKind } from '@/lib/tree'
+import type { TextEdit } from '@/lib/agentProtocol'
+import { resolveEdits } from '@/lib/textEdit'
 
 /** A small stream tokenizer that gives Mermaid source enough structure to read
  *  well in the editor. Not a full grammar — just keywords, arrows, labels. */
@@ -208,11 +210,19 @@ function linkTargetCompletions(context: CompletionContext): CompletionResult | n
     from: context.pos - (typed.length - kept),
     options: paths
       .filter((path) => path !== docPath)
-      .map((path) => ({
-        label: relativeLink(dir, path),
-        detail: path,
-        type: 'file',
-      })),
+      .map((path) => {
+        const label = relativeLink(dir, path)
+        return {
+          label,
+          // The full repo path, as context for a link written relative to this
+          // document — but only when it actually adds something. A sibling file
+          // relativizes to its own name, and for a document at the repo root
+          // *every* path does, so an unconditional detail printed the same string
+          // twice on every row.
+          ...(label === path ? {} : { detail: path }),
+          type: 'file',
+        }
+      }),
     validFor: /^[^()\s]*$/,
   }
 }
@@ -319,7 +329,14 @@ const baseSetup = [
   indentOnInput(),
   bracketMatching(),
   closeBrackets(),
-  autocompletion(),
+  // `icons: false`: CodeMirror renders an icon slot for every row and only ships
+  // glyphs for its own completion types, of which `file` is not one — so the
+  // markdown link completions got an empty box indenting every path. Nothing in a
+  // list of file paths is disambiguated by a per-row icon, so the column goes.
+  // `editorTheme` collapses it too, so the row's geometry doesn't depend on this
+  // flag. Still exactly one `autocompletion()`, which is what the link
+  // completions need to reach it.
+  autocompletion({ icons: false }),
   rectangularSelection(),
   crosshairCursor(),
   highlightActiveLine(),
@@ -612,9 +629,13 @@ function editorTheme(dark: boolean) {
       },
       '.cm-content': { padding: '12px 0', caretColor: 'var(--primary)' },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--primary)' },
+      // The gutter sits on the editor's own surface, like VS Code's. On
+      // `--secondary` (a mid-tone from the diagram palette) the line numbers were
+      // muted text on a surface `--muted-foreground` is not measured against — as
+      // low as 2:1 on some themes — and it drew a band down the side of the pane.
       '.cm-gutters': {
         border: 'none',
-        backgroundColor: 'var(--secondary)',
+        backgroundColor: 'var(--background)',
         color: 'var(--muted-foreground)',
       },
       '.cm-activeLine': {
@@ -623,10 +644,106 @@ function editorTheme(dark: boolean) {
       '.cm-activeLineGutter': {
         backgroundColor: 'color-mix(in srgb, var(--foreground) 18%, transparent)',
       },
+      // Blended into the *page*, not into transparency. A translucent accent over
+      // a dark theme composites toward the accent's own (bright) colour, which
+      // washed the selection out and took the selected text with it; mixing into
+      // `--background` keeps a dark palette's selection dark and a light one's
+      // light, at the same visual strength either way.
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
         {
-          backgroundColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+          backgroundColor: 'color-mix(in srgb, var(--primary) 28%, var(--background))',
         },
+      // Search hits and other occurrences of the selected word. CodeMirror's
+      // defaults for these are fixed pale yellow/green, chosen against a white
+      // editor — on a dark palette they are the brightest thing on screen. Both
+      // are re-derived from the accent instead, at strengths that keep the text
+      // on top of them readable.
+      '.cm-searchMatch': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 22%, var(--background))',
+        outline: '1px solid color-mix(in srgb, var(--primary) 45%, transparent)',
+        borderRadius: '2px',
+      },
+      '.cm-searchMatch.cm-searchMatch-selected': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 45%, var(--background))',
+      },
+      '.cm-selectionMatch': {
+        backgroundColor: 'color-mix(in srgb, var(--foreground) 14%, transparent)',
+        borderRadius: '2px',
+      },
+      '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+        outline: 'none',
+      },
+      '.cm-nonmatchingBracket, &.cm-focused .cm-nonmatchingBracket': {
+        backgroundColor: 'color-mix(in srgb, var(--destructive) 30%, transparent)',
+      },
+      // Tooltips (the completion popup, and anything else CodeMirror floats).
+      // Left to the stock theme these are a light card with a blue selection bar,
+      // which is both unreadable on a dark palette and unlike every other menu in
+      // the app — so the geometry below is deliberately the same as
+      // `components/ui/dropdown-menu.tsx`: rounded-lg popover, 4px padding,
+      // rounded-md items tinted with `--accent` on selection.
+      '.cm-tooltip': {
+        backgroundColor: 'var(--popover)',
+        color: 'var(--popover-foreground)',
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        boxShadow: '0 4px 12px color-mix(in srgb, var(--foreground) 12%, transparent)',
+        overflow: 'hidden',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+        fontFamily:
+          "var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace)",
+        fontSize: '12px',
+        maxHeight: '16rem',
+        padding: '4px',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '3px 6px',
+        borderRadius: '6px',
+        color: 'var(--popover-foreground)',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: 'var(--accent)',
+        color: 'var(--accent-foreground)',
+      },
+      // The matched substring. CodeMirror underlines it; the app's own filtered
+      // lists bolden instead, and an underline inside a file path reads as part of
+      // the path.
+      '.cm-completionMatchedText': {
+        textDecoration: 'none',
+        fontWeight: '700',
+        color: 'var(--primary)',
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText': {
+        color: 'inherit',
+      },
+      // The icon column. `autocompletion({ icons: false })` stops it being
+      // rendered at all; this collapses it if it ever is, because the geometry of
+      // the row shouldn't depend on that flag holding. CodeMirror gives the slot
+      // `width: .8em` + `padding-right: .6em` and ships no glyph for `file`, so
+      // every path in the list was indented ~1.4em by an empty box.
+      '.cm-completionIcon': {
+        display: 'none',
+      },
+      '.cm-completionLabel': { flex: '1 1 auto', minWidth: '0' },
+      '.cm-completionDetail': {
+        flex: '0 1 auto',
+        minWidth: '0',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        fontStyle: 'normal',
+        fontSize: '11px',
+        color: 'var(--muted-foreground)',
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail': {
+        color: 'inherit',
+        opacity: '0.75',
+      },
       // Search / replace panel (⌘F): custom VSCode-styled panel themed with the
       // app's design tokens instead of CodeMirror's default light chrome.
       '.cm-panels': {
@@ -710,6 +827,38 @@ function editorTheme(dark: boolean) {
   )
 }
 
+/**
+ * The imperative surface Agent Link drives (`lib/agentLink.ts`).
+ *
+ * It exists so an agent's edit lands as a **real CodeMirror transaction** rather
+ * than a whole-document swap: the untouched parts of the document keep their
+ * folds and the cursor keeps its place, the dirty gutter and viewfinder update
+ * through the paths they already use, and the whole batch is a single undo step —
+ * so ⌘Z takes back "what the agent did", not one anchor at a time.
+ */
+/** How many recent emissions the echo guard remembers. See `emittedRef`. */
+const EMITTED_HISTORY = 8
+
+export interface EditorHandle {
+  /** Apply anchored replacements as one transaction, scrolling the last one into
+   *  view. Throws (rather than partially applying) if any anchor is missing or
+   *  ambiguous — see `resolveEdits`.
+   *
+   *  Returns the resulting document. That return value is not a convenience: the
+   *  caller needs the new text *now*, to render diagnostics for what it just
+   *  wrote, and `onChange` only reaches React state on the next render — so
+   *  reading the text back from a prop would report on the document as it was
+   *  before the edit. */
+  applyEdits: (edits: readonly TextEdit[]) => string
+  /** 1-based cursor position, for `ideate_status`. */
+  cursor: () => { line: number; column: number } | null
+  /** Put the cursor on a 1-based line and scroll it into view — the editor half
+   *  of the scroll sync with the markdown preview. Out-of-range lines are clamped
+   *  rather than rejected: the caller's line comes from a rendered document that
+   *  may be a render or two behind the text. */
+  revealLine: (line: number) => void
+}
+
 export interface EditorProps {
   value: string
   onChange: (value: string) => void
@@ -736,6 +885,14 @@ export interface EditorProps {
   docPath?: string | null
   /** Show the viewfinder column (the whole document at a glance) on the right. */
   minimap?: boolean
+  /** Double-clicking a line reports its 1-based number, so the preview can scroll
+   *  to whatever that line renders as. Double-click still selects the word under
+   *  the pointer — the sync rides along with the existing gesture rather than
+   *  taking it over. */
+  onRevealPreview?: (line: number) => void
+  /** Handle for Agent Link. Passed as an ordinary prop — React 19 treats
+   *  `ref` as one for function components, so no `forwardRef` wrapper is needed. */
+  ref?: React.Ref<EditorHandle>
 }
 
 export default function Editor({
@@ -748,17 +905,40 @@ export default function Editor({
   filePaths,
   docPath = null,
   minimap = false,
+  onRevealPreview,
+  ref,
 }: EditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
-  const lastValueRef = useRef(value)
+  // Behind a ref for the same reason `onChange` is: the extension array is built
+  // once at mount, and this handler changes identity on every parent render.
+  const onRevealPreviewRef = useRef(onRevealPreview)
+  /**
+   * Documents this editor has emitted that may still be in flight as a stale
+   * `value` prop, newest last.
+   *
+   * The reconcile effect below cannot tell an *external* change (open a file,
+   * restore a version, `ideate_write`) from an *echo* of its own output by value
+   * alone, and the difference matters: React can commit a render carrying an older
+   * value after a newer programmatic edit has already moved the document, and
+   * force-replacing the document with that older value silently discards the
+   * newer edit. Two agent edits arriving faster than React commits used to lose
+   * every second one for exactly this reason.
+   *
+   * Capped, because these are whole document copies. A handful covers every render
+   * that can realistically be in flight; the cap only ever discards echoes so old
+   * that treating one as external would replace the document with what it already
+   * contains.
+   */
+  const emittedRef = useRef<string[]>([value])
   const themeCompartment = useRef(new Compartment())
   const highlightCompartment = useRef(new Compartment())
   const languageCompartment = useRef(new Compartment())
   const wrapCompartment = useRef(new Compartment())
 
   onChangeRef.current = onChange
+  onRevealPreviewRef.current = onRevealPreview
 
   // Mount once.
   useEffect(() => {
@@ -780,10 +960,21 @@ export default function Editor({
           wrapCompartment.current.of(wrap ? EditorView.lineWrapping : []),
           themeCompartment.current.of(editorTheme(dark)),
           highlightCompartment.current.of(syntaxHighlighting(highlightStyle())),
+          EditorView.domEventHandlers({
+            dblclick(event, view) {
+              const reveal = onRevealPreviewRef.current
+              if (!reveal) return false
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+              if (pos !== null) reveal(view.state.doc.lineAt(pos).number)
+              // Not handled: the double-click must still select the word under the
+              // pointer, which is what a double-click in a text editor is for.
+              return false
+            },
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               const doc = update.state.doc.toString()
-              lastValueRef.current = doc
+              emittedRef.current = [...emittedRef.current, doc].slice(-EMITTED_HISTORY)
               onChangeRef.current(doc)
               // The document's height just changed, so the viewfinder's idea of
               // the scroll range is stale.
@@ -806,8 +997,16 @@ export default function Editor({
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
-    if (value === lastValueRef.current) return
-    lastValueRef.current = value
+    const echo = emittedRef.current.lastIndexOf(value)
+    if (echo !== -1) {
+      // Our own output coming back around. Drop it and everything older, and
+      // leave the document alone — it is already at least this new.
+      emittedRef.current = emittedRef.current.slice(echo + 1)
+      return
+    }
+    // Genuinely external: replace the document wholesale, and forget the
+    // emission history, which now describes a document that no longer exists.
+    emittedRef.current = [value]
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     })
@@ -1008,6 +1207,60 @@ export default function Editor({
       effects: themeCompartment.current.reconfigure(editorTheme(dark)),
     })
   }, [dark])
+
+  // Agent Link's door into this editor (see `EditorHandle`). Mount-stable:
+  // everything it needs is behind `viewRef`, so the handle identity never changes
+  // and the bridge never has to re-read it.
+  useImperativeHandle(
+    ref,
+    () => ({
+      applyEdits: (edits) => {
+        const view = viewRef.current
+        if (!view) throw new Error('The text editor is not mounted.')
+        const changes = resolveEdits(view.state.doc.toString(), edits)
+        // Resolved against the pre-transaction document, which is exactly what a
+        // ChangeSet consumes — so this is one atomic dispatch and one undo step,
+        // however many anchors were in the batch.
+        const set = ChangeSet.of(changes, view.state.doc.length)
+        const last = changes[changes.length - 1]!
+        // Select the text the last edit inserted, so the human watching sees
+        // where the agent worked. `mapPos` with assoc -1 lands at the start of
+        // the insertion; doing this arithmetic by hand would mean re-deriving the
+        // net shift of every preceding change.
+        const anchor = set.mapPos(last.from, -1)
+        view.dispatch({
+          changes: set,
+          selection: { anchor, head: anchor + last.insert.length },
+          scrollIntoView: true,
+        })
+        return view.state.doc.toString()
+      },
+      cursor: () => {
+        const view = viewRef.current
+        if (!view) return null
+        const head = view.state.selection.main.head
+        const line = view.state.doc.lineAt(head)
+        return { line: line.number, column: head - line.from + 1 }
+      },
+      revealLine: (line) => {
+        const view = viewRef.current
+        if (!view) return
+        const doc = view.state.doc
+        const target = doc.line(Math.min(Math.max(Math.round(line), 1), doc.lines))
+        // Move the cursor as well as scrolling: centring a line and leaving the
+        // caret behind means the next keystroke scrolls straight back to wherever
+        // it was, undoing the jump.
+        view.dispatch({
+          selection: { anchor: target.from },
+          effects: EditorView.scrollIntoView(target.from, { y: 'center' }),
+        })
+        // Deliberately no `focus()` — the human is reading the document and
+        // clicked in it; stealing the caret out of the pane they are pointing at
+        // is not what a scroll sync is for.
+      },
+    }),
+    [],
+  )
 
   return (
     <div className="flex h-full min-h-0">

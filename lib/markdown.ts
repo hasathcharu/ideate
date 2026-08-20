@@ -84,6 +84,9 @@ md.use(emojiPlugin)
 interface FoundFence {
   source: string
   topLevel: boolean
+  /** 1-based line the fence opens on, for the scroll sync (see
+   *  {@link SOURCE_LINE_ATTR}). */
+  line: number | null
 }
 
 /** One ordinary code fence, held back so shiki can highlight it asynchronously. */
@@ -92,6 +95,8 @@ interface FoundCode {
   language: string
   /** Markup to fall back to if highlighting isn't possible. */
   fallback: string
+  /** 1-based line the fence opens on. */
+  line: number | null
 }
 
 /** A heading in the rendered document, in document order. */
@@ -386,6 +391,52 @@ md.core.ruler.after('inline', 'md-headings', (state) => {
 })
 
 /* ------------------------------------------------------------------ */
+/* Source lines (editor ↔ preview scroll sync)                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Attribute carrying the 1-based source line a rendered block came from.
+ *
+ * This is the whole basis of the two-way scroll sync in `MarkdownPreview`:
+ * double-clicking a line in the editor scrolls to the deepest block that starts
+ * at or before it, and double-clicking a block in the document puts the cursor on
+ * the line it was written on. markdown-it already knows the answer — every block
+ * token carries a `map` — so this is a matter of publishing it into the DOM rather
+ * than re-deriving a mapping by counting rendered elements, which no amount of
+ * care makes correct across raw HTML, footnotes and nested lists.
+ */
+export const SOURCE_LINE_ATTR = 'data-md-line'
+
+/** The line a block token starts on, 1-based to match the editor, or null when
+ *  markdown-it didn't map it (tokens the plugins above splice in by hand). */
+function sourceLine(token: Token): number | null {
+  const start = token.map?.[0]
+  return typeof start === 'number' ? start + 1 : null
+}
+
+/**
+ * Stamp every rendered block with the line it came from.
+ *
+ * The block token stream is flat — only *inline* children nest — so one pass
+ * reaches a paragraph inside a list item inside a blockquote as readily as a
+ * top-level heading, and the sync gets that granularity for free.
+ *
+ * Skipped: closing tokens (no element of their own), `inline` tokens (they render
+ * their children, not a tag, so an attribute on one goes nowhere), and the
+ * synthetic tokens the alert/task-list rules splice in, which have no map. Fences
+ * are stamped too, but not from here: they render as placeholders, so they carry
+ * their line through {@link FoundFence} / {@link FoundCode} instead.
+ */
+md.core.ruler.push('md-source-lines', (state) => {
+  for (const token of state.tokens) {
+    if (token.nesting < 0 || token.type === 'inline') continue
+    const line = sourceLine(token)
+    if (line !== null) token.attrSet(SOURCE_LINE_ATTR, String(line))
+  }
+  return true
+})
+
+/* ------------------------------------------------------------------ */
 /* Links and images                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -532,7 +583,11 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     // `level === 0` means the fence is a direct child of the document root, so
     // the markup around it can be split at this point without tearing a `<ul>`
     // or `<blockquote>` in half.
-    list.push({ source: token.content, topLevel: token.level === 0 })
+    list.push({
+      source: token.content,
+      topLevel: token.level === 0,
+      line: sourceLine(token),
+    })
     return mermaidPlaceholder(index)
   }
 
@@ -542,7 +597,12 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
   // rendering as the fallback for an unknown language or a failed load.
   const list = (store.code ??= [])
   const index = list.length
-  list.push({ source: token.content, language, fallback: renderFence() })
+  list.push({
+    source: token.content,
+    language,
+    fallback: renderFence(),
+    line: sourceLine(token),
+  })
   return codePlaceholder(index)
 }
 
@@ -552,6 +612,19 @@ function escapeHtml(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * Add the source-line attribute to markup whose outermost tag we didn't author.
+ *
+ * A fence renders as a placeholder, so the core rule above can't reach it — its
+ * line has to be grafted onto whatever comes back from shiki (or from
+ * markdown-it's fallback), both of which open with a `<pre …>`. Anything that
+ * doesn't start with a tag is returned untouched rather than guessed at.
+ */
+function withSourceLine(markup: string, line: number | null): string {
+  if (line === null) return markup
+  return markup.replace(/^(\s*<[a-zA-Z][^\s/>]*)/, `$1 ${SOURCE_LINE_ATTR}="${line}"`)
 }
 
 /** The markup a fence becomes when its mermaid source doesn't parse. The source
@@ -572,7 +645,7 @@ function errorBlock(message: string, source: string): string {
  */
 export type MarkdownPart =
   | { type: 'html'; html: string }
-  | { type: 'diagram'; svg: string }
+  | { type: 'diagram'; svg: string; line: number | null }
 
 /** A rendered document: its content, plus the outline the reading view offers. */
 export interface MarkdownRender {
@@ -627,7 +700,7 @@ export async function renderMarkdown(
     html = html.replace(placeholderPattern('data-md-code', 'g'), (match, index: string) => {
       const fence = codeFences[Number(index)]
       if (!fence) return match
-      return highlighted[Number(index)] ?? fence.fallback
+      return withSourceLine(highlighted[Number(index)] ?? fence.fallback, fence.line)
     })
   }
 
@@ -639,7 +712,7 @@ export async function renderMarkdown(
   const inline = new Map<number, string>()
 
   for (let i = 0; i < fences.length; i++) {
-    const { source, topLevel } = fences[i]!
+    const { source, topLevel, line } = fences[i]!
     if (!source.trim()) {
       inline.set(i, '')
       continue
@@ -649,11 +722,14 @@ export async function renderMarkdown(
       svg = await renderToSvg(source, config)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      inline.set(i, errorBlock(message, source))
+      inline.set(i, withSourceLine(errorBlock(message, source), line))
       continue
     }
     if (topLevel) standalone.set(i, svg)
-    else inline.set(i, `<div class="md-mermaid">${svg}</div>`)
+    else {
+      const attr = line === null ? '' : ` ${SOURCE_LINE_ATTR}="${line}"`
+      inline.set(i, `<div class="md-mermaid"${attr}>${svg}</div>`)
+    }
   }
 
   // One pass over the placeholders: inline diagrams are substituted outright,
@@ -679,8 +755,11 @@ export async function renderMarkdown(
     if (i % 2 === 0) {
       if (segment.trim()) parts.push({ type: 'html', html: segment })
     } else {
-      const svg = standalone.get(Number(segment))
-      if (svg) parts.push({ type: 'diagram', svg })
+      const index = Number(segment)
+      const svg = standalone.get(index)
+      // A standalone diagram becomes its own React element, so its line travels
+      // as a field rather than as an attribute in a string.
+      if (svg) parts.push({ type: 'diagram', svg, line: fences[index]?.line ?? null })
     }
   }
   return { parts, headings }

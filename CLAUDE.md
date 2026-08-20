@@ -41,7 +41,13 @@ surface and the export pipeline differ.
    prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
    (selected repo, active theme, export prefs, scratch-document kind, editor
-   line-wrap and viewfinder). Never tokens/secrets.
+   line-wrap and viewfinder). Never tokens/secrets. **Agent Link's on/off state is
+   the one browser-persisted setting that is deliberately *not* in `AppConfig`**:
+   it lives in `sessionStorage` (`loadAgentLink`/`saveAgentLink`) so it is scoped to
+   one tab. In config it was shared by the whole origin, so switching it on once
+   armed every tab afterwards, they all raced for the bridge, and whichever won
+   became the tab the agent drove — leaving the human no way to choose. It still
+   survives a reload, which a plain `useState` would not.
 4. **Every read/write server action takes a caller-supplied `branch`** — there
    is no fixed branch constant. The selected `{owner, name, defaultBranch,
    branch}` (`RepoRef`, `lib/types.ts`) lives in `AppConfig.repo`;
@@ -86,7 +92,16 @@ surface and the export pipeline differ.
     live outside the canvas: behind it (the host element, for display) or
     composited around it (for export). Never hand Excalidraw a background color and
     expect it back.
-12. **Token refresh happens in `proxy.ts` and nowhere else.** GitHub App user
+12. **Agent Link's token route must never gain CORS headers.**
+   `app/api/agent/token/route.ts` is readable only same-origin, and *that* — not
+   the signature on the token — is what stops any web page from driving the user's
+   editor over a WebSocket (WebSockets have no same-origin policy; `fetch` does).
+   Nor may `mcp/verify.ts` fetch a JWKS before checking `iss` against its pinned
+   list. See "An agent can drive the live editor".
+13. **No agent tool may write to GitHub.** There is no commit tool, and rename and
+   delete are deliberately not exposed either, because in this app they *are*
+   commits. An agent's blast radius is the uncommitted working copy.
+14. **Token refresh happens in `proxy.ts` and nowhere else.** GitHub App user
    tokens expire in 8h and refresh tokens **rotate** (each use invalidates the
    previous one), so a refresh whose result isn't written back to the session
    cookie locks the user out. `cookies().set()` throws during a render, so
@@ -129,7 +144,13 @@ three of its pieces need configuring rather than accepting.
   `[text](` offers every file in the repo, written relative to the document being
   edited (`relativeLink`), so the result is a link both this app and GitHub
   resolve. The file list and the document's path arrive as a `StateEffect`, like
-  the diff baseline — they are the app's state, not the editor's.
+  the diff baseline — they are the app's state, not the editor's. It is configured
+  `{ icons: false }`: CodeMirror renders an icon slot per row but only ships glyphs
+  for its own completion types, and `file` is not one, so every path was indented
+  by an empty box. And a completion's `detail` is set **only when it differs from
+  the label** — a sibling file relativizes to its own name, and for a document at
+  the repo root every path does, so an unconditional `detail` printed the same
+  string twice on every row.
 - `foldGutter` gets a real chevron (`foldMarker`) instead of CodeMirror's bare
   `⌄`/`›` glyph, hidden until the gutter is hovered unless the line is actually
   folded. It is added **at the mount site, after the dirty gutter**: gutters render
@@ -139,6 +160,54 @@ three of its pieces need configuring rather than accepting.
 
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
+
+**Every surface CodeMirror paints itself has to be named in `editorTheme`.** The
+pieces it does *not* name fall back to a stock theme whose colors are literals
+picked against a white editor, and those are what looked broken on dark palettes:
+`.cm-searchMatch` (pale yellow), `.cm-selectionMatch` (pale green), and
+`.cm-tooltip` — the completion popup — a light card with a `#17c` selection bar.
+The tooltip is appended outside the editor's DOM but still receives the editor's
+theme classes, so theme rules do reach it. Two related rules:
+
+- **`dark` must be the palette's real mode** (`resolveThemeMode`), not a constant.
+  Pinned to `false` a dark palette got the light defaults underneath everything
+  the theme didn't override.
+- **Translucent accents blend into `--background`, not into transparency.** A
+  translucent bright accent over a dark theme composites *toward the accent*, which
+  is what washed the selection (and the selected text) out. Mixing into the page
+  color keeps a dark palette's selection dark at the same visual strength.
+
+The gutter sits on `--background` rather than `--secondary` for both reasons: the
+line numbers are `--muted-foreground`, which is measured against the page (see the
+contrast floor), and a mid-tone band down the side of the pane was never the
+intent.
+
+### Double-click scrolls the other pane (markdown)
+
+`lib/markdown.ts` stamps every rendered block with the 1-based source line it came
+from (`SOURCE_LINE_ATTR` = `data-md-line`), and `MarkdownPreview` + `Editor` each
+expose a `revealLine` on their imperative handle; `AppShell` wires the two
+double-click handlers to each other's handle. Four things are deliberate:
+
+- **markdown-it already knows the mapping** — every block token carries a `map`.
+  Re-deriving it by counting rendered elements is not made correct by care: raw
+  HTML, footnotes and nested lists all break the correspondence.
+- **The block token stream is flat** (only *inline* children nest), so one core
+  rule reaches a paragraph inside a list item inside a blockquote, and the sync
+  gets that granularity for free. Closing tokens and `inline` tokens are skipped —
+  the latter renders its children, not a tag.
+- **Fences are stamped from the other end.** They render as placeholders, so the
+  line travels through `FoundFence`/`FoundCode` and is grafted on with
+  `withSourceLine` (or, for a standalone diagram, carried as a field on the
+  `MarkdownPart` and handed to `DiagramViewport`'s `sourceLine`).
+- **It is imperative, not a prop.** A jump is an event: the same line
+  double-clicked twice must jump twice, which an unchanged prop cannot express —
+  and the nonce workaround re-renders the whole document, every embedded diagram
+  included, on each jump.
+
+Neither side calls `focus()`, and the editor's `dblclick` handler returns `false`
+so the double-click still selects a word. The sync rides along with the existing
+gesture rather than taking it over.
 
 Beside the editor sits the **viewfinder** (`components/Minimap.tsx`,
 `AppConfig.minimap`): the whole document compressed into a 64px column, with the
@@ -207,6 +276,16 @@ adds the one new failure mode (an empty name, which would assemble into `.md`).
 A name may still contain `/`, so creating a subfolder from the root "+" works.
 **Rename is deliberately different** — it keeps a single free-text path field,
 because moving a file between folders is the point of it.
+
+**Renaming a never-committed file is local only.** Such a file is spliced into the
+sidebar from `pendingPath` and its content is a localStorage draft; GitHub has
+nothing under either name, so `renameFile` would ask git to move a path that isn't
+in the tree and get a 404 back. `requestRename` branches on
+`node.path === pendingPath` and moves the draft slot instead — which is the same
+thing creating it under the new name would have done — skipping both the API call
+and the tree refresh, since the branch didn't change. The committed path still
+lands on GitHub *first*: reordering that would leave the app pointing at a path the
+repo never got.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
@@ -280,6 +359,16 @@ may touch at install time and can change that later. Consequences to keep in min
 - `lib/highlight.ts` — the only module that touches shiki, always through
   `await import`. Type-only imports are erased, so those are fine.
 - `lib/diff.ts` — the diff algorithm and nothing else; no React, no I/O.
+- `lib/color.ts` — static color arithmetic (parse / luminance / contrast / mix /
+  `ensureContrast`). No DOM: it must work on a color *before* it becomes a CSS
+  string, which is why `applyThemeToSite` blends numerically instead of emitting
+  `color-mix()` for anything it then has to measure.
+- `lib/agentProtocol.ts` — Agent Link's wire contract; types and constants
+  only, because it compiles under both tsconfigs (browser and node).
+- `lib/agentKey.server.ts` — `server-only`, like `lib/session.server.ts`.
+- `mcp/` — the MCP server. Excluded from the root tsconfig; typechecked by
+  `tsconfig.mcp.json` and emitted by `tsconfig.mcp.build.json`. Never writes to
+  stdout.
 - `types/markdown-it-emoji.d.ts` — the plugin ships no types.
 
 ## Rendering & theming
@@ -303,6 +392,37 @@ every diagram render **and** recolors the app chrome, via `applyThemeToSite`
 mapping the diagram palette onto the shadcn CSS custom properties on `<body>`.
 `app/globals.css`'s `:root`/`.dark` blocks are only the fallback palette used
 when no theme is set — they are not fixed/static in practice.
+
+### A diagram palette is not a text palette — hence the contrast floor
+
+`themeVariables` describes a *diagram*: `primaryBorderColor` is a node outline,
+`lineColor` an edge. `applyThemeToSite` maps those onto tokens that carry **text**
+— `--primary` is the editor's keyword/heading color and the fill behind a primary
+button — and a color that reads fine as a 1px stroke can be 2.3:1 against the page
+(Zinc's `#A1A1AA` on white; `#52525B` on `#18181B`). That was the editor's
+"unreadable on many themes" bug, and it was never a CodeMirror problem.
+
+So every token that ends up holding words is passed through `ensureContrast`
+against **the surface it is actually painted on** (`legible` in
+`applyThemeToSite`): AA 4.5:1 for text, 3:1 for `--ring`, which is a graphical
+object rather than text. Three properties to preserve:
+
+- **A passing color is returned untouched**, so a well-chosen palette renders
+  exactly as authored and only unusable colors move.
+- **The lift blends toward white or black**, not toward another hue, and bisects
+  for the smallest blend that clears the floor — a blue accent stays blue, it just
+  stops being the same lightness as the paper.
+- **`--border` / `--input` are deliberately excluded.** A hairline you can barely
+  see is the intent there; enforcing text contrast on it would draw boxes around
+  the whole UI.
+
+Unparseable notations (`hsl()`, named colors) fall through unchanged — the theme
+pipeline is best-effort, and `lib/color.ts` reads only hex and `rgb()`.
+
+`--muted-foreground` is the one derived value: the palette's text blended 60% over
+the *background* (statically, via `mixColors`, because `ensureContrast` needs
+numbers and a `color-mix()` string is opaque to it), then lifted back to AA. The
+CSS `color-mix()` form survives only as the fallback for a palette we can't parse.
 
 ### Markdown documents borrow the same config
 
@@ -571,6 +691,178 @@ fetched yet — so the fetch effect only claims the file was created in this com
 when there is genuinely nothing more to page in; otherwise it asks the user to
 load more history.
 
+## Agent Link (beta) — an agent drives the live editor
+
+Shipped as **beta**, and the UI says so (a badge on `AgentLinkModal`'s title, plus
+the toolbar tooltip). What that buys is licence to change `PROTOCOL_VERSION` and the
+tool surface without a migration path: the two sides already refuse to talk on a
+mismatch (`CLOSE_PROTOCOL_MISMATCH`), so bumping it is a loud, diagnosable break
+rather than a silent one. Drop the beta label only once that stops being true.
+
+`mcp/` is a Model Context Protocol server that hands a coding agent **the document
+open in the browser right now**, not a file on disk. That is the whole point: the
+agent edits, mermaid renders, and the renderer's verdict comes back in the result
+of the agent's own tool call, so a broken diagram gets fixed in the same turn. An
+agent editing files finds out when a human next opens them.
+
+**The MCP process listens and the browser dials out** (`ws://127.0.0.1`). Not a
+preference — a web page cannot open a listening socket, and Next route handlers get
+no access to the HTTP upgrade. Everything awkward follows from that inversion: the
+socket belongs to the *agent's* process, which starts and stops with an agent
+session, while the tab stays open for days. So "Agent Link: on" means *keep trying
+to connect*, disconnection is the resting state, and `BRIDGE_PORTS`
+(`lib/agentProtocol.ts`) is walked one port per reconnect attempt — never scanned in
+parallel, which is the behaviour Chrome's Local Network Access work exists to
+discourage. Neither side reads a port from the environment: one shared constant
+means they agree by construction rather than by the user keeping two settings in
+step.
+
+`lib/agentProtocol.ts` is the wire contract and must stay **types and constants
+only** — it compiles under both `tsconfig.json` (DOM, no emit) and
+`tsconfig.mcp.json` (node, emitted), and an import would break one of them.
+
+### Which tab, and whose decision
+
+Two deliberate steps gate this, one on each side, and they answer different
+questions.
+
+**Which tab** is the human's answer, given by switching Agent Link on there — hence
+the per-tab `sessionStorage` scoping in rule 3. The bridge holds exactly one tab
+(`CLOSE_SLOT_TAKEN` turns away any second one), so the MCP server cannot choose and
+is never even told another tab exists. Relaxing that to a pool the agent picks from
+is a plausible extension — the plumbing already separates holding from attaching —
+but it would move the choice away from the human, so it is not the default.
+
+**Whether to drive it** is the agent's answer, given by calling `ideate_connect`.
+An authenticated tab is parked as *waiting* and every command that touches the
+document is refused until then, because this process starts when an agent session
+starts, which is nobody's decision: adopting whichever tab was open would mean
+editing a human's document with no one having chosen to. `ideate_status` is the one
+tool allowed through unattached, and it returns metadata only — never content — so
+an agent can say what attaching would give it without first helping itself.
+
+`lib/agentLink.ts` therefore has three live states, and conflating them makes the
+toolbar lie: `linked` (this tab holds the bridge, nothing can touch the document)
+is not `attached` (an agent claimed it and can edit now).
+
+### Security: two controls, and only one of them is load-bearing
+
+WebSockets have **no CORS and no same-origin policy**. `new
+WebSocket('ws://127.0.0.1:7391')` from any page opens a real bidirectional channel
+the moment the server accepts the handshake — nobody is asked. So an unguarded
+bridge could be claimed by an ad iframe, which would then answer the agent's
+commands, harvest the repo content it reads, and feed poisoned text back as "your
+document": prompt injection into the user's own agent.
+
+1. **`Origin` allowlist** on the handshake (`mcp/bridge.ts`). Browsers must send it
+   and page JS cannot forge it, so this reliably rejects other pages. An absent
+   `Origin` means a non-browser client and is refused outright. Cheap pre-filter.
+2. **A signed, single-use connection token** — this is the one that matters. The tab
+   mints it from `/api/agent/token` before connecting. **The security is the absence
+   of CORS headers on that route, not the signature**: a signature only proves
+   "Ideate minted this", but `fetch` *does* have a same-origin policy, so only
+   same-origin JS can ever read the response. It launders the connection through a
+   channel where the same-origin policy applies and carries the proof into the
+   channel where it does not. **Never add `Access-Control-Allow-Origin` there.**
+
+Two rules inside the token path that look like detail and are not:
+
+- **`mcp/verify.ts` checks `iss` against a pinned list *before* fetching any
+  JWKS.** Trusting `iss` and fetching the key it names verifies happily against a
+  hostile deployment signing with its own key — the check would prove nothing.
+- **`createRemoteJWKSet` refetches on an unknown `kid`**, which is what absorbs key
+  rotation. `lib/agentKey.server.ts` generates an ephemeral keypair per dev server
+  process (so local setup needs no key at all), so every `next dev` restart rotates
+  the key under a running MCP process. Production must have a stable
+  `IDEATE_AGENT_PRIVATE_KEY` and fails loudly without one.
+
+A local process can still spoof `Origin`, and if it can read the browser profile it
+can reach a token — but such a process can already read `~/.ssh` and every repo on
+disk, the same footing as the Docker socket. Tokens are **per-connection and held in
+memory**, never in localStorage (rule 3).
+
+**There is no commit tool, and rename/delete are not exposed either** — in this app
+those *are* commits (`renameFile`/`deletePaths` push to the branch), so exposing
+them would break the guarantee that an agent cannot write to the user's repository.
+`ideate_create_file` is offered because it is genuinely local: it does exactly what
+the create prompt does, leaving an uncommitted document with `loadedSha === null`.
+The blast radius is the working copy: on screen, and one ⌘Z away.
+
+**`mcp/` must never write to stdout.** That is the MCP stdio channel; a stray line
+corrupts the protocol. Diagnostics go to stderr.
+
+### Edits land as CodeMirror transactions, and the echo guard is why they survive
+
+`EditorHandle` (`components/Editor.tsx`) resolves every anchor against the live
+document and dispatches **one** transaction, so a batch is one undo step, the
+untouched parts keep their folds and cursor, and the dirty gutter and viewfinder
+update through the paths they already use. `resolveEdits` (`lib/textEdit.ts`) is
+shared with a fallback that goes through `setText` for when no editor is mounted
+(a canvas is open, or the diff view has the pane) — refusing there instead would
+make the tools mysteriously unavailable whenever the human was reading a diff.
+
+Two things here were bugs found by running it, not by typechecking:
+
+- **`emittedRef` — the echo guard.** The reconcile effect cannot tell an *external*
+  `value` change (open a file, restore, `ideate_write`) from an *echo* of the
+  editor's own output by value alone. React can commit a render carrying an older
+  value *after* a newer programmatic edit already moved the document, and
+  force-replacing the document with it silently discards that edit. Two agent edits
+  arriving faster than React commits lost **every second one**. So the editor keeps
+  a short history of what it emitted and drops an incoming value it finds there.
+  Do not collapse this back into a single `lastValue` ref.
+- **Diagnostics run on the text the edit *produced*.** `applyEdits` returns the new
+  document and `check(text)` takes it, because `setText` only reaches React on the
+  next render — reading state back here reported on the document as it was *before*
+  the edit, so breaking a diagram looked clean and fixing it looked broken.
+
+### Scene edits go through `setText`, and route their own arrows
+
+`lib/sceneEdit.ts` reaches `@excalidraw/excalidraw` only through a per-function
+`await import` (rule 8), and hands back scene *text* — `CanvasInner` already ingests
+an external `value` via `updateScene`, so dirty tracking (rule 9) and the file's own
+stored background (rule 10) keep working with nothing added. Never a canvas ref.
+
+**`convertToExcalidrawElements` binds arrows but does not route them.** Handed
+`start`/`end` with no points it emits a 99px stub at the canvas origin: correctly
+bound, and invisible nowhere near the shapes it joins. So geometry is computed here
+(centre to centre, trimmed to each box edge plus a gap) and the binding is wired by
+hand in both directions — `startBinding`/`endBinding` on the arrow *and* an entry in
+each target's `boundElements`, or dragging the shape leaves the arrow behind. Doing
+it ourselves is also what lets an arrow attach to something already on the canvas,
+which the converter cannot do (it only resolves ids inside its own batch).
+
+### Running it
+
+Every MCP client takes a command and its arguments, so the setup shown in the modal
+is exactly that pair and nothing vendor-specific:
+
+```
+command  npx
+args     -y  github:hasathcharu/ideate
+```
+
+From a checkout, the command to give a client is `npx tsx mcp/index.ts`. **Not
+`npm run mcp`**: `npm run` prints its `> pkg@ver script` banner to *stdout*, which is
+the JSON-RPC channel, so it corrupts the stream before the server emits anything.
+The script stays for running the server by hand; `--silent` also fixes it. This is
+the same stdout-is-sacred rule as inside `mcp/`, one level up.
+
+The `npx -y github:hasathcharu/ideate` form works through `bin` → `mcp/bin.mjs` → `dist-mcp/`, built by the **`prepare`**
+script — the hook npm runs for a git dependency after installing devDependencies and
+before packing, and the only place a from-GitHub install can be built. The `files`
+allowlist is what gets `dist-mcp/` into the tarball at all (it is gitignored) and
+keeps the app itself out; `scripts/vendor-excalidraw-assets.mjs` therefore checks for
+`app/` and skips, since `postinstall` would otherwise copy 13MB of fonts into a
+consumer that never renders a canvas.
+
+**The git-install path still pulls the app's whole dependency tree — ~1050 packages,
+~840MB — because the server shares the root `package.json`.** Measured, not
+estimated. Slimming it means publishing the server as its own package with only its
+four runtime deps (`@modelcontextprotocol/sdk`, `ws`, `zod`, `jose`); it is not
+fixable by editing `files`, and moving the app's deps to `devDependencies` to achieve
+it would risk any deploy that installs with `--omit=dev`.
+
 ## Export
 
 mermaid bakes literal colors and a self-contained `<style>` block into the SVG at
@@ -657,12 +949,31 @@ records (rule 10).
 - Loading states for lists use `components/ui/skeleton.tsx` with per-call-site
   geometry that mirrors the real rows (indent, padding, line count), so content
   doesn't jump when it swaps in.
+- **A list whose rows have both a hover fill and an active tint needs a pixel of
+  gap between them** (`space-y-px` — the file tree, the markdown reading view's
+  Contents panel). Both states paint a full-width rounded rectangle, so flush rows
+  meet edge to edge and a hovered row beside the active one reads as one selected
+  block rather than two.
 
 ## Verify
 
 ```bash
 npm run typecheck && npm run build
 ```
+
+`typecheck` covers both programs — the Next app and `mcp/`. The MCP server has a
+third build worth running before trusting the `npx` path, since `prepare` is the
+only thing that produces it:
+
+```bash
+npm run build:mcp && node mcp/bin.mjs
+```
+
+The bridge's own behaviour is not reachable by typechecking, and two real bugs in it
+were found only by driving it (the lost-every-second-edit race, and diagnostics
+reporting on the pre-edit document). Exercise it for real: `npm run dev`, switch on
+the plug icon in the toolbar, and drive the tools from an agent — then send edits
+faster than a human could and confirm none are dropped.
 
 Excalidraw chrome that only appears in a particular state is easy to get wrong from
 a CSS grep alone (both the main-menu and bottom-bar selectors were wrong on the first

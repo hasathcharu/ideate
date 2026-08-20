@@ -57,6 +57,13 @@ export interface DiagramViewportProps {
    *  height from the diagram and sits inline in a document. */
   variant?: 'pane' | 'embedded'
   className?: string
+  /** For a diagram embedded in a markdown document: the 1-based source line its
+   *  ```mermaid fence opens on, published as `data-md-line` so the editor ↔
+   *  preview scroll sync can find it alongside the prose blocks, which carry the
+   *  same attribute (`lib/markdown.ts`). A figure is a block of the document like
+   *  any other; being a React component rather than a run of HTML shouldn't make
+   *  it invisible to the sync. */
+  sourceLine?: number | null
 }
 
 export default function DiagramViewport({
@@ -64,6 +71,7 @@ export default function DiagramViewport({
   background,
   variant = 'pane',
   className,
+  sourceLine = null,
 }: DiagramViewportProps) {
   const isEmbedded = variant === 'embedded'
 
@@ -241,6 +249,7 @@ export default function DiagramViewport({
   return (
     <div
       ref={viewportRef}
+      data-md-line={sourceLine ?? undefined}
       className={cn(
         'preview-zoom relative overflow-hidden',
         isMaximized

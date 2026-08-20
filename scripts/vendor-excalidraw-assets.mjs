@@ -10,8 +10,20 @@
  * package version.
  */
 import { cp, mkdir, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+
+// Installed as a dependency for the MCP server alone, there is no Next app here to
+// serve fonts to — the package's `files` allowlist ships only the compiled server.
+// Copying 13MB of fonts into someone's node_modules for a stdio process that never
+// renders a canvas is pure waste, and this script runs on `postinstall`, so it has
+// to notice. `app/` is the marker: it is present in every checkout and in no
+// published tarball.
+if (!existsSync(join(process.cwd(), 'app'))) {
+  console.log('no Next app here (MCP-only install) — skipping excalidraw fonts')
+  process.exit(0)
+}
 
 const require = createRequire(import.meta.url)
 

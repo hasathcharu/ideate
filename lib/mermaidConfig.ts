@@ -1,5 +1,12 @@
 import { load, YAMLException } from 'js-yaml'
 import { THEME_PRESETS, type ThemePreset } from './themes'
+import {
+  TEXT_CONTRAST,
+  UI_CONTRAST,
+  ensureContrast,
+  mixColors,
+  relativeLuminance,
+} from './color'
 
 /**
  * The user-editable mermaid config (the cogwheel next to the layout dropdown).
@@ -376,6 +383,15 @@ const MANAGED_TOKENS = [
  * token has a sensible fallback chain, and unset tokens fall back to the static
  * palette (because we clear them first). Passing a config with no
  * `themeVariables` resets the site to its default look.
+ *
+ * **Every token that ends up carrying text is held to WCAG AA against the
+ * surface it is painted on** (`legible`, below, over `lib/color.ts`). This is not
+ * polish: the source palette describes a *diagram*, where `primaryBorderColor` is
+ * a node outline and `lineColor` an edge. Those become `--primary`, which is the
+ * editor's keyword and heading colour and the fill behind a primary button — and
+ * a stroke colour that reads perfectly well at 1px can be 2.3:1 against the page,
+ * which is unreadable as words. A palette that already passes is left exactly as
+ * authored, so this only ever moves colours that were unusable.
  */
 export function applyThemeToSite(config: MermaidUserConfig | null): void {
   if (typeof document === 'undefined' || !document.body) return
@@ -424,12 +440,37 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   const set = (token: string, value: string | undefined) => {
     if (value) root.style.setProperty(token, value)
   }
-  // A muted-but-legible text color, derived when we have both text + a surface.
-  const mutedText =
-    text && surface ? `color-mix(in srgb, ${text} 60%, ${surface})` : text
+
+  /**
+   * A token that carries text, lifted until it clears WCAG AA against every
+   * surface it is actually painted on.
+   *
+   * This is the step that makes an arbitrary *diagram* palette safe to read
+   * prose in. `primaryBorderColor` is a node outline and `lineColor` an edge:
+   * colours chosen to be seen as 1px strokes, which is a far weaker requirement
+   * than being read as words. Zinc's `#A1A1AA` on white is 2.6:1 — fine as a
+   * box border, illegible as the editor's keyword colour, and keywords are
+   * exactly where `--primary` ends up. `ensureContrast` leaves a passing colour
+   * completely alone, so a well-chosen palette renders exactly as authored.
+   */
+  const legible = (value: string | undefined, ...surfaces: (string | undefined)[]) =>
+    value ? ensureContrast(value, surfaces, TEXT_CONTRAST) : value
+
+  // A muted-but-legible text color: the palette's text blended toward the page,
+  // then lifted back to AA if the blend went too far. Blended statically when
+  // both colors are readable — `ensureContrast` needs numbers, and a CSS
+  // `color-mix()` string is opaque to it — with the CSS form kept as the fallback
+  // for a palette written in a notation we can't parse.
+  const mutedBlend = text && bg ? mixColors(text, bg, 0.4) : undefined
+  const mutedText = mutedBlend
+    ? ensureContrast(mutedBlend, [bg, surface], TEXT_CONTRAST)
+    : text && surface
+      ? `color-mix(in srgb, ${text} 60%, ${surface})`
+      : text
   // Dividers/panel edges/input outlines want a quiet hairline, not the bold
   // accent mermaid uses for node borders — blend it mostly toward the surface
-  // so it reads as a subtle line instead of a high-contrast stroke.
+  // so it reads as a subtle line instead of a high-contrast stroke. Left as-is:
+  // a border is not text, and a hairline you can barely see is the intent.
   const surfaceBg = bg ?? surface
   const softBorder =
     borderColor && surfaceBg
@@ -437,30 +478,35 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
       : borderColor
 
   set('--background', bg)
-  set('--foreground', text)
+  set('--foreground', legible(text, bg))
   set('--card', surface)
-  set('--card-foreground', text)
+  set('--card-foreground', legible(text, surface))
   set('--popover', surface)
-  set('--popover-foreground', text)
+  set('--popover-foreground', legible(text, surface))
   set('--secondary', secondary)
-  set('--secondary-foreground', text)
+  set('--secondary-foreground', legible(text, secondary))
   set('--muted', muted)
   set('--muted-foreground', mutedText)
   set('--accent', secondary)
-  set('--accent-foreground', text)
+  set('--accent-foreground', legible(text, secondary))
   set('--border', softBorder)
   set('--input', softBorder)
-  set('--ring', accentLine)
-  set('--primary', accentLine)
+  // A focus ring is a graphical object, not text, so it answers to the lower of
+  // the two WCAG thresholds.
+  set('--ring', accentLine && ensureContrast(accentLine, [bg, surface], UI_CONTRAST))
+  // `--primary` is the accent *and* the editor's keyword/heading colour, and it
+  // backs filled buttons whose label is `--primary-foreground` (the page colour)
+  // — so one floor here fixes syntax highlighting and button labels together.
+  set('--primary', legible(accentLine, bg, surface))
   set('--primary-foreground', bg ?? surface)
   set('--sidebar', bg ?? surface)
-  set('--sidebar-foreground', text)
-  set('--sidebar-primary', accentLine)
+  set('--sidebar-foreground', legible(text, bg ?? surface))
+  set('--sidebar-primary', legible(accentLine, bg ?? surface))
   set('--sidebar-primary-foreground', bg ?? surface)
   set('--sidebar-accent', secondary)
-  set('--sidebar-accent-foreground', text)
+  set('--sidebar-accent-foreground', legible(text, secondary))
   set('--sidebar-border', softBorder)
-  set('--sidebar-ring', accentLine)
+  set('--sidebar-ring', accentLine && ensureContrast(accentLine, [bg, surface], UI_CONTRAST))
 
   if (font) {
     set('--font-sans', font)
@@ -474,65 +520,6 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
 
 /** Whether the active palette reads as a light or a dark theme. */
 export type ThemeMode = 'light' | 'dark'
-
-/**
- * Relative luminance (WCAG 2.x) of a CSS color, or null if it isn't a form we
- * can read statically. Handles the notations the theme presets and hand-edited
- * `themeVariables` realistically use: #rgb / #rgba / #rrggbb / #rrggbbaa and
- * rgb()/rgba(). Anything else (hsl(), named colors, color-mix(), var()) returns
- * null so the caller can fall back rather than guess.
- */
-function relativeLuminance(color: string): number | null {
-  const rgb = parseRgb(color)
-  if (!rgb) return null
-  // Linearize each channel out of sRGB's gamma curve, then weight by the
-  // luminous efficiency of each primary.
-  const linear = rgb.map((channel) => {
-    const c = channel / 255
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  }) as [number, number, number]
-  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-}
-
-/** `[r, g, b]` in 0–255, or null when the notation isn't statically parseable. */
-function parseRgb(color: string): [number, number, number] | null {
-  const value = color.trim().toLowerCase()
-
-  const hex = value.match(/^#([0-9a-f]{3,8})$/)
-  if (hex) {
-    const digits = hex[1]!
-    // #rgb / #rgba — each digit is a doubled nibble.
-    if (digits.length === 3 || digits.length === 4) {
-      const [r, g, b] = [...digits.slice(0, 3)].map((d) => parseInt(d + d, 16))
-      return [r!, g!, b!]
-    }
-    // #rrggbb / #rrggbbaa — alpha (if present) is ignored; we only need hue/value.
-    if (digits.length === 6 || digits.length === 8) {
-      return [
-        parseInt(digits.slice(0, 2), 16),
-        parseInt(digits.slice(2, 4), 16),
-        parseInt(digits.slice(4, 6), 16),
-      ]
-    }
-    return null
-  }
-
-  const fn = value.match(/^rgba?\(([^)]+)\)$/)
-  if (fn) {
-    const parts = fn[1]!.split(/[\s,/]+/).filter(Boolean).slice(0, 3)
-    if (parts.length < 3) return null
-    const channels = parts.map((part) => {
-      const n = parseFloat(part)
-      if (Number.isNaN(n)) return null
-      // Percentages are relative to 255; bare numbers already are.
-      return part.endsWith('%') ? (n / 100) * 255 : n
-    })
-    if (channels.some((c) => c === null)) return null
-    return channels as [number, number, number]
-  }
-
-  return null
-}
 
 /**
  * Whether `color` reads as a dark surface — i.e. whether light-on-dark is the

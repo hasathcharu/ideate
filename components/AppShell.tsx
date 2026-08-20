@@ -12,6 +12,8 @@ import {
   History,
   PanelLeft,
   Map,
+  Plug,
+  PlugZap,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -19,9 +21,9 @@ import {
   WrapText,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import Editor from './Editor'
+import Editor, { type EditorHandle } from './Editor'
 import Preview from './Preview'
-import MarkdownPreview from './MarkdownPreview'
+import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
 import Canvas from './Canvas'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
@@ -36,6 +38,7 @@ import DiffView from './DiffView'
 import NewFileMenu from './NewFileMenu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import ConfigModal from './ConfigModal'
+import AgentLinkModal from './AgentLinkModal'
 import MobileWarningModal from './MobileWarningModal'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -50,6 +53,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
+import { useAgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
+import type { BridgeState } from '@/lib/agentProtocol'
+import { collectDiagnostics } from '@/lib/diagnostics'
+import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
+import { applyResolved, resolveEdits } from '@/lib/textEdit'
 import {
   parseMermaidConfig,
   applyThemeToSite,
@@ -65,7 +73,9 @@ import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
 import {
+  loadAgentLink,
   loadConfig,
+  saveAgentLink,
   saveConfig,
   loadDraft,
   saveDraft,
@@ -236,6 +246,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
+
+  /** Agent Link, scoped to *this tab* rather than to the origin — see
+   *  `loadAgentLink`. Kept out of `AppConfig` on purpose: a shared switch armed
+   *  every tab at once, so the human could not choose which one an agent drove.
+   *
+   *  Starts off and is hydrated in an effect, like the rest of the persisted
+   *  state: `sessionStorage` does not exist during SSR, and reading it in the
+   *  initializer would make the server and client renders disagree. */
+  const [agentLinkOn, setAgentLinkOn] = useState(false)
+  const enableAgentLink = useCallback((enabled: boolean) => {
+    setAgentLinkOn(enabled)
+    saveAgentLink(enabled)
+  }, [])
   const [isMac, setIsMac] = useState(false)
 
   // Warn on small screens once per load — the layout needs room for the editor
@@ -286,6 +309,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [promptOpen, setPromptOpen] = useState(false)
 
   const [configOpen, setConfigOpen] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
   // Swaps the editor/preview split for a diff of the committed file against the
   // working copy. Sticky across file switches (like the wrap toggle), but only
   // *rendered* where there is a committed side to compare with — see `canDiff`.
@@ -372,6 +396,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // keeps a scene from flashing a white canvas inside dark chrome when the user
   // opens it while a dark theme is selected.
   const canvasTheme = useMemo(() => resolveThemeMode(appliedConfig), [appliedConfig])
+  /** CodeMirror carries its own binary `dark` flag, which decides the defaults for
+   *  every surface `editorTheme` doesn't name. It follows the same resolved mode
+   *  as the canvas — pinned to `false`, a dark palette got CodeMirror's
+   *  light-theme defaults underneath it. */
+  const editorDark = canvasTheme === 'dark'
 
   // The canvas paints the active theme's background, so the drawing surface matches
   // the app chrome around it. Imposed for display only — never written to the file.
@@ -551,6 +580,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
     setSidebarWidth(stored.sidebarWidth)
+    setAgentLinkOn(loadAgentLink())
     setHydrated(true)
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
@@ -842,6 +872,191 @@ export default function AppShell({ user, mode }: AppShellProps) {
     void openFile(target)
   }, [linkTrail, openFile])
 
+  /* ---------------------------------------------------------------- */
+  /* Agent Link                                                        */
+  /* ---------------------------------------------------------------- */
+
+  /** The editor's imperative handle, so an agent's edit lands as one CodeMirror
+   *  transaction rather than a whole-document swap — see `EditorHandle`. Null
+   *  whenever no text editor is mounted (a canvas is open, or the diff view has
+   *  taken the pane), which `applyEdits` below handles rather than refuses. */
+  const editorRef = useRef<EditorHandle | null>(null)
+  /** The markdown reading pane, for the scroll sync below. */
+  const markdownPreviewRef = useRef<MarkdownPreviewHandle | null>(null)
+
+  /**
+   * Two-way scroll sync for markdown: double-click a line to find it in the
+   * document, double-click a block to find it in the source.
+   *
+   * Driven through the two imperative handles rather than through state. A jump is
+   * an event, and the same line double-clicked twice has to jump twice — which a
+   * prop holding a line number can't express, and which the usual nonce workaround
+   * only buys by re-rendering the whole document (every embedded diagram included)
+   * on each jump.
+   */
+  const revealInPreview = useCallback((line: number) => {
+    markdownPreviewRef.current?.revealLine(line)
+  }, [])
+  const revealInEditor = useCallback((line: number) => {
+    editorRef.current?.revealLine(line)
+  }, [])
+
+  const bridgeState: BridgeState = useMemo(
+    () => ({
+      mode: githubEnabled ? 'github' : 'local',
+      repo: repo
+        ? {
+            owner: repo.owner,
+            name: repo.name,
+            branch: repo.branch,
+            defaultBranch: repo.defaultBranch,
+          }
+        : null,
+      openPath,
+      kind,
+      dirty,
+      lineCount: text === '' ? 0 : text.split('\n').length,
+      charCount: text.length,
+    }),
+    [githubEnabled, repo, openPath, kind, dirty, text],
+  )
+
+  // Rebuilt every render on purpose. The hook reads it through a ref, so a fresh
+  // object costs nothing and every capability closes over current state — a
+  // memoized version would have to list every dependency the closures touch, and
+  // a missed one means the agent silently editing a stale document.
+  const linkCaps: AgentLinkCapabilities = {
+    state: () => bridgeState,
+
+    listFiles: () => ({ paths: repoFilePaths }),
+
+    readOpen: () => ({ path: openPath, text, committed: false }),
+
+    readPath: async (path) => {
+      if (!repo) {
+        throw new Error(
+          'No repository is connected, so only the open document can be read. ' +
+            'Call ideate_read with no path.',
+        )
+      }
+      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      if (!res.ok) {
+        if (handleExpiredSession(res.error)) {
+          throw new Error('The GitHub session expired. The user has been signed out.')
+        }
+        throw new Error(res.error.message)
+      }
+      return { path, text: res.data.content, committed: true }
+    },
+
+    applyEdits: async (edits) => {
+      requireText()
+      const handle = editorRef.current
+      if (handle) return handle.applyEdits(edits)
+      // No editor mounted. Resolve against the very same text with the very same
+      // function and go through `setText`; the editor reconciles it when it comes
+      // back. Refusing here instead would make the tools mysteriously unavailable
+      // whenever the human happened to be reading a diff.
+      const next = applyResolved(text, resolveEdits(text, edits))
+      setText(next)
+      return next
+    },
+
+    writeText: (next) => {
+      requireText()
+      setText(next)
+    },
+
+    openFile: async (path) => {
+      if (!repo) throw new Error('No repository is connected — nothing to open.')
+      // Checked against the tree first so a mistyped path says so, rather than
+      // surfacing as a toast in the UI and an empty success to the agent.
+      if (!repoFilePaths.includes(path)) {
+        throw new Error(
+          `No such file on ${repo.owner}/${repo.name}@${repo.branch}: ${path}. ` +
+            'Call ideate_list_files to see what is there.',
+        )
+      }
+      // Opening from a tool is a fresh start, not a link follow — same reasoning
+      // as `openFromTree`, where a Back button pointing at an unrelated file is
+      // worse than no Back button.
+      setLinkTrail([])
+      await openFile(path)
+    },
+
+    createFile: (path, content) => {
+      if (!repo) throw new Error('No repository is connected — nothing to create a file in.')
+      const invalid = validatePath(path)
+      if (invalid) throw new Error(invalid)
+      if (repoFilePaths.includes(path)) {
+        throw new Error(`${path} already exists. Use ideate_open to edit it.`)
+      }
+      // Exactly what the create prompt does on submit: the file becomes the open
+      // document with no sha behind it. Nothing is pushed to GitHub — committing
+      // stays a human action, which is what keeps an agent from writing to the
+      // user's repository.
+      setLinkTrail([])
+      setOpenPath(path)
+      setLoadedSha(null)
+      setBaseline('')
+      setText(content ?? templateFor(fileKind(path)))
+    },
+
+    // Takes the text to check rather than always reading the open document: after
+    // an edit the caller holds the new text and React has not re-rendered yet, so
+    // checking `text` here would report on the document as it was before.
+    check: (override) => collectDiagnostics(override ?? text, kind, appliedConfig),
+
+    sceneGet: (full) => {
+      requireScene()
+      return summarizeScene(text, full)
+    },
+
+    sceneEdit: async (ops) => {
+      requireScene()
+      const { text: next, elementCount } = await applySceneOps(text, ops)
+      // Through `setText`, not a canvas ref: `CanvasInner` already ingests an
+      // external `value` via `updateScene`, so dirty tracking (rule 9) and the
+      // file's own stored background (rule 10) keep working untouched.
+      setText(next)
+      return { applied: ops.length, elementCount }
+    },
+
+    cursor: () => editorRef.current?.cursor() ?? null,
+  }
+
+  // The two surfaces hold incompatible content, so a tool aimed at the wrong one
+  // is answered with the name of the tool that would have worked.
+  function requireText(): void {
+    if (kind === 'excalidraw') {
+      throw new Error(
+        'The open document is an Excalidraw scene. Use ideate_scene_get and ' +
+          'ideate_scene_edit — the text tools cannot edit a canvas.',
+      )
+    }
+  }
+  function requireScene(): void {
+    if (kind !== 'excalidraw') {
+      throw new Error(
+        `The open document is ${kind}, not an Excalidraw scene. Use ideate_read and ` +
+          'ideate_edit instead.',
+      )
+    }
+  }
+
+  const agentLink = useAgentLink({
+    enabled: agentLinkOn,
+    state: bridgeState,
+    caps: linkCaps,
+  })
+  /** Only "connected" counts as connected. Switched on but waiting is the resting
+   *  state — the socket belongs to the agent's process, not to this tab. */
+  // "Connected" means an agent has *attached*, not merely that a socket is up.
+  // Treating a live socket as connected would light this up whenever any agent
+  // session was running, whether or not anything had chosen to drive the document.
+  const linkAttached = agentLinkOn && agentLink.status === 'attached'
+  const linkWaiting = agentLinkOn && agentLink.status === 'linked'
+
   const newDiagram = useCallback(
     (dirPath?: string, newKind: FileKind = 'mermaid') => {
       if (!repo) {
@@ -886,9 +1101,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const requestRename = useCallback(
     (node: TreeNode) => {
       if (!repo || node.type !== 'file') return
+      // A never-committed file exists only in this browser: it is spliced into the
+      // sidebar from `pendingPath` and its content is a localStorage draft, with
+      // nothing on GitHub under either name. Renaming it through the API would ask
+      // git to move a path that isn't in the tree, which answers 404 — so this one
+      // is a local move of the draft slot, exactly like creating it under the new
+      // name would have been.
+      const local = node.path === pendingPath
       openPrompt({
         title: 'Rename file',
-        description: `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
+        description: local
+          ? `Rename this file before its first commit. It only exists in this browser, so nothing on ${repo.branch} changes until you commit.`
+          : `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
         label: 'New path',
         defaultValue: node.path,
         submitLabel: 'Rename',
@@ -898,14 +1122,27 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
-          const res = await renameFile(repo.owner, repo.name, node.path, newPath, repo.branch)
-          if (!res.ok) {
-            if (handleExpiredSession(res.error)) return
-            toast.error(res.error.message)
-            return
+          // The committed case has to land on GitHub first: everything below moves
+          // local bookkeeping to match, and doing that before the API call would
+          // leave the app pointing at a path the repo never got.
+          if (!local) {
+            const res = await renameFile(
+              repo.owner,
+              repo.name,
+              node.path,
+              newPath,
+              repo.branch,
+            )
+            if (!res.ok) {
+              if (handleExpiredSession(res.error)) return
+              toast.error(res.error.message)
+              return
+            }
+            if (openPath === node.path) setLoadedSha(res.data.sha)
           }
           setPromptOpen(false)
-          // Carry any uncommitted draft over to the new path.
+          // Carry any uncommitted draft over to the new path. For a local rename
+          // this *is* the rename — the draft is the only copy of the file.
           const oldId = docIdForFile(repo.owner, repo.name, repo.branch, node.path)
           const newId = docIdForFile(repo.owner, repo.name, repo.branch, newPath)
           const draft = loadDraft(oldId)
@@ -918,16 +1155,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
             next.add(newPath)
             return next
           })
-          if (openPath === node.path) {
-            setOpenPath(newPath)
-            setLoadedSha(res.data.sha)
-          }
+          if (openPath === node.path) setOpenPath(newPath)
           toast.success(`Renamed to ${newPath}`)
-          void refreshTree(repo)
+          // A local rename changed nothing on the branch, and `pendingPath`
+          // already re-splices the new name into the sidebar off `openPath`.
+          if (!local) void refreshTree(repo)
         },
       })
     },
-    [repo, openPrompt, openPath, refreshTree],
+    [repo, openPrompt, openPath, pendingPath, refreshTree],
   )
 
   // Reset the editor to a fresh scratch doc — used when the file being edited is
@@ -1692,6 +1928,41 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   </Button>
                 </>
               ) : null}
+              {/* Agent Link lives here, not in the diagram-config modal: it has
+                  nothing to do with diagrams, and it applies to all three document
+                  kinds. Labelled rather than icon-only, and always rendered, because
+                  this button is the only indication that an agent can be editing the
+                  document — an unlabelled plug says nothing to someone who has never
+                  turned it on.
+
+                  Clicking opens the modal rather than toggling: switching it on hands
+                  a process outside the browser the ability to rewrite the open
+                  document, which should not be one click on a toolbar control. */}
+              <Button
+                size="sm"
+                variant={linkAttached ? 'secondary' : 'ghost'}
+                className={linkAttached ? 'h-7 gap-1.5 text-primary' : 'h-7 gap-1.5'}
+                onClick={() => setLinkOpen(true)}
+                aria-pressed={agentLinkOn}
+                title={
+                  !agentLinkOn
+                    ? 'Agent Link (beta) — let a coding agent read and edit this document'
+                    : linkAttached
+                      ? `Agent Link (beta) — ${agentLink.agent ?? 'an agent'} is attached and can edit this document`
+                      : agentLink.status === 'blocked'
+                        ? `Agent Link (beta) — blocked: ${agentLink.detail ?? 'see the console'}`
+                        : linkWaiting
+                          ? 'Agent Link (beta) — on. An agent must attach before it can read or edit'
+                          : 'Agent Link (beta) — on, looking for an agent'
+                }
+              >
+                {linkAttached ? <PlugZap /> : <Plug />}
+                {linkAttached
+                  ? 'Agent Connected'
+                  : agentLinkOn
+                    ? 'Awaiting Agent'
+                    : 'Connect Agent'}
+              </Button>
             </div>
           </div>
 
@@ -1730,9 +2001,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
             >
               <section className="min-h-0 overflow-auto" aria-label="Editor">
                 <Editor
+                  ref={editorRef}
                   value={text}
                   onChange={setText}
-                  dark={false}
+                  dark={editorDark}
                   kind={kind}
                   wrap={config.wrapLines}
                   // Only a committed file has something to diverge *from*; a new
@@ -1742,6 +2014,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   filePaths={repoFilePaths}
                   docPath={openPath}
                   minimap={config.minimap}
+                  // Only markdown has a document to scroll to; a diagram preview
+                  // is one figure with no notion of a source line.
+                  onRevealPreview={kind === 'markdown' ? revealInPreview : undefined}
                 />
               </section>
               <div
@@ -1761,6 +2036,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <section className="min-h-0 overflow-auto" aria-label="Preview">
                 {kind === 'markdown' ? (
                   <MarkdownPreview
+                    ref={markdownPreviewRef}
+                    onRevealSource={revealInEditor}
                     text={debouncedText}
                     config={appliedConfig}
                     path={openPath}
@@ -1824,6 +2101,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
         value={config.mermaidConfig}
         onChange={(v) => updateConfig({ mermaidConfig: v })}
         error={parsedConfig.error}
+      />
+
+      <AgentLinkModal
+        open={linkOpen}
+        onOpenChange={setLinkOpen}
+        enabled={agentLinkOn}
+        onEnabledChange={enableAgentLink}
+        status={agentLink.status}
+        detail={agentLink.detail}
+        agent={agentLink.agent}
       />
 
       <DeleteModal

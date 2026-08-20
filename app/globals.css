@@ -328,6 +328,33 @@
   display: contents;
 }
 
+/* The block a double-click in the editor just jumped to (MarkdownPreview.tsx).
+   A smooth scroll lands mid-document with a dozen blocks on screen and no clue
+   which one was asked for, so the target says so for a moment and then stops.
+   Outline rather than a background: it has to read on a paragraph, a table and a
+   diagram alike, none of which share a surface — and `outline` takes no space, so
+   nothing on the page moves while it's on. */
+.md-sync-flash {
+  outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent);
+  outline-offset: 3px;
+  border-radius: 3px;
+  animation: md-sync-flash-out 1.2s ease-out forwards;
+}
+@keyframes md-sync-flash-out {
+  0%,
+  55% {
+    outline-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-sync-flash {
+    animation-duration: 0.01ms;
+  }
+}
+
 /* Trim the outer edges. The second selector in each pair reaches through a
    `display: contents` run, whose own margin properties do nothing. */
 .md-prose > *:first-child,
