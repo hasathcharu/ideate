@@ -144,7 +144,13 @@ three of its pieces need configuring rather than accepting.
   `[text](` offers every file in the repo, written relative to the document being
   edited (`relativeLink`), so the result is a link both this app and GitHub
   resolve. The file list and the document's path arrive as a `StateEffect`, like
-  the diff baseline — they are the app's state, not the editor's.
+  the diff baseline — they are the app's state, not the editor's. It is configured
+  `{ icons: false }`: CodeMirror renders an icon slot per row but only ships glyphs
+  for its own completion types, and `file` is not one, so every path was indented
+  by an empty box. And a completion's `detail` is set **only when it differs from
+  the label** — a sibling file relativizes to its own name, and for a document at
+  the repo root every path does, so an unconditional `detail` printed the same
+  string twice on every row.
 - `foldGutter` gets a real chevron (`foldMarker`) instead of CodeMirror's bare
   `⌄`/`›` glyph, hidden until the gutter is hovered unless the line is actually
   folded. It is added **at the mount site, after the dirty gutter**: gutters render
@@ -154,6 +160,54 @@ three of its pieces need configuring rather than accepting.
 
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
+
+**Every surface CodeMirror paints itself has to be named in `editorTheme`.** The
+pieces it does *not* name fall back to a stock theme whose colors are literals
+picked against a white editor, and those are what looked broken on dark palettes:
+`.cm-searchMatch` (pale yellow), `.cm-selectionMatch` (pale green), and
+`.cm-tooltip` — the completion popup — a light card with a `#17c` selection bar.
+The tooltip is appended outside the editor's DOM but still receives the editor's
+theme classes, so theme rules do reach it. Two related rules:
+
+- **`dark` must be the palette's real mode** (`resolveThemeMode`), not a constant.
+  Pinned to `false` a dark palette got the light defaults underneath everything
+  the theme didn't override.
+- **Translucent accents blend into `--background`, not into transparency.** A
+  translucent bright accent over a dark theme composites *toward the accent*, which
+  is what washed the selection (and the selected text) out. Mixing into the page
+  color keeps a dark palette's selection dark at the same visual strength.
+
+The gutter sits on `--background` rather than `--secondary` for both reasons: the
+line numbers are `--muted-foreground`, which is measured against the page (see the
+contrast floor), and a mid-tone band down the side of the pane was never the
+intent.
+
+### Double-click scrolls the other pane (markdown)
+
+`lib/markdown.ts` stamps every rendered block with the 1-based source line it came
+from (`SOURCE_LINE_ATTR` = `data-md-line`), and `MarkdownPreview` + `Editor` each
+expose a `revealLine` on their imperative handle; `AppShell` wires the two
+double-click handlers to each other's handle. Four things are deliberate:
+
+- **markdown-it already knows the mapping** — every block token carries a `map`.
+  Re-deriving it by counting rendered elements is not made correct by care: raw
+  HTML, footnotes and nested lists all break the correspondence.
+- **The block token stream is flat** (only *inline* children nest), so one core
+  rule reaches a paragraph inside a list item inside a blockquote, and the sync
+  gets that granularity for free. Closing tokens and `inline` tokens are skipped —
+  the latter renders its children, not a tag.
+- **Fences are stamped from the other end.** They render as placeholders, so the
+  line travels through `FoundFence`/`FoundCode` and is grafted on with
+  `withSourceLine` (or, for a standalone diagram, carried as a field on the
+  `MarkdownPart` and handed to `DiagramViewport`'s `sourceLine`).
+- **It is imperative, not a prop.** A jump is an event: the same line
+  double-clicked twice must jump twice, which an unchanged prop cannot express —
+  and the nonce workaround re-renders the whole document, every embedded diagram
+  included, on each jump.
+
+Neither side calls `focus()`, and the editor's `dblclick` handler returns `false`
+so the double-click still selects a word. The sync rides along with the existing
+gesture rather than taking it over.
 
 Beside the editor sits the **viewfinder** (`components/Minimap.tsx`,
 `AppConfig.minimap`): the whole document compressed into a 64px column, with the
@@ -222,6 +276,16 @@ adds the one new failure mode (an empty name, which would assemble into `.md`).
 A name may still contain `/`, so creating a subfolder from the root "+" works.
 **Rename is deliberately different** — it keeps a single free-text path field,
 because moving a file between folders is the point of it.
+
+**Renaming a never-committed file is local only.** Such a file is spliced into the
+sidebar from `pendingPath` and its content is a localStorage draft; GitHub has
+nothing under either name, so `renameFile` would ask git to move a path that isn't
+in the tree and get a 404 back. `requestRename` branches on
+`node.path === pendingPath` and moves the draft slot instead — which is the same
+thing creating it under the new name would have done — skipping both the API call
+and the tree refresh, since the branch didn't change. The committed path still
+lands on GitHub *first*: reordering that would leave the app pointing at a path the
+repo never got.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
@@ -295,6 +359,10 @@ may touch at install time and can change that later. Consequences to keep in min
 - `lib/highlight.ts` — the only module that touches shiki, always through
   `await import`. Type-only imports are erased, so those are fine.
 - `lib/diff.ts` — the diff algorithm and nothing else; no React, no I/O.
+- `lib/color.ts` — static color arithmetic (parse / luminance / contrast / mix /
+  `ensureContrast`). No DOM: it must work on a color *before* it becomes a CSS
+  string, which is why `applyThemeToSite` blends numerically instead of emitting
+  `color-mix()` for anything it then has to measure.
 - `lib/agentProtocol.ts` — Agent Link's wire contract; types and constants
   only, because it compiles under both tsconfigs (browser and node).
 - `lib/agentKey.server.ts` — `server-only`, like `lib/session.server.ts`.
@@ -324,6 +392,37 @@ every diagram render **and** recolors the app chrome, via `applyThemeToSite`
 mapping the diagram palette onto the shadcn CSS custom properties on `<body>`.
 `app/globals.css`'s `:root`/`.dark` blocks are only the fallback palette used
 when no theme is set — they are not fixed/static in practice.
+
+### A diagram palette is not a text palette — hence the contrast floor
+
+`themeVariables` describes a *diagram*: `primaryBorderColor` is a node outline,
+`lineColor` an edge. `applyThemeToSite` maps those onto tokens that carry **text**
+— `--primary` is the editor's keyword/heading color and the fill behind a primary
+button — and a color that reads fine as a 1px stroke can be 2.3:1 against the page
+(Zinc's `#A1A1AA` on white; `#52525B` on `#18181B`). That was the editor's
+"unreadable on many themes" bug, and it was never a CodeMirror problem.
+
+So every token that ends up holding words is passed through `ensureContrast`
+against **the surface it is actually painted on** (`legible` in
+`applyThemeToSite`): AA 4.5:1 for text, 3:1 for `--ring`, which is a graphical
+object rather than text. Three properties to preserve:
+
+- **A passing color is returned untouched**, so a well-chosen palette renders
+  exactly as authored and only unusable colors move.
+- **The lift blends toward white or black**, not toward another hue, and bisects
+  for the smallest blend that clears the floor — a blue accent stays blue, it just
+  stops being the same lightness as the paper.
+- **`--border` / `--input` are deliberately excluded.** A hairline you can barely
+  see is the intent there; enforcing text contrast on it would draw boxes around
+  the whole UI.
+
+Unparseable notations (`hsl()`, named colors) fall through unchanged — the theme
+pipeline is best-effort, and `lib/color.ts` reads only hex and `rgb()`.
+
+`--muted-foreground` is the one derived value: the palette's text blended 60% over
+the *background* (statically, via `mixColors`, because `ensureContrast` needs
+numbers and a `color-mix()` string is opaque to it), then lifted back to AA. The
+CSS `color-mix()` form survives only as the fallback for a palette we can't parse.
 
 ### Markdown documents borrow the same config
 
@@ -850,6 +949,11 @@ records (rule 10).
 - Loading states for lists use `components/ui/skeleton.tsx` with per-call-site
   geometry that mirrors the real rows (indent, padding, line count), so content
   doesn't jump when it swaps in.
+- **A list whose rows have both a hover fill and an active tint needs a pixel of
+  gap between them** (`space-y-px` — the file tree, the markdown reading view's
+  Contents panel). Both states paint a full-width rounded rectangle, so flush rows
+  meet edge to edge and a hovered row beside the active one reads as one selected
+  block rather than two.
 
 ## Verify
 

@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import {
 } from 'react'
 import { ArrowLeft, List, Maximize2, Minimize2 } from 'lucide-react'
 import {
+  SOURCE_LINE_ATTR,
   renderMarkdown,
   type MarkdownHeading,
   type MarkdownPart,
@@ -47,6 +49,55 @@ export interface MarkdownPreviewProps {
   onBack?: () => void
   /** Path the Back button leads to, for its tooltip. */
   backLabel?: string
+  /** Double-clicking a block reports the source line it was written on, so the
+   *  editor can jump there. See {@link MarkdownPreviewHandle} for the other
+   *  direction. */
+  onRevealSource?: (line: number) => void
+  /** Handle the app drives to scroll this pane to a source line. */
+  ref?: React.Ref<MarkdownPreviewHandle>
+}
+
+/**
+ * The document half of the editor ↔ preview scroll sync.
+ *
+ * Imperative rather than a `line` prop for one reason: scrolling is an *event*,
+ * not state. As a prop, double-clicking the same line twice — which is exactly
+ * what you do after scrolling away — would pass React an unchanged value and
+ * nothing would happen, and the usual fix (pairing the line with a nonce) makes
+ * every jump re-render the whole document, diagrams included.
+ */
+export interface MarkdownPreviewHandle {
+  /** Scroll to the block that owns `line` in the source. */
+  revealLine: (line: number) => void
+}
+
+/** How far below the top of the reading pane a synced block is parked, so it
+ *  doesn't sit flush against the edge (or under the window controls). */
+const SYNC_SCROLL_OFFSET = 24
+
+/**
+ * The deepest rendered block that starts at or before `line`.
+ *
+ * `lib/markdown.ts` stamps every block — nested ones included — so the candidates
+ * for line 12 might be a `<blockquote>` on line 9, a `<p>` on line 11 and the
+ * `<li>` between them. Document order plus "last one that starts early enough"
+ * picks the innermost, because a child always follows its parent in the tree and
+ * so appears later in the query result.
+ */
+function blockForLine(container: HTMLElement, line: number): HTMLElement | null {
+  let best: HTMLElement | null = null
+  let bestLine = -Infinity
+  for (const el of container.querySelectorAll<HTMLElement>(`[${SOURCE_LINE_ATTR}]`)) {
+    const start = Number(el.getAttribute(SOURCE_LINE_ATTR))
+    if (!Number.isFinite(start) || start > line) continue
+    // `>=` so a later sibling on the same line wins over an earlier one, and a
+    // child (which follows its parent) wins over the block containing it.
+    if (start >= bestLine) {
+      best = el
+      bestLine = start
+    }
+  }
+  return best
 }
 
 /** How long the pointer has to rest on an in-repo link before its preview is
@@ -90,6 +141,8 @@ export default function MarkdownPreview({
   onOpenFile,
   onBack,
   backLabel,
+  onRevealSource,
+  ref,
 }: MarkdownPreviewProps) {
   // Client-only for the same reason as the diagram preview: rendering the
   // embedded mermaid fences measures text against the live DOM.
@@ -160,6 +213,56 @@ export default function MarkdownPreview({
     container.scrollTo({ top, behavior: 'smooth' })
     setActiveHeading(id)
   }, [])
+
+  /* ---------------------------------------------------------------- */
+  /* Scroll sync with the editor                                       */
+  /* ---------------------------------------------------------------- */
+
+  // Mount-stable: everything it touches is behind `scrollRef`, so the app never
+  // has to re-read the handle.
+  useImperativeHandle(
+    ref,
+    () => ({
+      revealLine: (line) => {
+        const container = scrollRef.current
+        const target = container && blockForLine(container, line)
+        if (!container || !target) return
+        // Scroll the container, not the page — `scrollIntoView` on a nested
+        // scroller also nudges the window, the same trap `scrollToHeading` avoids.
+        const top =
+          target.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop -
+          SYNC_SCROLL_OFFSET
+        container.scrollTo({ top, behavior: 'smooth' })
+        // A moment of emphasis, because a smooth scroll that lands mid-document
+        // leaves no clue which of the blocks now on screen was the one asked for.
+        target.classList.remove('md-sync-flash')
+        // Reading `offsetWidth` restarts the animation: without the reflow the
+        // class comes off and goes back on inside one frame and the browser sees
+        // no change at all, so double-clicking the same line twice flashes once.
+        void target.offsetWidth
+        target.classList.add('md-sync-flash')
+        window.setTimeout(() => target.classList.remove('md-sync-flash'), 1200)
+      },
+    }),
+    [],
+  )
+
+  // Double-clicking a block asks the editor for the line it was written on.
+  // Bound on the document wrapper, so it covers the prose runs and the embedded
+  // diagrams alike — both carry `data-md-line`.
+  const onDoubleClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (!onRevealSource) return
+      const target = e.target as HTMLElement | null
+      const block = target?.closest?.(`[${SOURCE_LINE_ATTR}]`)
+      if (!(block instanceof HTMLElement)) return
+      const line = Number(block.getAttribute(SOURCE_LINE_ATTR))
+      if (Number.isFinite(line)) onRevealSource(line)
+    },
+    [onRevealSource],
+  )
 
   // Track which heading is currently at the top of the reading pane. Only while
   // the outline is on screen — there is nothing to highlight otherwise.
@@ -321,7 +424,11 @@ export default function MarkdownPreview({
       {showOutline ? (
         <nav
           aria-label="Document outline"
-          className="absolute top-14 right-4 z-10 hidden max-h-[calc(100%-4.5rem)] w-64 overflow-auto rounded-lg border bg-card/90 p-2 shadow-lg backdrop-blur sm:block supports-backdrop-filter:bg-card/75"
+          // `space-y-px`: the active entry is tinted and every entry has a hover
+          // fill, both full-width rounded rectangles — flush against each other
+          // they merged into one block whenever the hovered entry sat beside the
+          // active one.
+          className="absolute top-14 right-4 z-10 hidden max-h-[calc(100%-4.5rem)] w-64 space-y-px overflow-auto rounded-lg border bg-card/90 p-2 shadow-lg backdrop-blur sm:block supports-backdrop-filter:bg-card/75"
         >
           <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">Contents</p>
           {headings.map((heading) => (
@@ -354,6 +461,7 @@ export default function MarkdownPreview({
             <div
               className="mx-auto max-w-3xl px-8 py-6"
               onClick={onClick}
+              onDoubleClick={onDoubleClick}
               onMouseOver={onPointerOver}
               onMouseLeave={closeHover}
             >
@@ -370,6 +478,7 @@ export default function MarkdownPreview({
                       svg={part.svg}
                       variant="embedded"
                       background={surface}
+                      sourceLine={part.line}
                     />
                   ) : (
                     <div

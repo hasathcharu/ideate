@@ -210,11 +210,19 @@ function linkTargetCompletions(context: CompletionContext): CompletionResult | n
     from: context.pos - (typed.length - kept),
     options: paths
       .filter((path) => path !== docPath)
-      .map((path) => ({
-        label: relativeLink(dir, path),
-        detail: path,
-        type: 'file',
-      })),
+      .map((path) => {
+        const label = relativeLink(dir, path)
+        return {
+          label,
+          // The full repo path, as context for a link written relative to this
+          // document — but only when it actually adds something. A sibling file
+          // relativizes to its own name, and for a document at the repo root
+          // *every* path does, so an unconditional detail printed the same string
+          // twice on every row.
+          ...(label === path ? {} : { detail: path }),
+          type: 'file',
+        }
+      }),
     validFor: /^[^()\s]*$/,
   }
 }
@@ -321,7 +329,14 @@ const baseSetup = [
   indentOnInput(),
   bracketMatching(),
   closeBrackets(),
-  autocompletion(),
+  // `icons: false`: CodeMirror renders an icon slot for every row and only ships
+  // glyphs for its own completion types, of which `file` is not one — so the
+  // markdown link completions got an empty box indenting every path. Nothing in a
+  // list of file paths is disambiguated by a per-row icon, so the column goes.
+  // `editorTheme` collapses it too, so the row's geometry doesn't depend on this
+  // flag. Still exactly one `autocompletion()`, which is what the link
+  // completions need to reach it.
+  autocompletion({ icons: false }),
   rectangularSelection(),
   crosshairCursor(),
   highlightActiveLine(),
@@ -614,9 +629,13 @@ function editorTheme(dark: boolean) {
       },
       '.cm-content': { padding: '12px 0', caretColor: 'var(--primary)' },
       '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--primary)' },
+      // The gutter sits on the editor's own surface, like VS Code's. On
+      // `--secondary` (a mid-tone from the diagram palette) the line numbers were
+      // muted text on a surface `--muted-foreground` is not measured against — as
+      // low as 2:1 on some themes — and it drew a band down the side of the pane.
       '.cm-gutters': {
         border: 'none',
-        backgroundColor: 'var(--secondary)',
+        backgroundColor: 'var(--background)',
         color: 'var(--muted-foreground)',
       },
       '.cm-activeLine': {
@@ -625,10 +644,106 @@ function editorTheme(dark: boolean) {
       '.cm-activeLineGutter': {
         backgroundColor: 'color-mix(in srgb, var(--foreground) 18%, transparent)',
       },
+      // Blended into the *page*, not into transparency. A translucent accent over
+      // a dark theme composites toward the accent's own (bright) colour, which
+      // washed the selection out and took the selected text with it; mixing into
+      // `--background` keeps a dark palette's selection dark and a light one's
+      // light, at the same visual strength either way.
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
         {
-          backgroundColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+          backgroundColor: 'color-mix(in srgb, var(--primary) 28%, var(--background))',
         },
+      // Search hits and other occurrences of the selected word. CodeMirror's
+      // defaults for these are fixed pale yellow/green, chosen against a white
+      // editor — on a dark palette they are the brightest thing on screen. Both
+      // are re-derived from the accent instead, at strengths that keep the text
+      // on top of them readable.
+      '.cm-searchMatch': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 22%, var(--background))',
+        outline: '1px solid color-mix(in srgb, var(--primary) 45%, transparent)',
+        borderRadius: '2px',
+      },
+      '.cm-searchMatch.cm-searchMatch-selected': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 45%, var(--background))',
+      },
+      '.cm-selectionMatch': {
+        backgroundColor: 'color-mix(in srgb, var(--foreground) 14%, transparent)',
+        borderRadius: '2px',
+      },
+      '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+        backgroundColor: 'color-mix(in srgb, var(--primary) 30%, transparent)',
+        outline: 'none',
+      },
+      '.cm-nonmatchingBracket, &.cm-focused .cm-nonmatchingBracket': {
+        backgroundColor: 'color-mix(in srgb, var(--destructive) 30%, transparent)',
+      },
+      // Tooltips (the completion popup, and anything else CodeMirror floats).
+      // Left to the stock theme these are a light card with a blue selection bar,
+      // which is both unreadable on a dark palette and unlike every other menu in
+      // the app — so the geometry below is deliberately the same as
+      // `components/ui/dropdown-menu.tsx`: rounded-lg popover, 4px padding,
+      // rounded-md items tinted with `--accent` on selection.
+      '.cm-tooltip': {
+        backgroundColor: 'var(--popover)',
+        color: 'var(--popover-foreground)',
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        boxShadow: '0 4px 12px color-mix(in srgb, var(--foreground) 12%, transparent)',
+        overflow: 'hidden',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul': {
+        fontFamily:
+          "var(--font-mono, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace)",
+        fontSize: '12px',
+        maxHeight: '16rem',
+        padding: '4px',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li': {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '6px',
+        padding: '3px 6px',
+        borderRadius: '6px',
+        color: 'var(--popover-foreground)',
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: 'var(--accent)',
+        color: 'var(--accent-foreground)',
+      },
+      // The matched substring. CodeMirror underlines it; the app's own filtered
+      // lists bolden instead, and an underline inside a file path reads as part of
+      // the path.
+      '.cm-completionMatchedText': {
+        textDecoration: 'none',
+        fontWeight: '700',
+        color: 'var(--primary)',
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText': {
+        color: 'inherit',
+      },
+      // The icon column. `autocompletion({ icons: false })` stops it being
+      // rendered at all; this collapses it if it ever is, because the geometry of
+      // the row shouldn't depend on that flag holding. CodeMirror gives the slot
+      // `width: .8em` + `padding-right: .6em` and ships no glyph for `file`, so
+      // every path in the list was indented ~1.4em by an empty box.
+      '.cm-completionIcon': {
+        display: 'none',
+      },
+      '.cm-completionLabel': { flex: '1 1 auto', minWidth: '0' },
+      '.cm-completionDetail': {
+        flex: '0 1 auto',
+        minWidth: '0',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        fontStyle: 'normal',
+        fontSize: '11px',
+        color: 'var(--muted-foreground)',
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail': {
+        color: 'inherit',
+        opacity: '0.75',
+      },
       // Search / replace panel (⌘F): custom VSCode-styled panel themed with the
       // app's design tokens instead of CodeMirror's default light chrome.
       '.cm-panels': {
@@ -737,6 +852,11 @@ export interface EditorHandle {
   applyEdits: (edits: readonly TextEdit[]) => string
   /** 1-based cursor position, for `ideate_status`. */
   cursor: () => { line: number; column: number } | null
+  /** Put the cursor on a 1-based line and scroll it into view — the editor half
+   *  of the scroll sync with the markdown preview. Out-of-range lines are clamped
+   *  rather than rejected: the caller's line comes from a rendered document that
+   *  may be a render or two behind the text. */
+  revealLine: (line: number) => void
 }
 
 export interface EditorProps {
@@ -765,6 +885,11 @@ export interface EditorProps {
   docPath?: string | null
   /** Show the viewfinder column (the whole document at a glance) on the right. */
   minimap?: boolean
+  /** Double-clicking a line reports its 1-based number, so the preview can scroll
+   *  to whatever that line renders as. Double-click still selects the word under
+   *  the pointer — the sync rides along with the existing gesture rather than
+   *  taking it over. */
+  onRevealPreview?: (line: number) => void
   /** Handle for Agent Link. Passed as an ordinary prop — React 19 treats
    *  `ref` as one for function components, so no `forwardRef` wrapper is needed. */
   ref?: React.Ref<EditorHandle>
@@ -780,11 +905,15 @@ export default function Editor({
   filePaths,
   docPath = null,
   minimap = false,
+  onRevealPreview,
   ref,
 }: EditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
+  // Behind a ref for the same reason `onChange` is: the extension array is built
+  // once at mount, and this handler changes identity on every parent render.
+  const onRevealPreviewRef = useRef(onRevealPreview)
   /**
    * Documents this editor has emitted that may still be in flight as a stale
    * `value` prop, newest last.
@@ -809,6 +938,7 @@ export default function Editor({
   const wrapCompartment = useRef(new Compartment())
 
   onChangeRef.current = onChange
+  onRevealPreviewRef.current = onRevealPreview
 
   // Mount once.
   useEffect(() => {
@@ -830,6 +960,17 @@ export default function Editor({
           wrapCompartment.current.of(wrap ? EditorView.lineWrapping : []),
           themeCompartment.current.of(editorTheme(dark)),
           highlightCompartment.current.of(syntaxHighlighting(highlightStyle())),
+          EditorView.domEventHandlers({
+            dblclick(event, view) {
+              const reveal = onRevealPreviewRef.current
+              if (!reveal) return false
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+              if (pos !== null) reveal(view.state.doc.lineAt(pos).number)
+              // Not handled: the double-click must still select the word under the
+              // pointer, which is what a double-click in a text editor is for.
+              return false
+            },
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               const doc = update.state.doc.toString()
@@ -1100,6 +1241,22 @@ export default function Editor({
         const head = view.state.selection.main.head
         const line = view.state.doc.lineAt(head)
         return { line: line.number, column: head - line.from + 1 }
+      },
+      revealLine: (line) => {
+        const view = viewRef.current
+        if (!view) return
+        const doc = view.state.doc
+        const target = doc.line(Math.min(Math.max(Math.round(line), 1), doc.lines))
+        // Move the cursor as well as scrolling: centring a line and leaving the
+        // caret behind means the next keystroke scrolls straight back to wherever
+        // it was, undoing the jump.
+        view.dispatch({
+          selection: { anchor: target.from },
+          effects: EditorView.scrollIntoView(target.from, { y: 'center' }),
+        })
+        // Deliberately no `focus()` — the human is reading the document and
+        // clicked in it; stealing the caret out of the pane they are pointing at
+        // is not what a scroll sync is for.
       },
     }),
     [],

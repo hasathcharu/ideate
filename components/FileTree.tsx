@@ -39,12 +39,12 @@ const SKELETON_ROWS = [
  * Placeholder shown while the first tree for a repo/branch loads.
  *
  * Geometry deliberately mirrors `TreeItem`: same `depth * 12 + 8` indent, same
- * `py-1` row height and `gap-1.5`, so the real list doesn't visibly jump when it
- * replaces this.
+ * `py-1` row height, `gap-1.5` and inter-row `space-y-px`, so the real list
+ * doesn't visibly jump when it replaces this.
  */
 export function FileTreeSkeleton() {
   return (
-    <ul className="text-sm" aria-hidden>
+    <ul className="space-y-px text-sm" aria-hidden>
       {SKELETON_ROWS.map((row, i) => (
         <li
           key={i}
@@ -104,7 +104,12 @@ export default function FileTree({
     )
   }
   return (
-    <ul className="text-sm">
+    // `space-y-px` is load-bearing, not spacing taste: a row's hover fill and the
+    // active row's tint are both full-width rounded rectangles, so with the rows
+    // flush the two backgrounds met edge to edge and read as one selected block.
+    // A single pixel of gap is enough to separate them and doesn't change the
+    // list's density.
+    <ul className="space-y-px text-sm">
       {nodes.map((node) => (
         <TreeItem
           key={node.path}
@@ -194,7 +199,7 @@ function TreeItem(props: ItemProps) {
           </div>
         </div>
         {open && node.children ? (
-          <ul>
+          <ul className="space-y-px pt-px">
             {node.children.map((child) => (
               <TreeItem key={child.path} {...props} node={child} depth={depth + 1} />
             ))}

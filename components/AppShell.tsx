@@ -23,7 +23,7 @@ import {
 import { toast } from 'sonner'
 import Editor, { type EditorHandle } from './Editor'
 import Preview from './Preview'
-import MarkdownPreview from './MarkdownPreview'
+import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
 import Canvas from './Canvas'
 import ExportMenu from './ExportMenu'
 import AuthButton from './AuthButton'
@@ -396,6 +396,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // keeps a scene from flashing a white canvas inside dark chrome when the user
   // opens it while a dark theme is selected.
   const canvasTheme = useMemo(() => resolveThemeMode(appliedConfig), [appliedConfig])
+  /** CodeMirror carries its own binary `dark` flag, which decides the defaults for
+   *  every surface `editorTheme` doesn't name. It follows the same resolved mode
+   *  as the canvas — pinned to `false`, a dark palette got CodeMirror's
+   *  light-theme defaults underneath it. */
+  const editorDark = canvasTheme === 'dark'
 
   // The canvas paints the active theme's background, so the drawing surface matches
   // the app chrome around it. Imposed for display only — never written to the file.
@@ -876,6 +881,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
    *  whenever no text editor is mounted (a canvas is open, or the diff view has
    *  taken the pane), which `applyEdits` below handles rather than refuses. */
   const editorRef = useRef<EditorHandle | null>(null)
+  /** The markdown reading pane, for the scroll sync below. */
+  const markdownPreviewRef = useRef<MarkdownPreviewHandle | null>(null)
+
+  /**
+   * Two-way scroll sync for markdown: double-click a line to find it in the
+   * document, double-click a block to find it in the source.
+   *
+   * Driven through the two imperative handles rather than through state. A jump is
+   * an event, and the same line double-clicked twice has to jump twice — which a
+   * prop holding a line number can't express, and which the usual nonce workaround
+   * only buys by re-rendering the whole document (every embedded diagram included)
+   * on each jump.
+   */
+  const revealInPreview = useCallback((line: number) => {
+    markdownPreviewRef.current?.revealLine(line)
+  }, [])
+  const revealInEditor = useCallback((line: number) => {
+    editorRef.current?.revealLine(line)
+  }, [])
 
   const bridgeState: BridgeState = useMemo(
     () => ({
@@ -1077,9 +1101,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const requestRename = useCallback(
     (node: TreeNode) => {
       if (!repo || node.type !== 'file') return
+      // A never-committed file exists only in this browser: it is spliced into the
+      // sidebar from `pendingPath` and its content is a localStorage draft, with
+      // nothing on GitHub under either name. Renaming it through the API would ask
+      // git to move a path that isn't in the tree, which answers 404 — so this one
+      // is a local move of the draft slot, exactly like creating it under the new
+      // name would have been.
+      const local = node.path === pendingPath
       openPrompt({
         title: 'Rename file',
-        description: `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
+        description: local
+          ? `Rename this file before its first commit. It only exists in this browser, so nothing on ${repo.branch} changes until you commit.`
+          : `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
         label: 'New path',
         defaultValue: node.path,
         submitLabel: 'Rename',
@@ -1089,14 +1122,27 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
-          const res = await renameFile(repo.owner, repo.name, node.path, newPath, repo.branch)
-          if (!res.ok) {
-            if (handleExpiredSession(res.error)) return
-            toast.error(res.error.message)
-            return
+          // The committed case has to land on GitHub first: everything below moves
+          // local bookkeeping to match, and doing that before the API call would
+          // leave the app pointing at a path the repo never got.
+          if (!local) {
+            const res = await renameFile(
+              repo.owner,
+              repo.name,
+              node.path,
+              newPath,
+              repo.branch,
+            )
+            if (!res.ok) {
+              if (handleExpiredSession(res.error)) return
+              toast.error(res.error.message)
+              return
+            }
+            if (openPath === node.path) setLoadedSha(res.data.sha)
           }
           setPromptOpen(false)
-          // Carry any uncommitted draft over to the new path.
+          // Carry any uncommitted draft over to the new path. For a local rename
+          // this *is* the rename — the draft is the only copy of the file.
           const oldId = docIdForFile(repo.owner, repo.name, repo.branch, node.path)
           const newId = docIdForFile(repo.owner, repo.name, repo.branch, newPath)
           const draft = loadDraft(oldId)
@@ -1109,16 +1155,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
             next.add(newPath)
             return next
           })
-          if (openPath === node.path) {
-            setOpenPath(newPath)
-            setLoadedSha(res.data.sha)
-          }
+          if (openPath === node.path) setOpenPath(newPath)
           toast.success(`Renamed to ${newPath}`)
-          void refreshTree(repo)
+          // A local rename changed nothing on the branch, and `pendingPath`
+          // already re-splices the new name into the sidebar off `openPath`.
+          if (!local) void refreshTree(repo)
         },
       })
     },
-    [repo, openPrompt, openPath, refreshTree],
+    [repo, openPrompt, openPath, pendingPath, refreshTree],
   )
 
   // Reset the editor to a fresh scratch doc — used when the file being edited is
@@ -1959,7 +2004,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   ref={editorRef}
                   value={text}
                   onChange={setText}
-                  dark={false}
+                  dark={editorDark}
                   kind={kind}
                   wrap={config.wrapLines}
                   // Only a committed file has something to diverge *from*; a new
@@ -1969,6 +2014,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
                   filePaths={repoFilePaths}
                   docPath={openPath}
                   minimap={config.minimap}
+                  // Only markdown has a document to scroll to; a diagram preview
+                  // is one figure with no notion of a source line.
+                  onRevealPreview={kind === 'markdown' ? revealInPreview : undefined}
                 />
               </section>
               <div
@@ -1988,6 +2036,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <section className="min-h-0 overflow-auto" aria-label="Preview">
                 {kind === 'markdown' ? (
                   <MarkdownPreview
+                    ref={markdownPreviewRef}
+                    onRevealSource={revealInEditor}
                     text={debouncedText}
                     config={appliedConfig}
                     path={openPath}
