@@ -1,0 +1,14 @@
+{
+  // Emits the MCP server to `dist-mcp/`, so `npx github:hasathcharu/ideate` can run
+  // it with plain node and no TypeScript loader. Run from `prepare`, which npm
+  // invokes after installing a git dependency — that is the hook that makes the
+  // published-from-git install work at all.
+  "extends": "./tsconfig.mcp.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist-mcp",
+    "declaration": false,
+    "sourceMap": true
+  }
+}

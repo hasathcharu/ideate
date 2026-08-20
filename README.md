@@ -48,6 +48,10 @@ open, commit, rename, delete, branch, diff, version history.
   still export sharp. Source export too — mermaid with the config baked in as
   frontmatter, or the raw `.excalidraw` scene. Markdown exports as markdown —
   the document verbatim, so what leaves matches what's in the repo.
+- **Agent Link** (beta): an MCP server that hands a coding agent the document open in your
+  browser — edits land in the editor as undoable changes and come back with the
+  renderer's verdict, so a broken diagram is fixed in the same turn. Nothing is ever
+  committed; saving stays yours.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   to whichever branch is selected. Access is scoped by a **GitHub App
   installation** — the picker lists only the repositories you chose to share, and
@@ -188,6 +192,89 @@ kind; the **+** buttons (at the root or on any folder) let you start a mermaid
 diagram, a markdown document or a canvas. Exports can be downloaded or copied to
 the clipboard, and any surface can be expanded to fill the browser window.
 
+## Agent Link (beta) — let a coding agent edit the open document
+
+> **Beta.** The tool surface and the wire protocol between the app and the MCP
+> server can still change between versions. The two sides carry a protocol version
+> and refuse to talk on a mismatch rather than guessing, so the failure is loud:
+> update whichever side is older.
+
+Ideate ships an **MCP server**, so an agent can read and edit the document that is
+**open in your browser right now**. Edits arrive in the editor as ordinary undoable
+changes, and the agent gets the renderer's verdict back in the result of its own
+tool call — so it fixes a broken diagram in the same turn instead of leaving it for
+you to find.
+
+**Nothing is ever committed.** Saving stays a human action, so the most an agent can
+touch is your uncommitted working copy — on screen, and one ⌘Z away.
+
+### Setting it up
+
+Every MCP client takes a command and its arguments. Add Ideate as an MCP server with:
+
+```
+command  npx
+args     -y  github:hasathcharu/ideate
+```
+
+Most clients read that from a JSON config file:
+
+```json
+{
+  "mcpServers": {
+    "ideate": {
+      "command": "npx",
+      "args": ["-y", "github:hasathcharu/ideate"]
+    }
+  }
+}
+```
+
+Some offer a CLI instead — for example `claude mcp add ideate -- npx -y
+github:hasathcharu/ideate`, or the equivalent in your own tool.
+
+From a checkout of this repo, point the client at `npx` with args `tsx
+mcp/index.ts` instead, which skips the download entirely.
+
+> **Don't hand an MCP client `npm run mcp`.** `npm run` prints a two-line banner to
+> **stdout**, which is the JSON-RPC channel — it corrupts the stream before the
+> server says a word. `npm run mcp` is fine for eyeballing the server by hand
+> (it logs to stderr); for a client, use `npx tsx mcp/index.ts`, or
+> `npm run mcp --silent`.
+
+> The `npx` form installs this repo's whole dependency tree (~1050 packages,
+> ~840MB) because the server shares the root `package.json`. It is a one-time,
+> cached cost; running it from a checkout avoids it.
+
+Then, in the app, click **Connect Agent** in the toolbar and switch it on. There is
+no port and no token to copy — the two sides find each other on the loopback
+interface.
+
+Two deliberate steps stand between an agent and your document, and they answer
+different questions:
+
+- **Which tab** is yours to answer. The switch is **per tab**, so it arms the tab you
+  flip it in and no other — with several Ideate tabs open, you choose which document
+  is reachable. The button then reads **Awaiting Agent**.
+- **Whether to drive it** is the agent's. It must call `ideate_connect` on its own
+  side; until it does, nothing can read or edit. The button reads **Agent Connected**
+  once it has, naming the agent that attached.
+
+### Tools
+
+| Tool | Does |
+|---|---|
+| `ideate_status` | What is open: repo, branch, path, kind, dirty, cursor |
+| `ideate_list_files` | Every file in the connected repository |
+| `ideate_read` | The open working copy, or another file as committed |
+| `ideate_edit` | Anchored string replacements — one undo step, plus diagnostics |
+| `ideate_write` | Replace the whole document |
+| `ideate_open` | Open a file in the editor |
+| `ideate_create_file` | A new uncommitted file, seeded from a template |
+| `ideate_check` | Ask the renderer what it thinks, without editing |
+| `ideate_scene_get` | List the elements on an Excalidraw canvas |
+| `ideate_scene_edit` | Add / move / restyle / remove canvas elements |
+
 ## Scripts
 
 | Script | Purpose |
@@ -195,7 +282,10 @@ the clipboard, and any surface can be expanded to fill the browser window.
 | `npm run dev` | Start the dev server |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build |
-| `npm run typecheck` | `tsc --noEmit` (strict) |
+| `npm run typecheck` | `tsc --noEmit` (strict) over both the app and `mcp/` |
+| `npm run mcp` | Run the Agent Link MCP server by hand (clients need `npx tsx mcp/index.ts` — see above) |
+| `npm run build:mcp` | Compile the MCP server to `dist-mcp/` (runs on `prepare`) |
+| `npm run gen:agent-key` | Generate the Ed25519 key that signs Agent Link tokens |
 | `npm run vendor:excalidraw` | Copy Excalidraw's fonts into `public/` (runs automatically on `postinstall`, `dev` and `build`) |
 
 ## Security model
@@ -216,6 +306,30 @@ the clipboard, and any surface can be expanded to fill the browser window.
   `cookies().set()` throws during a render, so a token rotated there would be
   dropped while GitHub had already invalidated the old one.
 
+### Agent Link
+
+- **Off by default**, switched on per browser, and the toolbar always shows whether
+  an agent is attached — an agent can never be editing invisibly.
+- The MCP server listens on **loopback only** (`127.0.0.1`); nothing is reachable
+  from your network.
+- A WebSocket has no same-origin policy, so any page could otherwise claim that
+  socket, answer your agent's commands and feed it poisoned text. Two things stop
+  it: an `Origin` allowlist on the handshake (browsers must send it and page script
+  cannot forge it), and a **single-use signed token** the tab mints from
+  `/api/agent/token`. That route deliberately returns **no CORS headers** — and
+  that, rather than the signature, is what means only a real Ideate page can obtain
+  a token.
+- Tokens are Ed25519, last 60 seconds, and are held in memory only — never in
+  `localStorage`. The server pins which issuers it trusts and never fetches a key
+  from an issuer it was not told about.
+- Any process already running as you on your machine could reach the socket. That
+  is accepted rather than defended: such a process can already read your files and
+  your browser profile. It is the same footing as the Docker socket.
+- **Prompt injection is the larger risk here.** Your agent reads documents from your
+  repository, and a `.md` file can contain instructions aimed at it. Agent Link does
+  not create that risk, but it does give the agent write access to the open
+  document — which is why there is no commit tool.
+
 ## Scope / limitations (MVP)
 
 - "Open PR" is a redirect to GitHub's compare page — no PR-creation API call,
@@ -230,3 +344,8 @@ the clipboard, and any surface can be expanded to fill the browser window.
 - A canvas's background is theme-driven chrome and is deliberately **not** saved
   into the scene file, so a `.excalidraw` file's own background is preserved as
   written but not editable from inside this app.
+- Agent Link serves **one tab per server**: a second agent session takes the next
+  port in its range, and a second tab is refused while one holds the connection.
+- Agent Link exposes no commit, rename or delete tool. In this app rename and delete
+  *are* commits, so exposing them would break the "an agent cannot write to your
+  repository" guarantee.

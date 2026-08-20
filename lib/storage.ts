@@ -78,6 +78,10 @@ export function loadConfig(): AppConfig {
     if (typeof merged.exportBackground === 'boolean') {
       merged.exportBackground = merged.exportBackground ? 'white' : 'none'
     }
+    // A build that stored `agentLink` in here left a stray key behind. Drop it, or
+    // an old `true` would keep arming tabs that never asked — the exact behaviour
+    // moving it to sessionStorage exists to stop.
+    delete (merged as Record<string, unknown>).agentLink
     return merged
   } catch {
     return { ...DEFAULT_CONFIG }
@@ -88,6 +92,50 @@ export function saveConfig(config: AppConfig): void {
   if (!hasStorage()) return
   try {
     window.localStorage.setItem(CONFIG_KEY, JSON.stringify(config))
+  } catch {
+    /* quota / disabled storage — ignore */
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Agent Link — per tab, not per origin                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Whether *this tab* offers itself to an MCP server on the loopback interface.
+ *
+ * `sessionStorage`, not `localStorage`, and deliberately not part of `AppConfig`:
+ * config is shared by every tab on the origin, so persisting this there meant one
+ * switch armed every tab that opened afterwards. All of them would then race for
+ * the bridge and whichever won became the tab an agent drove — leaving the human
+ * no way to choose. Per-tab scoping makes "switch it on here" mean this tab.
+ *
+ * It still survives a reload, which matters: a page refresh mid-session should not
+ * silently drop the link and leave an agent wondering where the document went.
+ *
+ * Never holds a token. Those are minted per connection and kept in memory
+ * (CLAUDE.md rule 3).
+ */
+const AGENT_LINK_KEY = 'km:agent-link'
+
+function hasSessionStorage(): boolean {
+  return typeof window !== 'undefined' && !!window.sessionStorage
+}
+
+export function loadAgentLink(): boolean {
+  if (!hasSessionStorage()) return false
+  try {
+    return window.sessionStorage.getItem(AGENT_LINK_KEY) === 'on'
+  } catch {
+    return false
+  }
+}
+
+export function saveAgentLink(enabled: boolean): void {
+  if (!hasSessionStorage()) return
+  try {
+    if (enabled) window.sessionStorage.setItem(AGENT_LINK_KEY, 'on')
+    else window.sessionStorage.removeItem(AGENT_LINK_KEY)
   } catch {
     /* quota / disabled storage — ignore */
   }

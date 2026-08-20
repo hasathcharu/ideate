@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { ChangeSet, EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
 import {
   EditorView,
   GutterMarker,
@@ -65,6 +65,8 @@ import {
 } from '@/lib/diff'
 import Minimap from './Minimap'
 import type { FileKind } from '@/lib/tree'
+import type { TextEdit } from '@/lib/agentProtocol'
+import { resolveEdits } from '@/lib/textEdit'
 
 /** A small stream tokenizer that gives Mermaid source enough structure to read
  *  well in the editor. Not a full grammar — just keywords, arrows, labels. */
@@ -710,6 +712,33 @@ function editorTheme(dark: boolean) {
   )
 }
 
+/**
+ * The imperative surface Agent Link drives (`lib/agentLink.ts`).
+ *
+ * It exists so an agent's edit lands as a **real CodeMirror transaction** rather
+ * than a whole-document swap: the untouched parts of the document keep their
+ * folds and the cursor keeps its place, the dirty gutter and viewfinder update
+ * through the paths they already use, and the whole batch is a single undo step —
+ * so ⌘Z takes back "what the agent did", not one anchor at a time.
+ */
+/** How many recent emissions the echo guard remembers. See `emittedRef`. */
+const EMITTED_HISTORY = 8
+
+export interface EditorHandle {
+  /** Apply anchored replacements as one transaction, scrolling the last one into
+   *  view. Throws (rather than partially applying) if any anchor is missing or
+   *  ambiguous — see `resolveEdits`.
+   *
+   *  Returns the resulting document. That return value is not a convenience: the
+   *  caller needs the new text *now*, to render diagnostics for what it just
+   *  wrote, and `onChange` only reaches React state on the next render — so
+   *  reading the text back from a prop would report on the document as it was
+   *  before the edit. */
+  applyEdits: (edits: readonly TextEdit[]) => string
+  /** 1-based cursor position, for `ideate_status`. */
+  cursor: () => { line: number; column: number } | null
+}
+
 export interface EditorProps {
   value: string
   onChange: (value: string) => void
@@ -736,6 +765,9 @@ export interface EditorProps {
   docPath?: string | null
   /** Show the viewfinder column (the whole document at a glance) on the right. */
   minimap?: boolean
+  /** Handle for Agent Link. Passed as an ordinary prop — React 19 treats
+   *  `ref` as one for function components, so no `forwardRef` wrapper is needed. */
+  ref?: React.Ref<EditorHandle>
 }
 
 export default function Editor({
@@ -748,11 +780,29 @@ export default function Editor({
   filePaths,
   docPath = null,
   minimap = false,
+  ref,
 }: EditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
-  const lastValueRef = useRef(value)
+  /**
+   * Documents this editor has emitted that may still be in flight as a stale
+   * `value` prop, newest last.
+   *
+   * The reconcile effect below cannot tell an *external* change (open a file,
+   * restore a version, `ideate_write`) from an *echo* of its own output by value
+   * alone, and the difference matters: React can commit a render carrying an older
+   * value after a newer programmatic edit has already moved the document, and
+   * force-replacing the document with that older value silently discards the
+   * newer edit. Two agent edits arriving faster than React commits used to lose
+   * every second one for exactly this reason.
+   *
+   * Capped, because these are whole document copies. A handful covers every render
+   * that can realistically be in flight; the cap only ever discards echoes so old
+   * that treating one as external would replace the document with what it already
+   * contains.
+   */
+  const emittedRef = useRef<string[]>([value])
   const themeCompartment = useRef(new Compartment())
   const highlightCompartment = useRef(new Compartment())
   const languageCompartment = useRef(new Compartment())
@@ -783,7 +833,7 @@ export default function Editor({
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               const doc = update.state.doc.toString()
-              lastValueRef.current = doc
+              emittedRef.current = [...emittedRef.current, doc].slice(-EMITTED_HISTORY)
               onChangeRef.current(doc)
               // The document's height just changed, so the viewfinder's idea of
               // the scroll range is stale.
@@ -806,8 +856,16 @@ export default function Editor({
   useEffect(() => {
     const view = viewRef.current
     if (!view) return
-    if (value === lastValueRef.current) return
-    lastValueRef.current = value
+    const echo = emittedRef.current.lastIndexOf(value)
+    if (echo !== -1) {
+      // Our own output coming back around. Drop it and everything older, and
+      // leave the document alone — it is already at least this new.
+      emittedRef.current = emittedRef.current.slice(echo + 1)
+      return
+    }
+    // Genuinely external: replace the document wholesale, and forget the
+    // emission history, which now describes a document that no longer exists.
+    emittedRef.current = [value]
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     })
@@ -1008,6 +1066,44 @@ export default function Editor({
       effects: themeCompartment.current.reconfigure(editorTheme(dark)),
     })
   }, [dark])
+
+  // Agent Link's door into this editor (see `EditorHandle`). Mount-stable:
+  // everything it needs is behind `viewRef`, so the handle identity never changes
+  // and the bridge never has to re-read it.
+  useImperativeHandle(
+    ref,
+    () => ({
+      applyEdits: (edits) => {
+        const view = viewRef.current
+        if (!view) throw new Error('The text editor is not mounted.')
+        const changes = resolveEdits(view.state.doc.toString(), edits)
+        // Resolved against the pre-transaction document, which is exactly what a
+        // ChangeSet consumes — so this is one atomic dispatch and one undo step,
+        // however many anchors were in the batch.
+        const set = ChangeSet.of(changes, view.state.doc.length)
+        const last = changes[changes.length - 1]!
+        // Select the text the last edit inserted, so the human watching sees
+        // where the agent worked. `mapPos` with assoc -1 lands at the start of
+        // the insertion; doing this arithmetic by hand would mean re-deriving the
+        // net shift of every preceding change.
+        const anchor = set.mapPos(last.from, -1)
+        view.dispatch({
+          changes: set,
+          selection: { anchor, head: anchor + last.insert.length },
+          scrollIntoView: true,
+        })
+        return view.state.doc.toString()
+      },
+      cursor: () => {
+        const view = viewRef.current
+        if (!view) return null
+        const head = view.state.selection.main.head
+        const line = view.state.doc.lineAt(head)
+        return { line: line.number, column: head - line.from + 1 }
+      },
+    }),
+    [],
+  )
 
   return (
     <div className="flex h-full min-h-0">

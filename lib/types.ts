@@ -61,6 +61,13 @@ export interface AppConfig {
   mermaidConfig: string
 }
 
+/** Agent Link's on/off state is deliberately **not** in `AppConfig`. It is per-tab
+ *  (`sessionStorage`, via `loadAgentLink`/`saveAgentLink` in lib/storage.ts),
+ *  because config is shared by every tab on the origin: persisting it here meant
+ *  one switch armed every tab opened afterwards, all of them raced for the bridge,
+ *  and whichever won became the tab an agent drove. That left the human no way to
+ *  say *which* tab to expose — which is the entire purpose of the switch. */
+
 /** A node in the repository file tree. */
 export interface TreeNode {
   name: string
