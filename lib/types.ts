@@ -44,6 +44,11 @@ export interface AppConfig {
   splitRatio: number
   /** File-tree sidebar width in pixels. */
   sidebarWidth: number
+  /** Soft-wrap long lines in the text editor. An editor preference, so it is
+   *  remembered across sessions like the pane sizes are. */
+  wrapLines: boolean
+  /** Show the viewfinder (minimap) column beside the text editor. */
+  minimap: boolean
   /** Which editor the unsaved scratch document uses (local mode, or before a
    *  file is opened). Persisted so a reload reopens the same surface. Mirrors
    *  `FileKind` (lib/tree.ts), spelled out here so the storage layer doesn't

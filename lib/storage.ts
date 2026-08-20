@@ -51,6 +51,8 @@ const DEFAULT_CONFIG: AppConfig = {
   exportBackground: 'white',
   splitRatio: 0.5,
   sidebarWidth: 256,
+  wrapLines: false,
+  minimap: true,
   scratchKind: 'mermaid',
   mermaidConfig: '',
 }
