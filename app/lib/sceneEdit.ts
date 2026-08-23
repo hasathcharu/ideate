@@ -68,6 +68,11 @@ export async function applySceneOps(
   const adds = ops.filter((op): op is SceneAddOp => op.op === 'add')
   const rest = ops.filter((op) => op.op !== 'add')
 
+  // Before anything is measured. Every box that holds text is sized from a canvas
+  // `measureText` against Excalidraw's own font, so an unloaded font is a wrong
+  // answer rather than a missing one — see `awaitTextFonts`.
+  await awaitTextFonts(ops.map((op) => ('text' in op ? op.text : undefined)))
+
   let elements: ExcalidrawElement[] = [...scene.elements]
 
   if (adds.length > 0) {
@@ -106,7 +111,7 @@ export async function applySceneOps(
   }
 
   for (const op of rest) {
-    if (op.op === 'update') elements = applyUpdate(elements, op)
+    if (op.op === 'update') elements = await applyUpdate(elements, op)
     else elements = applyDelete(elements, op.id)
   }
 
@@ -326,7 +331,81 @@ function generateId(): string {
   return id
 }
 
-function applyUpdate(elements: ExcalidrawElement[], op: SceneUpdateOp): ExcalidrawElement[] {
+/**
+ * Excalidraw's default font, and the fallback its font string names after it.
+ *
+ * Neither is configurable from a scene op — `SceneAddOp` carries no `fontFamily`
+ * or `fontSize` — so this is the whole set of faces anything here measures with.
+ * The third fallback (`Segoe UI Emoji`) is a local system font and needs no load.
+ */
+const MEASURED_FONT_FAMILIES = ['Excalifont', 'Xiaolai'] as const
+
+/** The size every label is measured at: Excalidraw's `DEFAULT_FONT_SIZE`, which
+ *  is what a bound label gets when the skeleton names no size. Font *matching*
+ *  ignores it, but `document.fonts.load` wants a complete font shorthand. */
+const MEASURED_FONT_SIZE = 20
+
+/** How long to wait for the mounted editor to have registered its font faces. */
+const FONT_REGISTRATION_TIMEOUT_MS = 1000
+const FONT_REGISTRATION_POLL_MS = 50
+
+/**
+ * Load the fonts the sizing pass is about to measure with, and don't measure
+ * until they are in.
+ *
+ * This is what keeps a generated shape from clipping its own label. Container
+ * dimensions are decided at conversion time by Excalidraw's
+ * `redrawTextBoundingBox`, which measures through a canvas 2D context set to
+ * `20px Excalifont, Xiaolai, "Segoe UI Emoji"` — and a canvas silently falls back
+ * to a generic face for a font that has not loaded. Excalifont is a handwriting
+ * font and roughly 20% wider than that fallback (measured: "Authentication
+ * Service" is 184px unloaded, 220px loaded), so every box came out sized for a
+ * narrower font than the one it would be drawn in. Double-clicking the shape fixed
+ * it because opening the text editor puts the font on screen, which loads it, and
+ * Excalidraw re-measures on blur.
+ *
+ * The faces are registered on `document.fonts` by the *mounted* editor, not by
+ * importing the library, so on the first edit after a scene opens they can be a
+ * beat behind — hence the bounded wait before the load rather than a bare load.
+ * Everything here is best effort: with no fonts available at all the measurement
+ * falls back exactly as it did before, which is a slightly small box, not a
+ * refused edit.
+ */
+async function awaitTextFonts(texts: readonly (string | undefined)[]): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return
+  const characters = texts.filter((text): text is string => !!text).join('')
+  if (!characters) return
+
+  const registered = () =>
+    MEASURED_FONT_FAMILIES.some((family) =>
+      [...document.fonts].some((face) => face.family.replace(/["']/g, '') === family),
+    )
+  for (
+    let waited = 0;
+    !registered() && waited < FONT_REGISTRATION_TIMEOUT_MS;
+    waited += FONT_REGISTRATION_POLL_MS
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, FONT_REGISTRATION_POLL_MS))
+  }
+
+  await Promise.all(
+    MEASURED_FONT_FAMILIES.map(async (family) => {
+      try {
+        // Excalidraw ships each face as per-glyph-range subsets, so the text has
+        // to be passed: `load` fetches only the subsets these characters need.
+        await document.fonts.load(`${MEASURED_FONT_SIZE}px ${family}`, characters)
+      } catch {
+        // An unregistered family resolves empty; only a malformed shorthand
+        // throws, and a failed load is not a reason to abandon the edit.
+      }
+    }),
+  )
+}
+
+async function applyUpdate(
+  elements: ExcalidrawElement[],
+  op: SceneUpdateOp,
+): Promise<ExcalidrawElement[]> {
   const target = elements.find((element) => element.id === op.id)
   if (!target) {
     throw new Error(`No element with id "${op.id}". Call scene_get to list what is there.`)
@@ -339,11 +418,10 @@ function applyUpdate(elements: ExcalidrawElement[], op: SceneUpdateOp): Excalidr
       ? (target.boundElements ?? []).find((bound) => bound.type === 'text')?.id
       : undefined
 
-  return elements.map((element) => {
+  const updated = elements.map((element) => {
     if (element.id === labelId) {
-      // Dimensions are deliberately not recomputed here: text metrics need a
-      // measured DOM, and Excalidraw's own restore pass re-measures bound text
-      // when it ingests the scene. Guessing a width here would fight that.
+      // Text only — the geometry is settled by `refit` below, which measures it
+      // the same way the add path does rather than guessing at a width here.
       return { ...element, text: op.text, originalText: op.text } as ExcalidrawElement
     }
     if (element.id !== op.id) return element
@@ -365,6 +443,137 @@ function applyUpdate(elements: ExcalidrawElement[], op: SceneUpdateOp): Excalidr
     next.version = (element.version ?? 1) + 1
     return next as ExcalidrawElement
   })
+
+  // Text, and the box around it, are one measurement — so anything that changes
+  // either side of it re-runs that measurement. Without this, rewriting a label
+  // left the container at whatever the *previous* text needed, which for longer
+  // replacement text is the same clipping the add path used to have; shrinking a
+  // box left its label unwrapped and hanging over the edge.
+  const resized = op.text !== undefined || op.width !== undefined || op.height !== undefined
+  return resized ? refit(updated, op.id) : updated
+}
+
+/** Element types Excalidraw's skeleton converter can bind a label inside. A
+ *  `line` is deliberately absent — the converter's label branch does not handle
+ *  one, so a line's text is a separate element, not a bound label. */
+const LABELABLE_TYPES = ['rectangle', 'ellipse', 'diamond', 'arrow'] as const
+
+/**
+ * Re-measure `id`'s text and re-fit its box, by running the same skeleton
+ * conversion the add path uses.
+ *
+ * Deliberately delegated rather than reimplemented: Excalidraw's
+ * `redrawTextBoundingBox` wraps the text to the container's inner width, grows the
+ * container when the wrapped text no longer fits, and re-centres the label in
+ * whatever the container became — and none of `measureText`, `wrapText` or
+ * `redrawTextBoundingBox` is exported. Handing a one-element skeleton built from
+ * the live element back to `convertToExcalidrawElements` gets all of it, at the
+ * cost of one throwaway conversion.
+ *
+ * Only geometry is copied back. The throwaway carries none of the element's
+ * identity, bindings or styling, and nothing but width/height/x/y/text is read off
+ * it — an arrow's own `points` least of all, since the converter nudges those by a
+ * half-pixel when it binds a label to a linear element.
+ */
+async function refit(
+  elements: ExcalidrawElement[],
+  id: string,
+): Promise<ExcalidrawElement[]> {
+  const container = elements.find((element) => element.id === id)
+  if (!container) return elements
+
+  // A standalone text element is its own measurement: no wrapping, no box.
+  if (container.type === 'text') {
+    const measured = await measureSkeleton({
+      type: 'text',
+      x: container.x,
+      y: container.y,
+      text: container.text,
+      fontSize: container.fontSize,
+      fontFamily: container.fontFamily,
+    })
+    if (!measured) return elements
+    return elements.map((element) =>
+      element.id === id
+        ? ({ ...element, width: measured[0]!.width, height: measured[0]!.height } as ExcalidrawElement)
+        : element,
+    )
+  }
+
+  // The only shapes that can hold a bound label. Anything else has nothing to
+  // re-measure, and the skeleton API would not accept it.
+  if (!LABELABLE_TYPES.includes(container.type as (typeof LABELABLE_TYPES)[number])) {
+    return elements
+  }
+
+  const labelId = (container.boundElements ?? []).find((bound) => bound.type === 'text')?.id
+  const label = elements.find((element) => element.id === labelId)
+  if (!label || label.type !== 'text') return elements
+
+  const measured = await measureSkeleton({
+    type: container.type as (typeof LABELABLE_TYPES)[number],
+    x: container.x,
+    y: container.y,
+    width: container.width,
+    height: container.height,
+    // An arrow wraps its label against its own length and positions it along its
+    // path, so the points have to travel with it.
+    ...(container.type === 'arrow'
+      ? { points: (container as { points: readonly (readonly number[])[] }).points }
+      : {}),
+    label: {
+      text: label.originalText || label.text,
+      fontSize: label.fontSize,
+      fontFamily: label.fontFamily,
+      textAlign: label.textAlign,
+      verticalAlign: label.verticalAlign,
+    },
+  } as ExcalidrawElementSkeleton)
+  if (!measured) return elements
+
+  const fitContainer = measured.find((element) => element.type !== 'text')
+  const fitLabel = measured.find((element) => element.type === 'text')
+  if (!fitContainer || !fitLabel || fitLabel.type !== 'text') return elements
+
+  // An arrow is sized by its points, not the other way round: Excalidraw widens a
+  // *shape* to fit its label but leaves an arrow alone, and writing the measured
+  // width onto one would desync `width` from `points`. Its label's position is
+  // re-derived from the path at render time for the same reason, so only the text
+  // and its own box are worth copying back.
+  const isArrow = container.type === 'arrow'
+
+  return elements.map((element) => {
+    if (element.id === id) {
+      if (isArrow) return element
+      // Width and height only. The converter reproduces the container from a
+      // skeleton, so every other field on it is a default, not this element's.
+      return { ...element, width: fitContainer.width, height: fitContainer.height } as ExcalidrawElement
+    }
+    if (element.id === labelId) {
+      return {
+        ...element,
+        // `text` is the wrapped form and `originalText` the source; keeping the
+        // two straight is what lets a later edit re-wrap from the real text.
+        text: fitLabel.text,
+        originalText: fitLabel.originalText,
+        width: fitLabel.width,
+        height: fitLabel.height,
+        ...(isArrow ? {} : { x: fitLabel.x, y: fitLabel.y }),
+      } as ExcalidrawElement
+    }
+    return element
+  })
+}
+
+/** One skeleton through the converter, for its measurements. Returns null if the
+ *  conversion produced nothing usable — the caller then leaves the element as it
+ *  found it rather than writing a guess over it. */
+async function measureSkeleton(
+  skeleton: ExcalidrawElementSkeleton,
+): Promise<ExcalidrawElement[] | null> {
+  const { convertToExcalidrawElements } = await import('@excalidraw/excalidraw')
+  const created = convertToExcalidrawElements([skeleton])
+  return created.length > 0 ? [...created] : null
 }
 
 function applyDelete(elements: ExcalidrawElement[], id: string): ExcalidrawElement[] {

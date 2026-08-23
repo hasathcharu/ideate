@@ -229,6 +229,27 @@ function withPath(set: ReadonlySet<string>, path: string): ReadonlySet<string> {
   return next
 }
 
+/**
+ * The fetched tree with `path` spliced in as a committed file.
+ *
+ * Called the moment a commit lands, because the commit itself is what makes a
+ * never-committed file stop being pending — and `pendingPaths` is what was
+ * splicing it into the sidebar. Waiting for `refreshTree` to prove the path is on
+ * the branch leaves a gap of one round trip in which the file belongs to neither
+ * set, and it blinked out of the tree and back for exactly that long.
+ *
+ * Recording it as *committed* rather than keeping it pending is the point: a
+ * pending path routes reads at the localStorage draft (which the commit just
+ * spent) and sends rename/delete down the local-only branch that skips GitHub.
+ * The path is genuinely on the branch now, so the optimistic entry says so, and
+ * the real fetch overwrites it either way.
+ */
+function treeWithPath(tree: TreeResult, path: string): TreeResult {
+  const paths = tree.tree.flatMap(collectFilePaths)
+  if (paths.includes(path)) return tree
+  return { ...tree, tree: buildTree([...paths, path]) }
+}
+
 type PromptSpec = Pick<
   PromptModalProps,
   | 'title'
@@ -1348,8 +1369,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setLoadedSha(res.data.sha)
         setOpenPath(path)
         // The path is on the branch now — the next tree fetch will carry it, so it
-        // must stop being spliced in as a never-committed file.
+        // must stop being spliced in as a never-committed file. Hand it to the
+        // tree in the same batch, or the sidebar drops the file for the length of
+        // that fetch (see `treeWithPath`).
         setCreatedPaths((prev) => withoutPaths(prev, [path]))
+        setTree((prev) => (prev ? treeWithPath(prev, path) : prev))
         // Committing an untitled scratch document promotes it to a real file, so
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
