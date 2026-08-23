@@ -336,6 +336,14 @@ together:
   would send its next rename or delete down the local-only branch and skip GitHub.
   For the same reason `confirmDelete` clears the drafts of everything it deletes:
   a leftover draft *is* a pending file to the recovery pass.
+- **A commit hands the path straight to the tree** (`treeWithPath`), in the same
+  batch that drops it from `createdPaths`. Membership is what puts the file in the
+  sidebar, and committing is exactly what ends it — so waiting for `refreshTree` to
+  prove the path is on the branch left one round trip in which the file belonged to
+  neither set, and it blinked out of the tree and back for that long. It is
+  recorded as **committed**, not left pending: a pending path reads from a draft
+  the commit just spent, and sends rename and delete down the local-only branch
+  that skips GitHub.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
@@ -982,6 +990,30 @@ hand in both directions — `startBinding`/`endBinding` on the arrow *and* an en
 each target's `boundElements`, or dragging the shape leaves the arrow behind. Doing
 it ourselves is also what lets an arrow attach to something already on the canvas,
 which the converter cannot do (it only resolves ids inside its own batch).
+
+**Nothing that holds text may be measured before its font is loaded.** A shape's
+size is decided at conversion time by Excalidraw's `redrawTextBoundingBox`, which
+measures through a canvas 2D context set to `20px Excalifont, …` — and a canvas
+silently substitutes a generic face for a font that has not loaded rather than
+failing. Excalifont is handwriting and ~20% wider than that substitute
+("Authentication Service": 184px against the fallback, 220px loaded), so every
+generated box came out sized for a font it would not be drawn in, and clipped its
+own label. Double-clicking the shape appeared to fix it because opening the text
+editor puts the font on screen, which loads it, and Excalidraw re-measures on blur.
+So `applySceneOps` awaits `awaitTextFonts` before it converts anything. Two things
+that helper depends on: the faces are registered on `document.fonts` by the
+*mounted* editor and not by importing the library (hence the bounded wait, not a
+bare `load`), and each face is a per-glyph-range subset (hence passing the text, so
+`load` fetches the subsets those characters need).
+
+Which is also why **a text change re-measures the box around it** (`refit`), rather
+than writing the new string in beside the old string's geometry. It runs the same
+skeleton conversion the add path uses, because `measureText`, `wrapText` and
+`redrawTextBoundingBox` are all unexported and re-deriving the wrap, the container
+growth and the re-centring by hand is three chances to disagree with the renderer.
+Only geometry is copied off the throwaway — and for an arrow, not even its width:
+an arrow is sized by its `points`, and Excalidraw pointedly does not widen one to
+fit a label.
 
 The tool schema flattens the add/update/delete union into one object, because a JSON
 Schema generated from a Go struct cannot express a discriminated union. That loses the
