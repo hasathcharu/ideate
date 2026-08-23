@@ -1,0 +1,34 @@
+{
+  "t": "req",
+  "id": 11,
+  "command": {
+    "cmd": "scene_edit",
+    "ops": [
+      {
+        "op": "add",
+        "id": "box-a",
+        "type": "rectangle",
+        "x": 0,
+        "y": 0,
+        "width": 160,
+        "height": 80,
+        "text": "Start",
+        "strokeColor": "#1e1e1e",
+        "backgroundColor": "transparent",
+        "fillStyle": "solid",
+        "strokeWidth": 2,
+        "roughness": 0
+      },
+      { "op": "add", "id": "link", "type": "arrow", "x": 0, "y": 0, "start": "box-a", "end": "box-b" },
+      {
+        "op": "add",
+        "type": "line",
+        "x": 10,
+        "y": 20,
+        "points": [{ "x": 0, "y": 0 }, { "x": 40, "y": 60 }]
+      },
+      { "op": "update", "id": "box-b", "x": 300, "text": "Finish" },
+      { "op": "delete", "id": "stale" }
+    ]
+  }
+}
