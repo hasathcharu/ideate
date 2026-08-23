@@ -8,6 +8,7 @@ import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { fileKind } from '@/lib/tree'
 import { sceneSummary } from '@/lib/excalidraw'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
+import { docIdForFile, loadDraft } from '@/lib/storage'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 
@@ -70,9 +71,19 @@ export default function FileHoverCard({ repo, path, anchor, config }: FileHoverC
     let cancelled = false
     setLoaded(null)
     void readFile(repo.owner, repo.name, path, repo.branch).then((res) => {
+      // A never-committed file isn't on the branch, so the read 404s — but the
+      // file does exist here, in the sidebar and one click away, and its draft is
+      // the only copy. Falling back to it keeps the preview from claiming a file
+      // the app will happily open cannot be read. (It doubles as a fallback for a
+      // committed file whose read failed and whose working copy we still hold.)
+      const draft = res.ok
+        ? null
+        : loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
       const result: Loaded = res.ok
         ? { ok: true, content: res.data.content }
-        : { ok: false, message: res.error.message }
+        : draft
+          ? { ok: true, content: draft.content }
+          : { ok: false, message: res.error.message }
       // A dead session is global, not local to this preview — the shared handler
       // signs out and navigates, so there is nothing to show here.
       if (!res.ok && handleExpiredSession(res.error)) return

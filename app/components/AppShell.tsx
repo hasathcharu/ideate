@@ -83,6 +83,7 @@ import {
   clearDraft,
   docIdForFile,
   scratchDocIdFor,
+  listDraftPaths,
 } from '@/lib/storage'
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
@@ -217,6 +218,14 @@ function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<st
   if (!paths.some((p) => set.has(p))) return set
   const next = new Set(set)
   for (const p of paths) next.delete(p)
+  return next
+}
+
+/** A new Set with `path` added — the counterpart of `withoutPaths`. */
+function withPath(set: ReadonlySet<string>, path: string): ReadonlySet<string> {
+  if (set.has(path)) return set
+  const next = new Set(set)
+  next.add(path)
   return next
 }
 
@@ -429,9 +438,33 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const baseName =
     (openPath ? (openPath.split('/').pop() ?? '').replace(/\.[^./]+$/, '') : '') || 'diagram'
 
-  // A just-created file has no sha and isn't in the fetched tree yet; splice its
-  // path in so it shows in the sidebar (flagged unsaved) before the first commit.
-  const pendingPath = repo && openPath && loadedSha === null ? openPath : null
+  /**
+   * Files that exist only in this browser: created here, never committed, so the
+   * fetched tree has no entry for them and GitHub has nothing under the path.
+   * They're spliced into the sidebar below and their content is a localStorage
+   * draft.
+   *
+   * This has to be a *set*, and it has to outlive the file being open. Derived
+   * from `openPath` alone — which it was — creating a second file, or opening any
+   * other file, dropped the first one out of the sidebar while its draft stayed in
+   * localStorage with nothing left able to reach it: the file appeared to vanish.
+   * Cleared on commit (it's a real path then), on delete, and on a repo/branch
+   * switch; moved by a local rename.
+   */
+  const [createdPaths, setCreatedPaths] = useState<ReadonlySet<string>>(new Set())
+
+  // Every never-committed path, as the rest of the app should see it: anything in
+  // `createdPaths` the branch still doesn't have, plus the open file whenever it
+  // has no sha behind it. Filtering against the fetched tree means a path that got
+  // committed (here or in another tab) stops being pending on the next refresh,
+  // whether or not something remembered to remove it.
+  const pendingPaths = useMemo<ReadonlySet<string>>(() => {
+    const committed = new Set((tree?.tree ?? []).flatMap(collectFilePaths))
+    const next = new Set<string>()
+    for (const path of createdPaths) if (!committed.has(path)) next.add(path)
+    if (repo && openPath && loadedSha === null) next.add(openPath)
+    return next
+  }, [tree, createdPaths, repo, openPath, loadedSha])
 
   // Every path with unsaved edits made *this session*, not just the open one —
   // so switching files without saving still shows the earlier file as dirty in
@@ -464,11 +497,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const displayNodes = useMemo(() => {
     const base = tree?.tree ?? []
-    if (!pendingPath) return base
+    if (pendingPaths.size === 0) return base
     const paths = base.flatMap(collectFilePaths)
-    if (!paths.includes(pendingPath)) paths.push(pendingPath)
+    for (const path of pendingPaths) if (!paths.includes(path)) paths.push(path)
     return buildTree(paths)
-  }, [tree, pendingPath])
+  }, [tree, pendingPaths])
 
   // Flat list of every file in the repo, for completing markdown link targets in
   // the editor. Derived from the same tree the sidebar shows, so a file created or
@@ -555,6 +588,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setText('')
     setBaseline('')
     setDirtyPaths(new Set())
+    setCreatedPaths(new Set())
     setExpandedPaths(new Set())
     // The outgoing repo/branch's paths are meaningless now, so this is one of the
     // few places the list *should* go back to a loading state.
@@ -611,6 +645,36 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setBaseline(SAMPLE)
     }
   }, [githubEnabled, refreshTree, showRepoStartState])
+
+  /**
+   * Recover never-committed files across a reload. Neither `openPath` nor
+   * `createdPaths` is persisted, so after a refresh nothing remembers them — but
+   * their drafts are still in localStorage, and a draft under a path the branch
+   * doesn't have can only be a file created here and never committed.
+   *
+   * Deliberately **once per repo/branch**, on its first tree load, rather than on
+   * every refresh. A rename or a commit moves a draft before the tree that proves
+   * where the path now lives has arrived, so re-deriving this against a stale tree
+   * would briefly re-flag a path that is in fact committed — and while it is
+   * flagged, rename and delete would take their local-only branch and skip GitHub.
+   */
+  const recoveredFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!repo || !tree) return
+    const key = docIdForFile(repo.owner, repo.name, repo.branch, '')
+    if (recoveredFor.current === key) return
+    recoveredFor.current = key
+    const committed = new Set(tree.tree.flatMap(collectFilePaths))
+    const orphans = listDraftPaths(repo.owner, repo.name, repo.branch).filter(
+      (path) => !committed.has(path),
+    )
+    if (orphans.length === 0) return
+    setCreatedPaths((prev) => {
+      const next = new Set(prev)
+      for (const path of orphans) next.add(path)
+      return next
+    })
+  }, [repo, tree])
 
   // Signed in with no repository selected, the app can't read, commit or browse
   // anything — so lead with the picker instead of an inert editor and a hint in
@@ -823,6 +887,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const openFile = useCallback(
     async (path: string) => {
       if (!repo) return
+      // A never-committed file has nothing on GitHub under its path, so reading it
+      // would 404. Its draft *is* the file: reopen it exactly as it was created —
+      // no sha, empty baseline, so it still reads as unsaved.
+      if (pendingPaths.has(path)) {
+        const draft = loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        setBaseline('')
+        setLoadedSha(null)
+        setOpenPath(path)
+        setText(draft?.content ?? templateFor(fileKind(path)))
+        return
+      }
       const res = await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
         if (handleExpiredSession(res.error)) return
@@ -845,7 +920,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           : draft.content !== res.data.content)
       setText(draftDiffers && draft ? draft.content : res.data.content)
     },
-    [repo],
+    [repo, pendingPaths],
   )
 
   /** Open a file the user picked from the tree — the start of a new trail. */
@@ -941,6 +1016,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
             'Call ideate_read with no path.',
         )
       }
+      // Listed by `ideate_list_files` but not on the branch: a never-committed
+      // file, whose draft is the only copy. Reading through GitHub would 404.
+      if (pendingPaths.has(path)) {
+        const draft = loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        return {
+          path,
+          text: draft?.content ?? templateFor(fileKind(path)),
+          committed: false,
+        }
+      }
       const res = await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
         if (handleExpiredSession(res.error)) {
@@ -997,11 +1082,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // document with no sha behind it. Nothing is pushed to GitHub — committing
       // stays a human action, which is what keeps an agent from writing to the
       // user's repository.
+      const body = content ?? templateFor(fileKind(path))
       setLinkTrail([])
+      setCreatedPaths((prev) => withPath(prev, path))
+      // Written here rather than left to the autosave effect: for a file with no
+      // commit behind it the draft is the only copy, and an agent creating two
+      // files in quick succession must not depend on a render landing in between.
+      saveDraft(docIdForFile(repo.owner, repo.name, repo.branch, path), body)
       setOpenPath(path)
       setLoadedSha(null)
       setBaseline('')
-      setText(content ?? templateFor(fileKind(path)))
+      setText(body)
     },
 
     // Takes the text to check rather than always reading the open document: after
@@ -1095,10 +1186,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
         validate: validateNewFilePath(extension),
         onSubmit: (path) => {
           setPromptOpen(false)
+          setCreatedPaths((prev) => withPath(prev, path))
+          const body = templateFor(fileKind(path))
+          // The draft is this file's only copy until it's committed — see the
+          // agent's `createFile` for why it's written here and not by the effect.
+          saveDraft(docIdForFile(repo.owner, repo.name, repo.branch, path), body)
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
-          setText(templateFor(fileKind(path)))
+          setText(body)
         },
       })
     },
@@ -1109,12 +1205,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
     (node: TreeNode) => {
       if (!repo || node.type !== 'file') return
       // A never-committed file exists only in this browser: it is spliced into the
-      // sidebar from `pendingPath` and its content is a localStorage draft, with
+      // sidebar from `pendingPaths` and its content is a localStorage draft, with
       // nothing on GitHub under either name. Renaming it through the API would ask
       // git to move a path that isn't in the tree, which answers 404 — so this one
       // is a local move of the draft slot, exactly like creating it under the new
       // name would have been.
-      const local = node.path === pendingPath
+      const local = pendingPaths.has(node.path)
       openPrompt({
         title: 'Rename file',
         description: local
@@ -1155,6 +1251,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
           const draft = loadDraft(oldId)
           if (draft) saveDraft(newId, draft.content)
           clearDraft(oldId)
+          // A local rename moves the only copy there is, so the never-committed
+          // set has to follow it or the file drops out of the sidebar under both
+          // names.
+          if (local) {
+            setCreatedPaths((prev) => withPath(withoutPaths(prev, [node.path]), newPath))
+          }
           setDirtyPaths((prev) => {
             if (!prev.has(node.path)) return prev
             const next = new Set(prev)
@@ -1164,13 +1266,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
           })
           if (openPath === node.path) setOpenPath(newPath)
           toast.success(`Renamed to ${newPath}`)
-          // A local rename changed nothing on the branch, and `pendingPath`
-          // already re-splices the new name into the sidebar off `openPath`.
+          // A local rename changed nothing on the branch, and `pendingPaths`
+          // already re-splices the new name into the sidebar.
           if (!local) void refreshTree(repo)
         },
       })
     },
-    [repo, openPrompt, openPath, pendingPath, refreshTree],
+    [repo, openPrompt, openPath, pendingPaths, refreshTree],
   )
 
   // Reset the editor to a fresh scratch doc — used when the file being edited is
@@ -1199,10 +1301,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const affectsOpen = !!openPath && paths.includes(openPath)
     // A never-committed file (the pending new one) only exists locally — there is
     // nothing on GitHub to remove, so skip the API for it.
-    const committed = paths.filter((p) => p !== pendingPath)
+    const committed = paths.filter((p) => !pendingPaths.has(p))
+    // Drop every draft under the deleted paths. Left behind, a draft *is* a
+    // never-committed file as far as the recovery effect above is concerned, so a
+    // deleted file would reappear as a new one on the next tree load.
+    const forget = () => {
+      for (const p of paths) clearDraft(docIdForFile(repo.owner, repo.name, repo.branch, p))
+      setCreatedPaths((prev) => withoutPaths(prev, paths))
+      setDirtyPaths((prev) => withoutPaths(prev, paths))
+    }
     if (committed.length === 0) {
       if (affectsOpen) detachEditor()
-      setDirtyPaths((prev) => withoutPaths(prev, paths))
+      forget()
       setDeleteOpen(false)
       setDeleteTarget(null)
       return
@@ -1220,12 +1330,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
         ? `Deleted ${committed[0]}`
         : `Deleted ${res.data.deleted} files`,
     )
-    setDirtyPaths((prev) => withoutPaths(prev, paths))
+    forget()
     setDeleteOpen(false)
     setDeleteTarget(null)
     if (affectsOpen) detachEditor()
     void refreshTree(repo)
-  }, [repo, deleteTarget, pendingPath, openPath, detachEditor, refreshTree])
+  }, [repo, deleteTarget, pendingPaths, openPath, detachEditor, refreshTree])
 
   const commitCurrent = useCallback(
     async (path: string, sha: string | undefined, content: string) => {
@@ -1237,6 +1347,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setBaseline(content)
         setLoadedSha(res.data.sha)
         setOpenPath(path)
+        // The path is on the branch now — the next tree fetch will carry it, so it
+        // must stop being spliced in as a never-committed file.
+        setCreatedPaths((prev) => withoutPaths(prev, [path]))
         // Committing an untitled scratch document promotes it to a real file, so
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
