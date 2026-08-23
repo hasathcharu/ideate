@@ -211,3 +211,31 @@ export function clearDraft(docId: string): void {
     /* ignore */
   }
 }
+
+/**
+ * Every path under `owner/repo@branch` that currently has a draft.
+ *
+ * A never-committed file leaves no other record: its path isn't in the fetched
+ * tree and GitHub has nothing under it, so the draft key *is* the file. Reading
+ * the keys back is therefore what lets those files survive a reload — see
+ * `pendingPaths` in `AppShell`, which treats a draft under a path the branch
+ * doesn't have as exactly that.
+ */
+export function listDraftPaths(owner: string, repo: string, branch: string): string[] {
+  if (!hasStorage()) return []
+  // The empty path yields the id's prefix — `owner/repo@branch:` — and slicing by
+  // its length keeps paths that contain a colon of their own intact.
+  const prefix = DRAFT_PREFIX + docIdForFile(owner, repo, branch, '')
+  const paths: string[] = []
+  try {
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i)
+      if (!key || !key.startsWith(prefix)) continue
+      const path = key.slice(prefix.length)
+      if (path) paths.push(path)
+    }
+  } catch {
+    return []
+  }
+  return paths
+}

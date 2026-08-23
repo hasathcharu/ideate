@@ -302,14 +302,40 @@ A name may still contain `/`, so creating a subfolder from the root "+" works.
 because moving a file between folders is the point of it.
 
 **Renaming a never-committed file is local only.** Such a file is spliced into the
-sidebar from `pendingPath` and its content is a localStorage draft; GitHub has
+sidebar from `pendingPaths` and its content is a localStorage draft; GitHub has
 nothing under either name, so `renameFile` would ask git to move a path that isn't
 in the tree and get a 404 back. `requestRename` branches on
-`node.path === pendingPath` and moves the draft slot instead — which is the same
+`pendingPaths.has(node.path)` and moves the draft slot instead — which is the same
 thing creating it under the new name would have done — skipping both the API call
 and the tree refresh, since the branch didn't change. The committed path still
 lands on GitHub *first*: reordering that would leave the app pointing at a path the
 repo never got.
+
+### A never-committed file is a set member, not the open file
+
+`pendingPaths` is what makes an uncommitted new file exist: it is spliced into
+`displayNodes`, it routes `openFile` and the agent's `readPath` to the draft
+instead of GitHub (which would 404 on a path the branch doesn't have), and it is
+the flag rename and delete branch on to skip the API. Three rules hold it
+together:
+
+- **It is a set, and it outlives the file being open.** Derived from `openPath`
+  alone — which it was — creating a second file or opening any other file dropped
+  the first one out of the sidebar with its draft still in localStorage and nothing
+  able to reach it: the file appeared to vanish. An agent creating two files in a
+  row hit this every time.
+- **Creating a file writes its draft immediately**, rather than leaving it to the
+  autosave effect. For a file with no commit behind it the draft is the only copy,
+  so it must not depend on a render landing between two creates.
+- **The draft is the only record such a file leaves**, which is what makes it
+  recoverable after a reload (`listDraftPaths`): a draft under a path the branch
+  doesn't have can only be a file created here and never committed. That recovery
+  runs **once per repo/branch**, on the first tree load — a rename or a commit
+  moves a draft before the tree proving where the path now lives has arrived, and
+  re-deriving against a stale tree would re-flag a committed path as pending, which
+  would send its next rename or delete down the local-only branch and skip GitHub.
+  For the same reason `confirmDelete` clears the drafts of everything it deletes:
+  a leftover draft *is* a pending file to the recovery pass.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
