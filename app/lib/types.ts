@@ -55,12 +55,12 @@ export interface AppConfig {
    *  depend on the tree module. */
   scratchKind: 'mermaid' | 'markdown' | 'excalidraw'
   /** Origin of the Agent Link service this deployment's tabs dial, overriding
-   *  `DEFAULT_RELAY_ORIGIN` (lib/config.ts). Null means "use the default"; set
+   *  `DEFAULT_MCP_ORIGIN` (lib/config.ts). Null means "use the default"; set
    *  from the modal's Advanced options, chiefly to point at a service you run
    *  yourself when the shared one is at capacity. Validated on the way in by
-   *  `validateRelayOrigin` (lib/relayOrigin.ts) — https, or http on
+   *  `validateMcpOrigin` (lib/mcpOrigin.ts) — https, or http on
    *  localhost:7391. */
-  relayOrigin: string | null
+  mcpOrigin: string | null
   /** Raw YAML text of the global mermaid config — the single source of truth for
    *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
    *  the layout dropdown writes the `layout` key into it. Empty = mermaid
@@ -69,7 +69,7 @@ export interface AppConfig {
 }
 
 /** Two pieces of Agent Link state are deliberately **not** in `AppConfig`, and the
- *  reason is the same fact that puts `relayOrigin` firmly *in* it: config is shared
+ *  reason is the same fact that puts `mcpOrigin` firmly *in* it: config is shared
  *  by every tab on the origin.
  *
  *  - **The on/off switch** is per-tab (`sessionStorage`, via `loadAgentLink` /
@@ -83,9 +83,9 @@ export interface AppConfig {
  *    in `sessionStorage` too (`loadPairingCode` / `savePairingCode`), which is also
  *    what lets a reload rejoin the same session instead of orphaning the agent.
  *
- *  `relayOrigin` is the opposite case and belongs here: *where the service is* is a
+ *  `mcpOrigin` is the opposite case and belongs here: *where the service is* is a
  *  property of the deployment, not of one tab, and a user who has switched to their
- *  own relay means it for every tab they open. It is a URL, not a credential. */
+ *  own service means it for every tab they open. It is a URL, not a credential. */
 
 /** A node in the repository file tree. */
 export interface TreeNode {

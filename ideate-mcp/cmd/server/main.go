@@ -29,11 +29,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/config"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/httpapi"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/session"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/tools"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/config"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/httpapi"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/session"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/tools"
 )
 
 // version is stamped by the build (-ldflags "-X main.version=...") and is only

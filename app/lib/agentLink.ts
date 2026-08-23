@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   CLOSE_PROTOCOL_MISMATCH,
-  CLOSE_RELAY_FULL,
+  CLOSE_SERVICE_FULL,
   CLOSE_SLOT_TAKEN,
   PAIRING_CODE_ALPHABET,
   PAIRING_CODE_LENGTH,
@@ -21,14 +21,14 @@ import {
   type StatusResult,
   type TextEdit,
 } from './agentProtocol'
-import { relayTabUrl } from './relayOrigin'
+import { mcpTabUrl } from './mcpOrigin'
 import { loadPairingCode, savePairingCode } from './storage'
 import { useDebouncedValue } from './hooks'
 
 /**
  * The tab's half of Agent Link.
  *
- * "Agent Link" is the feature as the user meets it; the *relay* below is the
+ * "Agent Link" is the feature as the user meets it; the *service* below is the
  * transport it runs over — a remote Go service that is both the MCP server the
  * agent talks to and the socket this dials.
  *
@@ -101,8 +101,8 @@ export interface AgentLinkCapabilities {
 export interface UseAgentLinkOptions {
   enabled: boolean
   /** Origin of the Agent Link service, already resolved (config override, else
-   *  `DEFAULT_RELAY_ORIGIN`). Changing it reconnects. */
-  relayOrigin: string
+   *  `DEFAULT_MCP_ORIGIN`). Changing it reconnects. */
+  mcpOrigin: string
   /** Recomputed every render; pushed to the service when it changes so
    *  `ideate_status` needs no round trip and a text tool aimed at a scene can be
    *  refused early. */
@@ -171,7 +171,7 @@ function group(code: string): string {
 
 export function useAgentLink({
   enabled,
-  relayOrigin,
+  mcpOrigin,
   state,
   caps,
 }: UseAgentLinkOptions): AgentLink {
@@ -258,7 +258,7 @@ export function useAgentLink({
 
       let ws: WebSocket
       try {
-        ws = new WebSocket(relayTabUrl(relayOrigin))
+        ws = new WebSocket(mcpTabUrl(mcpOrigin))
       } catch (error) {
         // A blocked or malformed URL throws synchronously rather than firing
         // `onerror`, so this path is reachable and would otherwise stall the loop.
@@ -324,7 +324,7 @@ export function useAgentLink({
         // Capacity is not permanent, but it is not something to hammer either. Stop
         // the loop and wait for the human to press Retry — or, better, to point
         // this tab at a service of their own.
-        if (event.code === CLOSE_RELAY_FULL) {
+        if (event.code === CLOSE_SERVICE_FULL) {
           setStatus('full')
           setDetail(event.reason || 'The shared Agent Link service is at capacity.')
           setAgent(null)
@@ -364,7 +364,7 @@ export function useAgentLink({
       // its attachment across a reload.
       socket?.close()
     }
-  }, [enabled, relayOrigin, code, attempt])
+  }, [enabled, mcpOrigin, code, attempt])
 
   // Push state when it changes. Debounced: `lineCount`/`charCount` move on every
   // keystroke, and the service only needs to be roughly current — it re-reads the

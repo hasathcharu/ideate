@@ -25,8 +25,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import type { AgentLinkStatus } from '@/lib/agentLink'
-import { DEFAULT_RELAY_ORIGIN, REPO_URL } from '@/lib/config'
-import { normalizeRelayOrigin, validateRelayOrigin } from '@/lib/relayOrigin'
+import { DEFAULT_MCP_ORIGIN, REPO_URL } from '@/lib/config'
+import { normalizeMcpOrigin, validateMcpOrigin } from '@/lib/mcpOrigin'
 
 /**
  * Turning Agent Link on and off, and handing over the pairing code.
@@ -49,14 +49,14 @@ import { normalizeRelayOrigin, validateRelayOrigin } from '@/lib/relayOrigin'
  */
 
 /** Where a self-hoster is sent from the capacity message. */
-const SELF_HOST_DOCS = `${REPO_URL}/blob/main/ideate-relay/README.md`
+const SELF_HOST_DOCS = `${REPO_URL}/blob/main/ideate-mcp/README.md`
 
 /** Running a service of your own, in one line. The published image is the whole
  *  answer — the binary needs no configuration and keeps nothing on disk — so the
  *  command belongs *here*, beside the field it exists to fill in, rather than only
  *  behind the docs link. */
-const RELAY_DOCKER_COMMAND =
-  'docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay'
+const MCP_DOCKER_COMMAND =
+  'docker run --rm -p 7391:7391 hasathcharu/ideate-mcp'
 
 export interface AgentLinkModalProps {
   open: boolean
@@ -71,9 +71,9 @@ export interface AgentLinkModalProps {
   onRegenerate: () => void
   onRetry: () => void
   /** The origin actually in use — the stored override, or the default. */
-  relayOrigin: string
-  /** Null resets to `DEFAULT_RELAY_ORIGIN`. */
-  onRelayOriginChange: (origin: string | null) => void
+  mcpOrigin: string
+  /** Null resets to `DEFAULT_MCP_ORIGIN`. */
+  onMcpOriginChange: (origin: string | null) => void
   mode: 'github' | 'local'
 }
 
@@ -88,11 +88,11 @@ export default function AgentLinkModal({
   code,
   onRegenerate,
   onRetry,
-  relayOrigin,
-  onRelayOriginChange,
+  mcpOrigin,
+  onMcpOriginChange,
   mode,
 }: AgentLinkModalProps) {
-  const setupCommand = `claude mcp add --transport http ideate ${relayOrigin}/mcp`
+  const setupCommand = `claude mcp add --transport http ideate ${mcpOrigin}/mcp`
   // Held here rather than in `CopyButton` so the fallback can select the text the
   // user is actually looking at.
   const codeRef = useRef<HTMLElement | null>(null)
@@ -167,7 +167,7 @@ export default function AgentLinkModal({
             </div>
             <p className="mt-2">
               Other clients: an HTTP (streamable) MCP server at{' '}
-              <code className="text-foreground">{relayOrigin}/mcp</code>.
+              <code className="text-foreground">{mcpOrigin}/mcp</code>.
             </p>
             <p className="mt-2">
               Give your agent the code when you ask it for something. Naming a different tab’s
@@ -182,7 +182,7 @@ export default function AgentLinkModal({
             ) : null}
           </div>
 
-          <AdvancedOptions relayOrigin={relayOrigin} onChange={onRelayOriginChange} />
+          <AdvancedOptions mcpOrigin={mcpOrigin} onChange={onMcpOriginChange} />
         </div>
 
         <DialogFooter>
@@ -250,26 +250,26 @@ function PairingCode({
  * state to coordinate, and the element already does the keyboard and ARIA work.
  */
 function AdvancedOptions({
-  relayOrigin,
+  mcpOrigin,
   onChange,
 }: {
-  relayOrigin: string
+  mcpOrigin: string
   onChange: (origin: string | null) => void
 }) {
-  const [draft, setDraft] = useState(relayOrigin)
+  const [draft, setDraft] = useState(mcpOrigin)
   const dockerRef = useRef<HTMLElement | null>(null)
   // Adopt an origin changed from elsewhere (a reset, another tab writing config)
   // rather than stranding the field on a stale value.
-  useEffect(() => setDraft(relayOrigin), [relayOrigin])
+  useEffect(() => setDraft(mcpOrigin), [mcpOrigin])
 
-  const trimmed = normalizeRelayOrigin(draft)
-  const error = trimmed === relayOrigin ? null : validateRelayOrigin(draft)
-  const dirty = trimmed !== relayOrigin
+  const trimmed = normalizeMcpOrigin(draft)
+  const error = trimmed === mcpOrigin ? null : validateMcpOrigin(draft)
+  const dirty = trimmed !== mcpOrigin
 
   const apply = () => {
-    const message = validateRelayOrigin(draft)
+    const message = validateMcpOrigin(draft)
     if (message) return
-    onChange(trimmed === normalizeRelayOrigin(DEFAULT_RELAY_ORIGIN) ? null : trimmed)
+    onChange(trimmed === normalizeMcpOrigin(DEFAULT_MCP_ORIGIN) ? null : trimmed)
   }
 
   return (
@@ -278,18 +278,18 @@ function AdvancedOptions({
         Advanced options
       </summary>
       <div className="mt-3 flex flex-col gap-2">
-        <Label htmlFor="relay-origin" className="text-xs text-muted-foreground">
+        <Label htmlFor="mcp-origin" className="text-xs text-muted-foreground">
           Agent Link service
         </Label>
         <div className="flex items-center gap-2">
           <Input
-            id="relay-origin"
+            id="mcp-origin"
             value={draft}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
             className="h-8 font-mono text-xs"
-            placeholder={DEFAULT_RELAY_ORIGIN}
+            placeholder={DEFAULT_MCP_ORIGIN}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') apply()
@@ -303,10 +303,10 @@ function AdvancedOptions({
             variant="ghost"
             className="h-8"
             onClick={() => {
-              setDraft(DEFAULT_RELAY_ORIGIN)
+              setDraft(DEFAULT_MCP_ORIGIN)
               onChange(null)
             }}
-            disabled={relayOrigin === normalizeRelayOrigin(DEFAULT_RELAY_ORIGIN)}
+            disabled={mcpOrigin === normalizeMcpOrigin(DEFAULT_MCP_ORIGIN)}
           >
             Reset
           </Button>
@@ -322,9 +322,9 @@ function AdvancedOptions({
         <p className="text-muted-foreground">Run one locally:</p>
         <div className="flex items-start gap-2">
           <pre className="min-w-0 flex-1 overflow-x-auto rounded bg-muted/50 p-2 font-mono text-foreground">
-            <code ref={dockerRef}>{RELAY_DOCKER_COMMAND}</code>
+            <code ref={dockerRef}>{MCP_DOCKER_COMMAND}</code>
           </pre>
-          <CopyButton text={RELAY_DOCKER_COMMAND} target={dockerRef} label="docker command" />
+          <CopyButton text={MCP_DOCKER_COMMAND} target={dockerRef} label="docker command" />
         </div>
         <a
           href={SELF_HOST_DOCS}

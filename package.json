@@ -2,7 +2,7 @@
   "name": "ideate-workspace",
   "version": "0.1.0",
   "private": true,
-  "description": "Thin root: the Next app lives in app/, the Agent Link service in ideate-relay/ (Go).",
+  "description": "Thin root: the Next app lives in app/, the Agent Link service in ideate-mcp/ (Go).",
   "scripts": {
     "postinstall": "npm --prefix app install",
     "dev": "npm --prefix app run dev",
@@ -10,10 +10,10 @@
     "start": "npm --prefix app run start",
     "lint": "npm --prefix app run lint",
     "typecheck": "npm --prefix app run typecheck",
-    "relay:dev": "cd ideate-relay && go run ./cmd/server",
-    "relay:test": "cd ideate-relay && go vet ./... && go test ./...",
-    "relay:build": "cd ideate-relay && go build -o server ./cmd/server",
-    "relay:docker": "docker build --platform=linux/amd64 -t hasathcharu/ideate-relay ideate-relay",
-    "relay:docker-push": "docker build --platform=linux/amd64 -t hasathcharu/ideate-relay ideate-relay && docker push hasathcharu/ideate-relay"
+    "mcp:dev": "cd ideate-mcp && go run ./cmd/server",
+    "mcp:test": "cd ideate-mcp && go vet ./... && go test ./...",
+    "mcp:build": "cd ideate-mcp && go build -o server ./cmd/server",
+    "mcp:docker": "docker build --platform=linux/amd64 -t hasathcharu/ideate-mcp ideate-mcp",
+    "mcp:docker-push": "docker build --platform=linux/amd64 -t hasathcharu/ideate-mcp ideate-mcp && docker push hasathcharu/ideate-mcp"
   }
 }

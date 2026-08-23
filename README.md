@@ -78,9 +78,9 @@ MCP Go SDK.
 ## Repository layout
 
 ```
-package.json          thin root: scripts that delegate into app/, plus relay:*
+package.json          thin root: scripts that delegate into app/, plus mcp:*
 app/                  the Next.js app (app/app/ is its router — not a typo)
-ideate-relay/          Go: the Agent Link MCP server + tab relay
+ideate-mcp/           Go: the Agent Link MCP server + tab relay
 ```
 
 Two programs in two languages. Only one JS package remains, so there are no npm
@@ -103,7 +103,7 @@ That in turn copies Excalidraw's font files into `app/public/excalidraw-assets/`
 the canvas never fetches them from a CDN at runtime. That directory is gitignored
 and regenerated on install and on every build — don't commit or hand-edit it.
 
-The Agent Link service under `ideate-relay/` is a separate Go module and is not built
+The Agent Link service under `ideate-mcp/` is a separate Go module and is not built
 by `npm install`; you only need it if you are [running the service
 yourself](#running-the-service-yourself). It needs Go 1.25+.
 
@@ -186,14 +186,14 @@ AUTH_SECRET=                   # generate with: npx auth secret   (or: openssl r
 AUTH_GITHUB_ID=                # GitHub App "Client ID"  (NOT the App ID)
 AUTH_GITHUB_SECRET=            # GitHub App client secret
 NEXT_PUBLIC_GITHUB_APP_SLUG=   # the <slug> in https://github.com/apps/<slug>
-NEXT_PUBLIC_RELAY_ORIGIN=      # Agent Link service origin; optional, see below
+NEXT_PUBLIC_MCP_ORIGIN=        # Agent Link service origin; optional, see below
 # AUTH_URL=http://localhost:3000   # only if not the default dev origin / behind a proxy
 ```
 
 `NEXT_PUBLIC_GITHUB_APP_SLUG` is public (it's the App's URL name) and only builds
 the "Install on GitHub" / "Configure repository access" links in the repo picker.
 
-`NEXT_PUBLIC_RELAY_ORIGIN` points browser tabs at an [Agent Link
+`NEXT_PUBLIC_MCP_ORIGIN` points browser tabs at an [Agent Link
 service](#agent-link--let-a-coding-agent-edit-the-open-document); leave it unset
 to use the shared one. It must be `https://…`, or `http://localhost:7391` for a
 service you run yourself. Not a secret — the service issues nothing, and pairing with
@@ -243,8 +243,8 @@ touch is your uncommitted working copy — on screen, and one ⌘Z away.
 > machine and listened on loopback, which Safari blocks outright from an `https://`
 > page (no loopback exemption for mixed content) and which confined the feature to
 > an agent on the same machine as the browser. The service is a single binary you
-> can run yourself (`docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay`)
-> — see [`ideate-relay/README.md`](./ideate-relay/README.md).
+> can run yourself (`docker run --rm -p 7391:7391 hasathcharu/ideate-mcp`)
+> — see [`ideate-mcp/README.md`](./ideate-mcp/README.md).
 
 ### Setting it up
 
@@ -300,10 +300,10 @@ The shared service caps how many tabs it holds at once, and says so when it is f
 Running your own is one container — no configuration, nothing on disk:
 
 ```bash
-docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay
+docker run --rm -p 7391:7391 hasathcharu/ideate-mcp
 ```
 
-From a checkout, `npm run relay:dev` (or `npm run relay:docker`) does the same.
+From a checkout, `npm run mcp:dev` (or `npm run mcp:docker`) does the same.
 Then point the tab at `http://localhost:7391` under **Agent Link → Advanced
 options**, and register `http://localhost:7391/mcp` with your agent:
 
@@ -312,7 +312,7 @@ claude mcp add --transport http ideate-local http://localhost:7391/mcp
 ```
 
 Every environment variable and the security model are in
-[`ideate-relay/README.md`](./ideate-relay/README.md).
+[`ideate-mcp/README.md`](./ideate-mcp/README.md).
 
 ### Tools
 
@@ -338,15 +338,15 @@ Every environment variable and the security model are in
 | `npm start` | Serve the production build |
 | `npm run typecheck` | `tsc --noEmit` (strict) over the app |
 | `npm --prefix app run test` | The Agent Link frame-fixture guard (vitest) |
-| `npm run relay:dev` | Run the Agent Link service locally on `:7391` |
-| `npm run relay:test` | `go vet` + `go test` for the service |
-| `npm run relay:build` | Compile the service to `ideate-relay/server` |
-| `npm run relay:docker` | Build the service's container image |
+| `npm run mcp:dev` | Run the Agent Link service locally on `:7391` |
+| `npm run mcp:test` | `go vet` + `go test` for the service |
+| `npm run mcp:build` | Compile the service to `ideate-mcp/server` |
+| `npm run mcp:docker` | Build the service's container image |
 | `npm --prefix app run vendor:excalidraw` | Copy Excalidraw's fonts into `app/public/` (runs automatically on `postinstall`, `dev` and `build`) |
 
 Everything at the root delegates into `app/` with `npm --prefix app`; there are no
 npm workspaces, because only one JS package remains. The Go service is a separate
-module under `ideate-relay/`.
+module under `ideate-mcp/`.
 
 ## Security model
 
@@ -390,7 +390,7 @@ module under `ideate-relay/`.
 - **Your document travels through the service** while Agent Link is on, in local mode
   as much as in repo mode. The service holds nothing durable — every record it keeps
   describes a live socket and dies with the process — but if that is not a trade you
-  want, run your own: [`ideate-relay/README.md`](./ideate-relay/README.md).
+  want, run your own: [`ideate-mcp/README.md`](./ideate-mcp/README.md).
 - **Nothing an agent does reaches GitHub.** There is no commit tool, and rename and
   delete are not exposed either, because in this app those *are* commits.
 - **Prompt injection is the larger risk here.** Your agent reads documents from your

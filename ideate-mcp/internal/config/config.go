@@ -1,5 +1,5 @@
 // Package config loads the service's settings from the environment, and owns the
-// Go half of the TLS rule that also lives in app/lib/relayOrigin.ts.
+// Go half of the TLS rule that also lives in app/lib/mcpOrigin.ts.
 package config
 
 import (
@@ -12,16 +12,16 @@ import (
 	"time"
 )
 
-// LocalRelayPort is the one port on which a plaintext relay origin is allowed.
+// LocalMCPPort is the one port on which a plaintext MCP origin is allowed.
 //
 // 7391 is the old loopback bridge port, kept deliberately: it no longer means
 // anything to the protocol, but it is the number that appears in every older
-// README and in muscle memory, and reusing it for "a relay you run yourself"
+// README and in muscle memory, and reusing it for "a service you run yourself"
 // costs nothing and saves an explanation.
-const LocalRelayPort = "7391"
+const LocalMCPPort = "7391"
 
-// ValidateRelayOrigin enforces that a relay origin is either TLS or unmistakably
-// local. It mirrors validateRelayOrigin in app/lib/relayOrigin.ts.
+// ValidateMCPOrigin enforces that a MCP origin is either TLS or unmistakably
+// local. It mirrors validateMcpOrigin in app/lib/mcpOrigin.ts.
 //
 // This is a security control, and the reason it is checked here as well as in the
 // browser is that the browser's copy is a courtesy to whoever types into the
@@ -31,40 +31,40 @@ const LocalRelayPort = "7391"
 //
 // The exemption is narrow on purpose: loopback *and* the one port, because
 // "http://localhost:anything" would quietly re-admit a plaintext proxy on 80.
-func ValidateRelayOrigin(raw string) error {
+func ValidateMCPOrigin(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return errors.New("relay origin is empty")
+		return errors.New("MCP origin is empty")
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return fmt.Errorf("relay origin %q is not a URL: %w", raw, err)
+		return fmt.Errorf("MCP origin %q is not a URL: %w", raw, err)
 	}
 	// An origin, not a URL: a path here means someone pasted the /mcp endpoint,
 	// and silently ignoring it would leave them wondering why their edit did
 	// nothing.
 	if parsed.Path != "" && parsed.Path != "/" {
-		return fmt.Errorf("relay origin %q must be scheme://host with no path", raw)
+		return fmt.Errorf("MCP origin %q must be scheme://host with no path", raw)
 	}
 	if parsed.RawQuery != "" || parsed.Fragment != "" {
-		return fmt.Errorf("relay origin %q must be scheme://host with no query or fragment", raw)
+		return fmt.Errorf("MCP origin %q must be scheme://host with no query or fragment", raw)
 	}
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("relay origin %q names no host", raw)
+		return fmt.Errorf("MCP origin %q names no host", raw)
 	}
 	switch parsed.Scheme {
 	case "https":
 		return nil
 	case "http":
 		host := parsed.Hostname()
-		if (host == "localhost" || host == "127.0.0.1") && parsed.Port() == LocalRelayPort {
+		if (host == "localhost" || host == "127.0.0.1") && parsed.Port() == LocalMCPPort {
 			return nil
 		}
 		return fmt.Errorf(
-			"relay origin %q must use https — plaintext is allowed only on "+
-				"http://localhost:%s or http://127.0.0.1:%s", raw, LocalRelayPort, LocalRelayPort)
+			"MCP origin %q must use https — plaintext is allowed only on "+
+				"http://localhost:%s or http://127.0.0.1:%s", raw, LocalMCPPort, LocalMCPPort)
 	default:
-		return fmt.Errorf("relay origin %q must use https (or http on loopback)", raw)
+		return fmt.Errorf("MCP origin %q must use https (or http on loopback)", raw)
 	}
 }
 
@@ -79,7 +79,7 @@ type Config struct {
 	// PublicURL is the origin this instance is reached at, when it is known. Only
 	// used for diagnostics and the setup line the operator is told to hand out —
 	// but validated with the same rule the app applies, so an operator cannot
-	// advertise a plaintext relay and find out from their users.
+	// advertise a plaintext service and find out from their users.
 	PublicURL string
 
 	// AllowedOrigins is a **soft** allowlist applied to the tab's WebSocket
@@ -159,7 +159,7 @@ var DefaultAllowedOrigins = []string{"https://ideate.haru.lk"}
 // later.
 func Load() (Config, error) {
 	cfg := Config{
-		Addr:              ":" + firstNonEmpty(os.Getenv("PORT"), LocalRelayPort),
+		Addr:              ":" + firstNonEmpty(os.Getenv("PORT"), LocalMCPPort),
 		AllowedOrigins:    DefaultAllowedOrigins,
 		RequestTimeout:    DefaultRequestTimeout,
 		TabGrace:          DefaultTabGrace,
@@ -170,7 +170,7 @@ func Load() (Config, error) {
 	}
 
 	if raw := strings.TrimSpace(os.Getenv("PUBLIC_URL")); raw != "" {
-		if err := ValidateRelayOrigin(raw); err != nil {
+		if err := ValidateMCPOrigin(raw); err != nil {
 			return cfg, fmt.Errorf("PUBLIC_URL: %w", err)
 		}
 		cfg.PublicURL = strings.TrimSuffix(raw, "/")

@@ -1,20 +1,20 @@
-name: relay
+name: mcp
 
-# Build, publish and deploy the Agent Link service (ideate-relay).
+# Build, publish and deploy the Agent Link service (ideate-mcp).
 #
 # A tag push releases: verify -> build -> attach to a GitHub Release -> deploy to
-# the droplet. A pull request touching the relay or either half of the wire
+# the droplet. A pull request touching the service or either half of the wire
 # contract runs verify only.
 
 on:
   push:
-    tags: ['relay-v*']
+    tags: ['mcp-v*']
   pull_request:
     paths:
-      - 'ideate-relay/**'
+      - 'ideate-mcp/**'
       - 'app/lib/agentProtocol.ts'
       - 'app/lib/agentFrames.test.ts'
-      - '.github/workflows/relay.yml'
+      - '.github/workflows/mcp.yml'
   workflow_dispatch:
     inputs:
       deploy:
@@ -25,11 +25,13 @@ on:
 # One release at a time, and never cancel one mid-flight: a cancelled deploy can
 # leave the droplet holding a binary that never got health-checked.
 concurrency:
-  group: relay-release
+  group: mcp-release
   cancel-in-progress: false
 
 env:
-  SERVICE: ideate-relay
+  # The systemd unit on the droplet, and the name of the built binary. Renaming
+  # it means re-registering the unit with `ideate-service` on the box.
+  SERVICE: ideate-mcp
 
 jobs:
   verify:
@@ -39,15 +41,15 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ideate-relay/go.mod
-          cache-dependency-path: ideate-relay/go.sum
+          go-version-file: ideate-mcp/go.mod
+          cache-dependency-path: ideate-mcp/go.sum
 
       - name: go vet
-        working-directory: ideate-relay
+        working-directory: ideate-mcp
         run: go vet ./...
 
       - name: go test
-        working-directory: ideate-relay
+        working-directory: ideate-mcp
         # No CGO_ENABLED=0 here: -race needs cgo on linux/amd64 and would fail
         # outright without it. The release build sets it, this job must not.
         run: go test -race ./...
@@ -71,18 +73,18 @@ jobs:
 
       - name: Protocol versions agree
         # The two ends refuse to talk on a mismatch (CLOSE_PROTOCOL_MISMATCH), so
-        # shipping a relay whose version has moved ahead of the app strands every
+        # shipping a service whose version has moved ahead of the app strands every
         # user until the app catches up. Cheaper to fail here.
         run: |
-          go_v=$(grep -oP 'Version\s*=\s*\K\d+' ideate-relay/internal/protocol/frames.go | head -1)
+          go_v=$(grep -oP 'Version\s*=\s*\K\d+' ideate-mcp/internal/protocol/frames.go | head -1)
           ts_v=$(grep -oP 'PROTOCOL_VERSION\s*=\s*\K\d+' app/lib/agentProtocol.ts | head -1)
-          echo "relay: $go_v   app: $ts_v"
+          echo "service: $go_v   app: $ts_v"
           if [[ -z "$go_v" || -z "$ts_v" ]]; then
             echo "::error::could not read a protocol version from one of the two files"
             exit 1
           fi
           if [[ "$go_v" != "$ts_v" ]]; then
-            echo "::error::protocol version skew — relay is $go_v, app is $ts_v. Ship both ends together."
+            echo "::error::protocol version skew — service is $go_v, app is $ts_v. Ship both ends together."
             exit 1
           fi
 
@@ -97,14 +99,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ideate-relay/go.mod
-          cache-dependency-path: ideate-relay/go.sum
+          go-version-file: ideate-mcp/go.mod
+          cache-dependency-path: ideate-mcp/go.sum
 
       - name: Resolve version
         id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/relay-v* ]]; then
-            version="${GITHUB_REF#refs/tags/relay-v}"
+          if [[ "$GITHUB_REF" == refs/tags/mcp-v* ]]; then
+            version="${GITHUB_REF#refs/tags/mcp-v}"
           else
             version="0.0.0-${GITHUB_SHA::7}"
           fi
@@ -112,32 +114,40 @@ jobs:
           echo "Building $version"
 
       - name: Build
-        working-directory: ideate-relay
+        working-directory: ideate-mcp
         env:
           CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
         # Static and stripped, matching the Dockerfile's build: the droplet runs
         # this under systemd with no libc dependency and nothing to link against.
+        #
+        # Into ../dist/ rather than the repo root, because SERVICE is also the
+        # name of the source directory — `-o ../${SERVICE}` would hand Go an
+        # existing directory and it would write ideate-mcp/server instead, which
+        # the sha256sum below would then fail on.
         run: |
           go build -trimpath \
             -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }}" \
-            -o "../${SERVICE}" ./cmd/server
-          cd ..
+            -o "../dist/${SERVICE}" ./cmd/server
+          cd ../dist
           sha256sum "${SERVICE}" | tee "${SERVICE}.sha256"
 
+      # Both paths sit in dist/, so that is the artifact's root: the binary and
+      # its checksum download as bare names, which is what publish and deploy
+      # below expect.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.SERVICE }}-${{ steps.version.outputs.version }}
           path: |
-            ideate-relay
-            ideate-relay.sha256
+            dist/${{ env.SERVICE }}
+            dist/${{ env.SERVICE }}.sha256
           if-no-files-found: error
           retention-days: 30
 
   publish:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/relay-v')
+    if: startsWith(github.ref, 'refs/tags/mcp-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -160,7 +170,7 @@ jobs:
   deploy:
     needs: build
     if: >-
-      startsWith(github.ref, 'refs/tags/relay-v') ||
+      startsWith(github.ref, 'refs/tags/mcp-v') ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy)
     runs-on: ubuntu-latest
     # Gate this in repo settings (Settings -> Environments -> production) if you
@@ -205,7 +215,7 @@ jobs:
 
       - name: Confirm through Cloudflare
         env:
-          PUBLIC_URL: ${{ vars.RELAY_PUBLIC_URL }}
+          PUBLIC_URL: ${{ vars.MCP_PUBLIC_URL }}
         # The health check on the box only proves the process is up. This proves
         # the whole path — Cloudflare, Authenticated Origin Pulls, nginx, the
         # service — still answers.

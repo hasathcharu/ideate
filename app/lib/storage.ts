@@ -1,6 +1,6 @@
 import type { AppConfig } from './types'
 import type { FileKind } from './tree'
-import { validateRelayOrigin } from './relayOrigin'
+import { validateMcpOrigin } from './mcpOrigin'
 
 /**
  * localStorage is the WORKING COPY: uncommitted drafts + app config only.
@@ -55,7 +55,7 @@ const DEFAULT_CONFIG: AppConfig = {
   wrapLines: false,
   minimap: true,
   scratchKind: 'mermaid',
-  relayOrigin: null,
+  mcpOrigin: null,
   mermaidConfig: '',
 }
 
@@ -80,13 +80,13 @@ export function loadConfig(): AppConfig {
     if (typeof merged.exportBackground === 'boolean') {
       merged.exportBackground = merged.exportBackground ? 'white' : 'none'
     }
-    // A relay origin that no longer passes the TLS rule is dropped back to the
+    // An MCP origin that no longer passes the TLS rule is dropped back to the
     // default rather than kept. It is the same defensive shape as the two guards
     // above, and it matters more: an unusable origin here is not a cosmetic
     // fallback but a tab that cannot connect at all, with the reason buried in
     // localStorage where nobody would think to look.
-    if (typeof merged.relayOrigin === 'string' && validateRelayOrigin(merged.relayOrigin)) {
-      merged.relayOrigin = null
+    if (typeof merged.mcpOrigin === 'string' && validateMcpOrigin(merged.mcpOrigin)) {
+      merged.mcpOrigin = null
     }
     // A build that stored `agentLink` in here left a stray key behind. Drop it, or
     // an old `true` would keep arming tabs that never asked — the exact behaviour
@@ -118,7 +118,7 @@ export function saveConfig(config: AppConfig): void {
  * `sessionStorage`, not `localStorage`, and deliberately not part of `AppConfig`:
  * config is shared by every tab on the origin, so persisting either of these there
  * meant one switch armed every tab that opened afterwards. All of them would then
- * race for the relay and whichever won became the tab an agent drove — leaving the
+ * race for the service and whichever won became the tab an agent drove — leaving the
  * human no way to choose. Per-tab scoping makes "switch it on here" mean this tab,
  * and gives each tab a code of its own to be named by.
  *

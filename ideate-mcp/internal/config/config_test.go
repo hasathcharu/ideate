@@ -2,43 +2,43 @@ package config
 
 import "testing"
 
-// The Go half of the TLS rule. Its twin is validateRelayOrigin in
-// app/lib/relayOrigin.ts, and these cases are deliberately the same list, because
+// The Go half of the TLS rule. Its twin is validateMcpOrigin in
+// app/lib/mcpOrigin.ts, and these cases are deliberately the same list, because
 // the two implementations disagreeing is the only way this control fails quietly:
 // the browser would accept an origin the service rejects, and the user would find
 // out from a connection that never comes up.
-func TestValidateRelayOrigin(t *testing.T) {
+func TestValidateMCPOrigin(t *testing.T) {
 	valid := []string{
-		"https://relay.ideate.haru.lk",
-		"https://relay.example.com:8443",
-		"https://relay.example.com/",
+		"https://mcp.ideate.haru.lk",
+		"https://mcp.example.com:8443",
+		"https://mcp.example.com/",
 		"http://localhost:7391",
 		"http://127.0.0.1:7391",
 	}
 	for _, origin := range valid {
-		if err := ValidateRelayOrigin(origin); err != nil {
-			t.Errorf("ValidateRelayOrigin(%q) = %v, want nil", origin, err)
+		if err := ValidateMCPOrigin(origin); err != nil {
+			t.Errorf("ValidateMCPOrigin(%q) = %v, want nil", origin, err)
 		}
 	}
 
 	invalid := map[string]string{
 		"":                              "empty",
 		"   ":                           "empty",
-		"relay.example.com":             "a bare host names no scheme",
-		"http://relay.example.com":      "plaintext off loopback",
+		"mcp.example.com":             "a bare host names no scheme",
+		"http://mcp.example.com":      "plaintext off loopback",
 		"http://localhost:3000":         "loopback on the wrong port — the exemption is one port, or http://localhost:80 walks back in",
 		"http://localhost":              "loopback with no port",
 		"http://127.0.0.1:7392":         "near-miss port",
 		"ws://localhost:7391":           "the tab derives ws:// itself; this field is an http origin",
-		"wss://relay.example.com":       "same",
-		"ftp://relay.example.com":       "not a web scheme at all",
-		"https://relay.example.com/mcp": "a path means someone pasted the endpoint",
-		"https://relay.example.com?x=1": "query",
+		"wss://mcp.example.com":       "same",
+		"ftp://mcp.example.com":       "not a web scheme at all",
+		"https://mcp.example.com/mcp": "a path means someone pasted the endpoint",
+		"https://mcp.example.com?x=1": "query",
 		"https://":                      "no host",
 	}
 	for origin, why := range invalid {
-		if err := ValidateRelayOrigin(origin); err == nil {
-			t.Errorf("ValidateRelayOrigin(%q) = nil, want an error (%s)", origin, why)
+		if err := ValidateMCPOrigin(origin); err == nil {
+			t.Errorf("ValidateMCPOrigin(%q) = nil, want an error (%s)", origin, why)
 		}
 	}
 }

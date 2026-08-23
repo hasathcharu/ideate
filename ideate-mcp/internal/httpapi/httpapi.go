@@ -28,19 +28,19 @@ import (
 	"github.com/coder/websocket"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/config"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/procstat"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/ratelimit"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/session"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/config"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/procstat"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/ratelimit"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/session"
 )
 
-// StatusOverloaded is served by the capacity probe when the relay is full.
+// StatusOverloaded is served by the capacity probe when the service is full.
 //
 // It exists because a browser can never see it. A *refused* WebSocket handshake
 // surfaces in the tab as onclose 1006 with an empty reason, which is
 // indistinguishable from the service being down — so the tab is told about
-// capacity by CloseRelayFull on an accepted socket instead, and this route is where
+// capacity by CloseServiceFull on an accepted socket instead, and this route is where
 // a client that can read a status code gets the readable answer.
 const StatusOverloaded = 529
 
@@ -260,10 +260,10 @@ func (s *Server) handleTab(w http.ResponseWriter, r *http.Request) {
 			closeWith(conn, websocket.StatusCode(protocol.CloseSlotTaken),
 				"Another browser tab already holds this pairing code. Switch Agent Link "+
 					"off in that tab, or regenerate the code here.")
-		case errors.Is(err, session.ErrRelayFull):
+		case errors.Is(err, session.ErrServiceFull):
 			// Delivered on an accepted socket rather than as a refused handshake —
 			// see StatusOverloaded.
-			closeWith(conn, websocket.StatusCode(protocol.CloseRelayFull),
+			closeWith(conn, websocket.StatusCode(protocol.CloseServiceFull),
 				"The shared Agent Link service is at capacity. Run your own — it is a "+
 					"single binary — and point this tab at it in Advanced options.")
 		default:
@@ -419,7 +419,7 @@ func (s *Server) statsAuth(next http.Handler) http.Handler {
 		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.cfg.StatsUser)) == 1
 		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.StatsPassword)) == 1
 		if !ok || !userOK || !passOK {
-			w.Header().Set("WWW-Authenticate", `Basic realm="ideate relay stats", charset="UTF-8"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="ideate mcp stats", charset="UTF-8"`)
 			http.Error(w, "Unauthorized.", http.StatusUnauthorized)
 			return
 		}
@@ -439,7 +439,7 @@ type statsResponse struct {
 	Process procstat.Snapshot `json:"process"`
 }
 
-// handleStats answers how many relay sessions this process is handling right now,
+// handleStats answers how many tab sessions this process is handling right now,
 // and what that is costing it.
 //
 // Unlike /v1/capacity — which exists so a client can find out whether pairing will
@@ -465,8 +465,8 @@ func (s *Server) handleCapacity(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, status, map[string]any{"live": live, "max": max})
 }
 
-// handleHealth is deliberately **not** gated on capacity. A full relay is a healthy
-// relay — it is doing exactly what it was configured to do — and a health check that
+// handleHealth is deliberately **not** gated on capacity. A full service is a healthy
+// service — it is doing exactly what it was configured to do — and a health check that
 // failed on load would have the platform restart the instance, dropping every live
 // tab socket at the precise moment the most people were using it.
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

@@ -8,8 +8,8 @@
 #
 # It sets up the shared parts only — nginx, TLS, the firewall, the deploy user —
 # and installs `ideate-service`, which is how each individual service gets added.
-# Nothing here knows about the relay specifically; see infra/README.md for the
-# two commands that put it on the box.
+# Nothing here knows about the MCP service specifically; see infra/README.md
+# for the two commands that put it on the box.
 #
 #   WARNING: user data is readable by *any* process on the droplet via the
 #   metadata endpoint (169.254.169.254). Never put the Cloudflare origin private
@@ -501,9 +501,9 @@ Shared setup is in place. Still to do, by hand:
      With ssl_verify_client on and AOP off, every handshake fails with 526.
 
   3. Add a service:
-       ideate-service add ideate-relay 7391 ideate-mcp.haru.lk
-       $EDITOR /etc/ideate-relay.env
-       systemctl enable --now ideate-relay
+       ideate-service add ideate-mcp 7391 ideate-mcp.haru.lk
+       $EDITOR /etc/ideate-mcp.env
+       systemctl enable --now ideate-mcp
 
   ideate-service list shows what is on the box.
 NEXT

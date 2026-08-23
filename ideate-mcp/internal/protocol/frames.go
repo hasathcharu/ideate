@@ -4,7 +4,7 @@
 // hand**. Before protocol 3 they were the same file — one TypeScript module that
 // compiled under both the browser's tsconfig and the Node MCP server's, so the
 // compiler guaranteed they agreed. Replacing that server with this one gave that
-// guarantee up, and the replacement is ideate-relay/testdata/frames: every frame
+// guarantee up, and the replacement is ideate-mcp/testdata/frames: every frame
 // below has a golden JSON fixture, frames_test.go decodes each one with unknown
 // fields disallowed and re-encodes it, and the app's own test asserts the same
 // files against typed TypeScript literals. Add a frame, add its fixture in the
@@ -40,11 +40,11 @@ const (
 	// CloseSlotTaken means another tab already holds this code's bucket.
 	CloseSlotTaken     = 4003
 	CloseFrameTooLarge = 4004
-	// CloseRelayFull is delivered on an *accepted* socket, because a refused
+	// CloseServiceFull is delivered on an *accepted* socket, because a refused
 	// handshake reaches a browser as an anonymous 1006 with no reason — the tab
 	// could not otherwise tell "at capacity" from "the service is down". The
 	// readable 529 lives on /v1/capacity, where a non-browser client can see it.
-	CloseRelayFull = 4005
+	CloseServiceFull = 4005
 )
 
 // Paths the tab and the probes live on, mirrored from TAB_PATH and CAPACITY_PATH

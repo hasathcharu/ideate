@@ -54,7 +54,7 @@ import {
 } from '@/components/ui/select'
 import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
 import { useAgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
-import { normalizeRelayOrigin } from '@/lib/relayOrigin'
+import { normalizeMcpOrigin } from '@/lib/mcpOrigin'
 import type { BridgeState } from '@/lib/agentProtocol'
 import { collectDiagnostics } from '@/lib/diagnostics'
 import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
@@ -84,7 +84,7 @@ import {
   docIdForFile,
   scratchDocIdFor,
 } from '@/lib/storage'
-import { APP_NAME, DEFAULT_RELAY_ORIGIN } from '@/lib/config'
+import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
   buildTree,
   collectFilePaths,
@@ -244,7 +244,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     wrapLines: false,
     minimap: true,
     scratchKind: 'mermaid',
-    relayOrigin: null,
+    mcpOrigin: null,
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
@@ -1050,11 +1050,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
    *  default. Unlike the on/off switch this *is* an `AppConfig` field, because it
    *  describes the deployment rather than this tab — see the comment block in
    *  lib/types.ts. */
-  const relayOrigin = normalizeRelayOrigin(config.relayOrigin ?? DEFAULT_RELAY_ORIGIN)
+  const mcpOrigin = normalizeMcpOrigin(config.mcpOrigin ?? DEFAULT_MCP_ORIGIN)
 
   const agentLink = useAgentLink({
     enabled: agentLinkOn,
-    relayOrigin,
+    mcpOrigin,
     state: bridgeState,
     caps: linkCaps,
   })
@@ -2123,8 +2123,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
         code={agentLink.code}
         onRegenerate={agentLink.regenerate}
         onRetry={agentLink.retry}
-        relayOrigin={relayOrigin}
-        onRelayOriginChange={(origin) => updateConfig({ relayOrigin: origin })}
+        mcpOrigin={mcpOrigin}
+        onMcpOriginChange={(origin) => updateConfig({ mcpOrigin: origin })}
         mode={mode}
       />
 

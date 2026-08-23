@@ -1,9 +1,9 @@
 /**
  * The wire contract between the Agent Link service and the browser tab.
  *
- * Imported by the app, and **mirrored by hand in Go** (`ideate-relay/internal/protocol`).
+ * Imported by the app, and **mirrored by hand in Go** (`ideate-mcp/internal/protocol`).
  * The compiler used to enforce the old two-consumer rule; nothing does now, so the
- * guard is a set of golden JSON frames in `ideate-relay/testdata/frames/` that both
+ * guard is a set of golden JSON frames in `ideate-mcp/testdata/frames/` that both
  * sides parse — the Go tests round-trip them, and `lib/agentFrames.fixtures.ts`
  * type-checks them against the declarations below. A frame added without a fixture
  * is a frame that can drift silently.
@@ -42,7 +42,7 @@ export const TAB_PATH = '/v1/tab'
  *  It exists because a *refused* WebSocket handshake cannot carry a status code to
  *  a browser: a rejected upgrade surfaces in the tab as `onclose` 1006 with an
  *  empty reason, indistinguishable from the service being down. So the tab learns
- *  it is capacity, not an outage, from a `CLOSE_RELAY_FULL` on an **accepted**
+ *  it is capacity, not an outage, from a `CLOSE_SERVICE_FULL` on an **accepted**
  *  socket — and this route is where a non-browser client can read the 529 that a
  *  browser never gets to see. */
 export const CAPACITY_PATH = '/v1/capacity'
@@ -281,4 +281,4 @@ export const CLOSE_FRAME_TOO_LARGE = 4004
  *  anonymous 1006 — see `CAPACITY_PATH`. The reason names the self-host option, and
  *  the tab stops its automatic retry loop on it: capacity does free up, so retrying
  *  is not pointless, but hammering a full service is not the way to wait for it. */
-export const CLOSE_RELAY_FULL = 4005
+export const CLOSE_SERVICE_FULL = 4005

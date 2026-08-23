@@ -28,9 +28,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/ratelimit"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/session"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/ratelimit"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/session"
 )
 
 // Deps is what the tool layer needs from the rest of the service.
