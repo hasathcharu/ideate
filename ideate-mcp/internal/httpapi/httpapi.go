@@ -143,6 +143,26 @@ func New(opts Options) (*Server, error) {
 			// the tighter of the two limits is always the one that speaks, and two
 			// limits with different numbers means a 413 that names neither.
 			MaxRequestBodyBytes: opts.Config.MaxBodyBytes,
+			// The SDK's DNS-rebinding guard refuses any request whose *local*
+			// address is loopback while its Host header is not — and that is every
+			// proxied deployment of this service, not an attack: a tunnel or ingress
+			// on the same host dials 127.0.0.1:7391 while the client's Host stays the
+			// public name, so the guard answers the one shape protocol 3 exists to
+			// serve with "Forbidden: invalid Host header". It cannot be narrowed to
+			// an allowlist of hostnames; the option is a boolean.
+			//
+			// Turning it off is not a trade here, because the attack it names cannot
+			// reach anything. It protects a *local* MCP server whose only
+			// authentication is that the caller reached loopback at all: rebind a
+			// hostname to 127.0.0.1 and a hostile page is same-origin with the
+			// server, so it can both call it and read the reply. This service
+			// authenticates every tool call with the pairing code instead, which
+			// puts a rebound page in exactly the position of any other stranger on
+			// the internet — the position the whole design already assumes. It
+			// cannot read the code (that lives in the app origin's sessionStorage,
+			// per rule 3) and it cannot guess one, for the same reason nobody else
+			// can: 2^40 against the unknown-code limiter.
+			DisableLocalhostProtection: true,
 		},
 	)
 	return s, nil
