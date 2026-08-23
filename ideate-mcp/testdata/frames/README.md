@@ -5,7 +5,7 @@ on the socket.
 
 They exist because the contract is now written **twice**: once as TypeScript in
 `app/lib/agentProtocol.ts`, once as Go structs in
-`ideate-relay/internal/protocol`. Before protocol 3 the same TypeScript module
+`ideate-mcp/internal/protocol`. Before protocol 3 the same TypeScript module
 compiled under both programs and the compiler kept them identical; nothing does
 that any more, so these files are the guard, and they only work if all three
 locks are held:

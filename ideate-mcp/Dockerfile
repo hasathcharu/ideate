@@ -23,7 +23,7 @@ RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/serve
 
 # ── run ──────────────────────────────────────────────────────────────
 # Static-distroless: no shell, no package manager, no libc. The attack surface of
-# a compromised relay is worth minimising — it is a process that holds live
+# a compromised service is worth minimising — it is a process that holds live
 # WebSockets into people's browsers — and there is nothing in the image for an
 # attacker who reaches it to pivot with.
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -36,7 +36,7 @@ COPY --from=build /out/server /server
 USER nonroot:nonroot
 
 # The default port, which is also the one plaintext origin the app will accept
-# (see internal/config.LocalRelayPort). Override with PORT.
+# (see internal/config.LocalMCPPort). Override with PORT.
 EXPOSE 7391
 ENV PORT=7391
 

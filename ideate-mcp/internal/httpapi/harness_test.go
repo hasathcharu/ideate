@@ -15,11 +15,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/config"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/httpapi"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/session"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/tools"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/config"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/httpapi"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/session"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/tools"
 )
 
 // Everything the bridge actually does lives in the interaction between an HTTP

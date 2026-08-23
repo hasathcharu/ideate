@@ -8,9 +8,9 @@ Two files:
   firewall, deploy user. It installs `ideate-service`, which is how each
   individual service is added, and it is idempotent — re-running it after an edit
   is the intended way to change the shared configuration.
-- **`../.github/workflows/relay.yml`** — verify → build → release → deploy.
+- **`../.github/workflows/mcp.yml`** — verify → build → release → deploy.
 
-`bootstrap.sh` deliberately knows nothing about the relay. Everything
+`bootstrap.sh` deliberately knows nothing about the MCP service. Everything
 service-specific is two commands, below.
 
 ## Why nginx and systemd rather than Caddy and Docker
@@ -65,13 +65,13 @@ get them wrong.
    or a WAF skip rule for the hostname — MCP clients are not browsers, and a
    managed challenge on `/mcp` breaks the transport with an error nobody can read.
 
-## Adding the relay
+## Adding the MCP service
 
 ```sh
-ideate-service add ideate-relay 7391 ideate-mcp.haru.lk
+ideate-service add ideate-mcp 7391 ideate-mcp.haru.lk
 ```
 
-Then fill in `/etc/ideate-relay.env`:
+Then fill in `/etc/ideate-mcp.env`:
 
 ```sh
 PUBLIC_URL=https://ideate-mcp.haru.lk
@@ -89,7 +89,7 @@ The first binary has to be placed by hand, since `ideate-service release` expect
 a service that already exists; after that the pipeline does it:
 
 ```sh
-systemctl enable --now ideate-relay
+systemctl enable --now ideate-mcp
 ```
 
 ## Adding a service later
@@ -106,7 +106,7 @@ bind. `ideate-service list` shows what is on the box and whether each is running
 Two defaults worth knowing:
 
 - **Loopback only.** Units get `IPAddressDeny=any` / `IPAddressAllow=localhost`,
-  so a service cannot make outbound connections. Correct for the relay, which
+  so a service cannot make outbound connections. Correct for the service, which
   makes none; pass `--allow-egress` for one that does.
 - **`MemoryMax=320M`** is a backstop, not a target — it turns a runaway into a
   restart rather than a kernel OOM that might take nginx or sshd with it. Lower it
@@ -121,10 +121,10 @@ nothing else, so a leaked deploy key cannot register or remove a service.
 Tag to release:
 
 ```sh
-git tag relay-v3.1.0 && git push origin relay-v3.1.0
+git tag mcp-v3.1.0 && git push origin mcp-v3.1.0
 ```
 
-`verify` runs on every PR touching the relay or either half of the wire contract:
+`verify` runs on every PR touching the service or either half of the wire contract:
 `go vet`, `go test -race`, the TypeScript frame fixtures, and a check that
 `protocol.Version` and `PROTOCOL_VERSION` still agree. That last one exists
 because the two ends refuse to talk on a mismatch, so a skew strands every user
@@ -152,7 +152,7 @@ Variables:
 
 | | |
 | --- | --- |
-| `RELAY_PUBLIC_URL` | `https://ideate-mcp.haru.lk` — optional; when set, the deploy job curls `/healthz` through Cloudflare afterwards, which is the only step that proves the whole path rather than just the process |
+| `MCP_PUBLIC_URL` | `https://ideate-mcp.haru.lk` — optional; when set, the deploy job curls `/healthz` through Cloudflare afterwards, which is the only step that proves the whole path rather than just the process |
 
 Create a `production` environment if you want a human to approve deploys.
 
@@ -160,7 +160,7 @@ Create a `production` environment if you want a human to approve deploys.
 
 ```sh
 ideate-service list                      # what is on the box
-journalctl -u ideate-relay -f            # structured JSON on stderr
+journalctl -u ideate-mcp -f              # structured JSON on stderr
 curl -fsS https://ideate-mcp.haru.lk/v1/capacity
 curl -fsS -u ops:<pw> https://ideate-mcp.haru.lk/v1/stats
 ```

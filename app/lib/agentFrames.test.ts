@@ -16,7 +16,7 @@ import {
  * and that guarantee went with it: the contract is now written twice, in two
  * languages, and nothing mechanical connects them.
  *
- * `ideate-relay/testdata/frames/` is what replaces it. Each frame below is written
+ * `ideate-mcp/testdata/frames/` is what replaces it. Each frame below is written
  * as a **typed literal**, so `tsc` rejects it if the declarations move, and then
  * asserted equal to the fixture on disk. The Go tests decode the same files with
  * unknown fields disallowed and re-encode them. Change the TS type and this test
@@ -27,7 +27,7 @@ import {
  * would assert that a file equals itself and typecheck nothing at all.
  */
 
-const FRAMES_DIR = join(import.meta.dirname, '..', '..', 'ideate-relay', 'testdata', 'frames')
+const FRAMES_DIR = join(import.meta.dirname, '..', '..', 'ideate-mcp', 'testdata', 'frames')
 
 function fixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FRAMES_DIR, `${name}.json`), 'utf8'))

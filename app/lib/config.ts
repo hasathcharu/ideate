@@ -40,9 +40,9 @@ export const COMMIT_SHA = process.env.NEXT_PUBLIC_COMMIT_SHA || 'dev'
  * `NEXT_PUBLIC_` because the browser is what dials it, and not a secret: it is a
  * public endpoint that issues nothing and holds nothing durable, and pairing with
  * it needs a code only the tab knows. A user can point a single tab somewhere else
- * from the modal's Advanced options (that override lives in `AppConfig.relayOrigin`
+ * from the modal's Advanced options (that override lives in `AppConfig.mcpOrigin`
  * — a deployment setting shared by the whole origin, unlike the on/off switch);
  * this is the value that field resets to.
  */
-export const DEFAULT_RELAY_ORIGIN =
-  process.env.NEXT_PUBLIC_RELAY_ORIGIN || 'https://ideate-mcp.haru.lk'
+export const DEFAULT_MCP_ORIGIN =
+  process.env.NEXT_PUBLIC_MCP_ORIGIN || 'https://ideate-mcp.haru.lk'

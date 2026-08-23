@@ -25,7 +25,7 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
 )
 
 // Errors the WebSocket handler turns into close codes, and the tools turn into
@@ -33,15 +33,15 @@ import (
 var (
 	// ErrSlotTaken means a tab already holds this code's bucket.
 	ErrSlotTaken = errors.New("another tab already holds this pairing code")
-	// ErrRelayFull means the service is at MaxSessions.
-	ErrRelayFull = errors.New("the relay is at capacity")
+	// ErrServiceFull means the service is at MaxSessions.
+	ErrServiceFull = errors.New("the service is at capacity")
 	// ErrNoTab means the bucket exists but its tab is inside the grace window.
 	ErrNoTab = errors.New("no tab is connected for this pairing code")
 	// ErrNotAttached means no agent has called ideate_connect on this bucket.
 	ErrNotAttached = errors.New("not attached")
 	// ErrBusy means the in-flight byte budget or the per-session call limit is
 	// exhausted. Retryable, unlike everything else here.
-	ErrBusy = errors.New("the relay is busy")
+	ErrBusy = errors.New("the service is busy")
 )
 
 // maxPendingPerSession bounds how many commands one bucket can have in flight.
@@ -187,7 +187,7 @@ func (r *Registry) AdoptTab(codeHash string, conn *websocket.Conn) (*Session, bo
 	if len(r.byCode) >= r.opts.MaxSessions {
 		r.reapLocked()
 		if len(r.byCode) >= r.opts.MaxSessions {
-			return nil, false, ErrRelayFull
+			return nil, false, ErrServiceFull
 		}
 	}
 

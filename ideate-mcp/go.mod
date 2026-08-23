@@ -1,4 +1,4 @@
-module github.com/hasathcharu/ideate/ideate-relay
+module github.com/hasathcharu/ideate/ideate-mcp
 
 go 1.25.0
 

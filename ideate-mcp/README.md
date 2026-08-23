@@ -67,7 +67,7 @@ the code does not already.
 A *refused* WebSocket handshake cannot carry a status code to a browser: the tab
 sees `onclose` 1006 with an empty reason, indistinguishable from the service being
 down. So a full service **accepts** the socket and then closes it with
-`4005 CLOSE_RELAY_FULL` and a readable reason, and `/v1/capacity` is where a
+`4005 CLOSE_SERVICE_FULL` and a readable reason, and `/v1/capacity` is where a
 client that *can* read a status code gets the 529.
 
 ### The process figures
@@ -123,8 +123,8 @@ to 15s is the kind of thing that gets diagnosed months later.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `PORT` | `7391` | The old loopback bridge port, reused. It is also the only port on which the app will accept a plaintext relay origin. |
-| `PUBLIC_URL` | unset | The origin this instance is reached at. Validated with the same TLS rule the app applies to its Advanced options field, so you cannot advertise a plaintext relay and find out from your users. |
+| `PORT` | `7391` | The old loopback bridge port, reused. It is also the only port on which the app will accept a plaintext MCP origin. |
+| `PUBLIC_URL` | unset | The origin this instance is reached at. Validated with the same TLS rule the app applies to its Advanced options field, so you cannot advertise a plaintext service and find out from your users. |
 | `ALLOWED_ORIGINS` | `https://ideate.haru.lk` | Comma-separated. A **soft** allowlist on the tab handshake — it stops the service being used as free infrastructure, and is *not* the security control. Any `localhost` origin is always allowed, since a dev server moves between ports. |
 | `STATS_USER` | unset | Basic-auth user for `GET /v1/stats`. Set neither and the route does not exist; set one without the other and the service refuses to start, since either mistake is one an operator would make while believing the route was protected. |
 | `STATS_PASSWORD` | unset | Its password. Sent by the client on every request, so the endpoint is only as private as the TLS in front of it — which rule 12 already requires. |
@@ -150,18 +150,18 @@ retry.
 ## Run your own
 
 The published image is
-[`hasathcharu/ideate-agent-relay`](https://hub.docker.com/r/hasathcharu/ideate-agent-relay).
+[`hasathcharu/ideate-mcp`](https://hub.docker.com/r/hasathcharu/ideate-mcp).
 It needs no configuration and writes nothing to disk:
 
 ```sh
-docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay
+docker run --rm -p 7391:7391 hasathcharu/ideate-mcp
 ```
 
 From a checkout, either of these does the same thing:
 
 ```sh
 go run ./cmd/server                                     # from this directory
-docker build -t ideate-relay . && docker run --rm -p 7391:7391 ideate-relay
+docker build -t ideate-mcp . && docker run --rm -p 7391:7391 ideate-mcp
 ```
 
 Then, in Ideate, **Agent Link → Advanced options → Agent Link service** →
@@ -176,7 +176,7 @@ A stdio-only client can front it with `npx mcp-remote http://localhost:7391/mcp`
 The app accepts `https://…` anywhere, or plain `http://` **only** on
 `localhost:7391` / `127.0.0.1:7391`: plaintext elsewhere would put the pairing code
 and every document the tab reads on the wire in the clear. Both sides enforce that
-(`app/lib/relayOrigin.ts` and `internal/config.ValidateRelayOrigin`), so for
+(`app/lib/mcpOrigin.ts` and `internal/config.ValidateMCPOrigin`), so for
 anything reachable from the internet, terminate TLS in front of it (Caddy, nginx,
 your platform's load balancer) and set `PUBLIC_URL` and `ALLOWED_ORIGINS`.
 

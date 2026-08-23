@@ -56,7 +56,7 @@ surface and the export pipeline differ.
 
    Both survive a reload, which a plain `useState` would not — and for the code
    that matters twice over, since coming back under a different one would strand
-   an agent holding a code that reaches nothing. **`AppConfig.relayOrigin` is the
+   an agent holding a code that reaches nothing. **`AppConfig.mcpOrigin` is the
    opposite case and belongs in config**: *where the service is* is a property of
    the deployment, not of one tab, and it is a URL rather than a credential.
 4. **Every read/write server action takes a caller-supplied `branch`** — there
@@ -111,12 +111,12 @@ surface and the export pipeline differ.
    which is harmless — it cannot guess the user's. What replaces the old rule:
    - **The service URL must be `https:`, or `http:` on `localhost`/`127.0.0.1`
      port 7391.** Enforced on *both* sides, in one implementation each —
-     `validateRelayOrigin` (`lib/relayOrigin.ts`) and
-     `internal/config.ValidateRelayOrigin`. Plaintext anywhere else puts the code
+     `validateMcpOrigin` (`lib/mcpOrigin.ts`) and
+     `internal/config.ValidateMCPOrigin`. Plaintext anywhere else puts the code
      and every document the tab reads on the wire in the clear.
    - **The code never reaches a URL, a query string, or a log line.** Logs carry
      an 8-character prefix of the hash at most.
-   - **The TS↔Go wire contract is guarded only by `ideate-relay/testdata/frames/`.**
+   - **The TS↔Go wire contract is guarded only by `ideate-mcp/testdata/frames/`.**
      Add a frame, add its fixture in the same change — see §"The wire contract is
      written twice".
    - **Add no CORS configuration to the service.** Its two callers are a browser
@@ -374,12 +374,12 @@ may touch at install time and can change that later. Consequences to keep in min
 Two programs, two languages, one repo:
 
 ```
-package.json          thin root: scripts delegating into app/, plus relay:*
+package.json          thin root: scripts delegating into app/, plus mcp:*
 app/                  the Next.js app — every path in this document is relative
   app/                …to here, so the router lands at app/app/
   components/ lib/ public/ scripts/ types/
   auth.ts proxy.ts next.config.ts tsconfig.json package.json .env.local
-ideate-relay/          Go: the Agent Link MCP server + tab relay
+ideate-mcp/           Go: the Agent Link MCP server + tab relay
   cmd/server/ internal/ testdata/frames/ Dockerfile README.md
 ```
 
@@ -411,15 +411,15 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
   `color-mix()` for anything it then has to measure.
 - `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. It no
   longer has to compile under two tsconfigs (the old constraint), but every frame
-  it declares needs a fixture in `ideate-relay/testdata/frames/`.
-- `lib/relayOrigin.ts` — the TLS rule for the Agent Link service origin, and the
-  `ws://`/`wss://` derivation. Mirrored by `internal/config.ValidateRelayOrigin`,
+  it declares needs a fixture in `ideate-mcp/testdata/frames/`.
+- `lib/mcpOrigin.ts` — the TLS rule for the Agent Link service origin, and the
+  `ws://`/`wss://` derivation. Mirrored by `internal/config.ValidateMCPOrigin`,
   whose test carries the same cases.
 - `lib/agentFrames.test.ts` — the only vitest file in the app, and the TypeScript
   half of the cross-language wire guard. Its frames must stay hand-written
   literals: deriving one from the fixture it is compared against would assert that
   a file equals itself.
-- `ideate-relay/` — a separate Go module, not part of any tsconfig. Unlike the Node
+- `ideate-mcp/` — a separate Go module, not part of any tsconfig. Unlike the Node
   server it replaced it may log freely, since stdout is no longer a JSON-RPC
   channel; it logs structured JSON to stderr anyway.
 - `types/markdown-it-emoji.d.ts` — the plugin ships no types.
@@ -754,7 +754,7 @@ What has not changed is the mechanism: the two sides refuse to talk on a mismatc
 silent one. Which means **ship both ends of a bump together** — a version skew now
 strands a user who has no label telling them to expect it.
 
-`ideate-relay/` is a Model Context Protocol server that hands a coding agent **the
+`ideate-mcp/` is a Model Context Protocol server that hands a coding agent **the
 document open in the browser right now**, not a file on disk. That is the whole
 point: the agent edits, mermaid renders, and the renderer's verdict comes back in
 the result of the agent's own tool call, so a broken diagram gets fixed in the same
@@ -763,7 +763,7 @@ turn. An agent editing files finds out when a human next opens them.
 ### One remote service, and why the socket turned around
 
 ```
-agent ──MCP Streamable HTTP──► ideate-relay (Go) ──WebSocket──► browser tab
+agent ──MCP Streamable HTTP──► ideate-mcp (Go) ──WebSocket──► browser tab
 ```
 
 Until protocol 3 this was inverted: the MCP server was a Node process on the user's
@@ -882,7 +882,7 @@ stateful client can also vanish without a clean teardown.
 
 - **529 cannot reach a browser.** A rejected WebSocket handshake surfaces in the tab
   as `onclose` 1006 with an empty reason, indistinguishable from the service being
-  down. So the capacity refusal reaches the tab as `CLOSE_RELAY_FULL` on an
+  down. So the capacity refusal reaches the tab as `CLOSE_SERVICE_FULL` on an
   **accepted** socket, and the readable 529 lives on `/v1/capacity` where a
   non-browser client can see it.
 - **A grace-window rejoin must re-send `attached`.** A bucket outlives its tab socket
@@ -892,8 +892,8 @@ stateful client can also vanish without a clean teardown.
 
 ### The wire contract is written twice
 
-`lib/agentProtocol.ts` and `ideate-relay/internal/protocol` are hand-mirrored, and the
-compiler that used to hold them together is gone. `ideate-relay/testdata/frames/` is
+`lib/agentProtocol.ts` and `ideate-mcp/internal/protocol` are hand-mirrored, and the
+compiler that used to hold them together is gone. `ideate-mcp/testdata/frames/` is
 the replacement, and it only works if all three locks are held:
 
 1. `lib/agentFrames.test.ts` builds each frame as a **typed TypeScript literal** and
@@ -978,14 +978,14 @@ with `npx mcp-remote https://<service>/mcp`.
 Locally, from a checkout:
 
 ```bash
-npm run relay:dev      # go run ./cmd/server on :7391
+npm run mcp:dev        # go run ./cmd/server on :7391
 npm run dev            # the app
 claude mcp add --transport http ideate-local http://localhost:7391/mcp
 ```
 
 Without a checkout, the service is published as
-`docker.io/hasathcharu/ideate-agent-relay` and takes no configuration:
-`docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay`. The same command is
+`docker.io/hasathcharu/ideate-mcp` and takes no configuration:
+`docker run --rm -p 7391:7391 hasathcharu/ideate-mcp`. The same command is
 offered inside **Agent Link → Advanced options**, beside the field that points the
 tab at the result — the docs link there is for the environment variables, not for
 the one line that gets you running.
@@ -1091,7 +1091,7 @@ records (rule 10).
 
 ```bash
 npm run typecheck && npm run build && npm --prefix app run test
-cd ideate-relay && go vet ./... && go test -race ./...
+cd ideate-mcp && go vet ./... && go test -race ./...
 ```
 
 `typecheck` now covers one program (the Next app); the Go module is checked by its
@@ -1108,8 +1108,8 @@ before the close frame goes out. So drive it, end to end, in `?mode=local` with 
 repo connected:
 
 ```bash
-npm run relay:dev                                                   # :7391
-NEXT_PUBLIC_RELAY_ORIGIN=http://localhost:7391 npm run dev
+npm run mcp:dev                                                     # :7391
+NEXT_PUBLIC_MCP_ORIGIN=http://localhost:7391 npm run dev
 claude mcp add --transport http ideate-local http://localhost:7391/mcp
 ```
 

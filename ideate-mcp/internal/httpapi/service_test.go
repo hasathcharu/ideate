@@ -11,10 +11,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/config"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/httpapi"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
-	"github.com/hasathcharu/ideate/ideate-relay/internal/session"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/config"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/httpapi"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/session"
 )
 
 /* ------------------------------------------------------------------ */
@@ -337,14 +337,14 @@ func TestBucketExpiresAfterGrace(t *testing.T) {
 /* Capacity                                                            */
 /* ------------------------------------------------------------------ */
 
-func TestRelayFull(t *testing.T) {
+func TestServiceFull(t *testing.T) {
 	h := newHarness(t, func(c *config.Config) { c.MaxWSSessions = 1 })
 
 	first := h.dialTab(testCode, protocol.Version)
 	first.expectReady()
 
 	second := h.dialTab("OTHERC0D", protocol.Version)
-	second.expectClose(protocol.CloseRelayFull)
+	second.expectClose(protocol.CloseServiceFull)
 
 	// The capacity probe is where a client that can read a status code gets the
 	// answer a browser never sees: a refused handshake reaches a tab as an
@@ -364,7 +364,7 @@ func TestRelayFull(t *testing.T) {
 	}
 }
 
-// A full relay is a *healthy* relay — it is doing exactly what it was configured to
+// A full service is a *healthy* service — it is doing exactly what it was configured to
 // do. Gating liveness on capacity would have the platform restart the instance at
 // the moment the most people were using it, dropping every live tab socket.
 func TestHealthIgnoresCapacity(t *testing.T) {
@@ -401,7 +401,7 @@ func TestExpiredBucketFreesItsSlot(t *testing.T) {
 	// Still inside the grace window: the slot is genuinely reserved, because the
 	// first tab may be reloading and must find its own bucket waiting.
 	blocked := h.dialTab("OTHERC0D", protocol.Version)
-	blocked.expectClose(protocol.CloseRelayFull)
+	blocked.expectClose(protocol.CloseServiceFull)
 
 	h.clock.Advance(31 * time.Second)
 

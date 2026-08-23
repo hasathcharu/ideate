@@ -10,7 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/hasathcharu/ideate/ideate-relay/internal/protocol"
+	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
 )
 
 // Session is one pairing bucket: at most one browser tab, and at most one agent
@@ -252,7 +252,7 @@ func (s *Session) Call(ctx context.Context, cmd protocol.Command) (json.RawMessa
 	weight := int64(len(payload))
 	if err := s.reg.inFlight.Acquire(ctx, weight); err != nil {
 		return nil, fmt.Errorf(
-			"%w: too much data is in flight across the relay right now. This is "+
+			"%w: too much data is in flight across the service right now. This is "+
 				"temporary — try the same call again", ErrBusy)
 	}
 	defer s.reg.inFlight.Release(weight)
