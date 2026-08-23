@@ -1,0 +1,11 @@
+{
+  "t": "req",
+  "id": 5,
+  "command": {
+    "cmd": "edit",
+    "edits": [
+      { "oldText": "A --> B", "newText": "A --> C" },
+      { "oldText": "  ", "newText": "\t", "replaceAll": true }
+    ]
+  }
+}

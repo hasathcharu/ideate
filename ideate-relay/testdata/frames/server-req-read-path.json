@@ -1,0 +1,1 @@
+{ "t": "req", "id": 4, "command": { "cmd": "read", "path": "docs/architecture.md" } }

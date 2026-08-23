@@ -1,0 +1,213 @@
+name: relay
+
+# Build, publish and deploy the Agent Link service (ideate-relay).
+#
+# A tag push releases: verify -> build -> attach to a GitHub Release -> deploy to
+# the droplet. A pull request touching the relay or either half of the wire
+# contract runs verify only.
+
+on:
+  push:
+    tags: ['relay-v*']
+  pull_request:
+    paths:
+      - 'ideate-relay/**'
+      - 'app/lib/agentProtocol.ts'
+      - 'app/lib/agentFrames.test.ts'
+      - '.github/workflows/relay.yml'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy the build to production'
+        type: boolean
+        default: false
+
+# One release at a time, and never cancel one mid-flight: a cancelled deploy can
+# leave the droplet holding a binary that never got health-checked.
+concurrency:
+  group: relay-release
+  cancel-in-progress: false
+
+env:
+  SERVICE: ideate-relay
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ideate-relay/go.mod
+          cache-dependency-path: ideate-relay/go.sum
+
+      - name: go vet
+        working-directory: ideate-relay
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ideate-relay
+        # No CGO_ENABLED=0 here: -race needs cgo on linux/amd64 and would fail
+        # outright without it. The release build sets it, this job must not.
+        run: go test -race ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app deps
+        working-directory: app
+        # --ignore-scripts skips vendor-excalidraw-assets, which downloads ~13MB
+        # of fonts. The frame-fixture test is the only test here and needs none
+        # of it.
+        run: npm ci --ignore-scripts
+
+      - name: Wire-contract fixtures (TypeScript half)
+        working-directory: app
+        run: npm run test
+
+      - name: Protocol versions agree
+        # The two ends refuse to talk on a mismatch (CLOSE_PROTOCOL_MISMATCH), so
+        # shipping a relay whose version has moved ahead of the app strands every
+        # user until the app catches up. Cheaper to fail here.
+        run: |
+          go_v=$(grep -oP 'Version\s*=\s*\K\d+' ideate-relay/internal/protocol/frames.go | head -1)
+          ts_v=$(grep -oP 'PROTOCOL_VERSION\s*=\s*\K\d+' app/lib/agentProtocol.ts | head -1)
+          echo "relay: $go_v   app: $ts_v"
+          if [[ -z "$go_v" || -z "$ts_v" ]]; then
+            echo "::error::could not read a protocol version from one of the two files"
+            exit 1
+          fi
+          if [[ "$go_v" != "$ts_v" ]]; then
+            echo "::error::protocol version skew — relay is $go_v, app is $ts_v. Ship both ends together."
+            exit 1
+          fi
+
+  build:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ideate-relay/go.mod
+          cache-dependency-path: ideate-relay/go.sum
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/relay-v* ]]; then
+            version="${GITHUB_REF#refs/tags/relay-v}"
+          else
+            version="0.0.0-${GITHUB_SHA::7}"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "Building $version"
+
+      - name: Build
+        working-directory: ideate-relay
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        # Static and stripped, matching the Dockerfile's build: the droplet runs
+        # this under systemd with no libc dependency and nothing to link against.
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${{ steps.version.outputs.version }}" \
+            -o "../${SERVICE}" ./cmd/server
+          cd ..
+          sha256sum "${SERVICE}" | tee "${SERVICE}.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.SERVICE }}-${{ steps.version.outputs.version }}
+          path: |
+            ideate-relay
+            ideate-relay.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/relay-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SERVICE }}-${{ needs.build.outputs.version }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --title "Agent Link service ${{ needs.build.outputs.version }}" \
+            --generate-notes \
+            "${SERVICE}#${SERVICE} (linux/amd64, static)" \
+            "${SERVICE}.sha256#sha256"
+
+  deploy:
+    needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/relay-v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy)
+    runs-on: ubuntu-latest
+    # Gate this in repo settings (Settings -> Environments -> production) if you
+    # want a human to approve before a release reaches the droplet.
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.SERVICE }}-${{ needs.build.outputs.version }}
+
+      - name: Verify checksum
+        run: sha256sum -c "${SERVICE}.sha256"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        # known_hosts is pinned from a secret rather than accepted on first use:
+        # StrictHostKeyChecking=no would hand the binary to whoever answers on
+        # that address.
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" >~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload and release
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          VERSION: ${{ needs.build.outputs.version }}
+        # ideate-service does the rest on the box: atomic install, restart,
+        # health check, and rollback to the previous binary if it does not come
+        # up. That logic lives there rather than here so it can be tested and run
+        # by hand during an incident.
+        run: |
+          remote="/tmp/${SERVICE}-${VERSION}"
+          scp -i ~/.ssh/id_deploy "${SERVICE}" "${USER}@${HOST}:${remote}"
+          ssh -i ~/.ssh/id_deploy "${USER}@${HOST}" \
+            "sudo /usr/local/sbin/ideate-service release ${SERVICE} ${remote}; rc=\$?; rm -f ${remote}; exit \$rc"
+
+      - name: Confirm through Cloudflare
+        env:
+          PUBLIC_URL: ${{ vars.RELAY_PUBLIC_URL }}
+        # The health check on the box only proves the process is up. This proves
+        # the whole path — Cloudflare, Authenticated Origin Pulls, nginx, the
+        # service — still answers.
+        if: env.PUBLIC_URL != ''
+        run: curl -fsS --max-time 10 "${PUBLIC_URL}/healthz"

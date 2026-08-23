@@ -1,0 +1,18 @@
+{
+  "t": "event",
+  "name": "state",
+  "state": {
+    "mode": "github",
+    "repo": {
+      "owner": "hasathcharu",
+      "name": "ideate",
+      "branch": "v3",
+      "defaultBranch": "main"
+    },
+    "openPath": "diagrams/flow.mmd",
+    "kind": "mermaid",
+    "dirty": true,
+    "lineCount": 12,
+    "charCount": 214
+  }
+}

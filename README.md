@@ -48,10 +48,10 @@ open, commit, rename, delete, branch, diff, version history.
   still export sharp. Source export too — mermaid with the config baked in as
   frontmatter, or the raw `.excalidraw` scene. Markdown exports as markdown —
   the document verbatim, so what leaves matches what's in the repo.
-- **Agent Link** (beta): an MCP server that hands a coding agent the document open in your
-  browser — edits land in the editor as undoable changes and come back with the
-  renderer's verdict, so a broken diagram is fixed in the same turn. Nothing is ever
-  committed; saving stays yours.
+- **Agent Link**: a remote MCP server that hands a coding agent the document
+  open in your browser — you pair the two with a short code, edits land in the editor
+  as undoable changes and come back with the renderer's verdict, so a broken diagram
+  is fixed in the same turn. Nothing is ever committed; saving stays yours.
 - **GitHub as database**: repo picker, file-tree browser, open, and Save = commit
   to whichever branch is selected. Access is scoped by a **GitHub App
   installation** — the picker lists only the repositories you chose to share, and
@@ -68,11 +68,24 @@ open, commit, rename, delete, branch, diff, version history.
 
 Next.js (App Router, TypeScript strict) · Auth.js v5 (GitHub **App**
 user-to-server auth) · mermaid · @excalidraw/excalidraw · CodeMirror 6 ·
-@octokit/rest (server-side only).
+@octokit/rest (server-side only). Agent Link's service is Go, using the official
+MCP Go SDK.
 
 > This app **cannot** be a static export — authentication and all GitHub I/O run
 > in server actions, so it needs a server runtime (Vercel / Cloudflare Pages /
 > Netlify functions, etc.).
+
+## Repository layout
+
+```
+package.json          thin root: scripts that delegate into app/, plus relay:*
+app/                  the Next.js app (app/app/ is its router — not a typo)
+ideate-relay/          Go: the Agent Link MCP server + tab relay
+```
+
+Two programs in two languages. Only one JS package remains, so there are no npm
+workspaces — the root delegates with `npm --prefix app`, and the Go service is its
+own module.
 
 ## Local setup
 
@@ -82,9 +95,17 @@ user-to-server auth) · mermaid · @excalidraw/excalidraw · CodeMirror 6 ·
 npm install
 ```
 
-`postinstall` copies Excalidraw's font files into `public/excalidraw-assets/` so
+Run it at the repo root. The root `package.json` holds no dependencies — it
+delegates into `app/`, where the Next app lives — and its `postinstall` installs the
+app for you.
+
+That in turn copies Excalidraw's font files into `app/public/excalidraw-assets/` so
 the canvas never fetches them from a CDN at runtime. That directory is gitignored
 and regenerated on install and on every build — don't commit or hand-edit it.
+
+The Agent Link service under `ideate-relay/` is a separate Go module and is not built
+by `npm install`; you only need it if you are [running the service
+yourself](#running-the-service-yourself). It needs Go 1.25+.
 
 ### 2. Register the GitHub App
 
@@ -153,8 +174,11 @@ second App for that origin, e.g.
 Copy the example and fill it in (Auth.js v5 auto-detects these names):
 
 ```bash
-cp .env.example .env.local
+cp app/.env.example app/.env.local
 ```
+
+`.env.local` lives in `app/`, not at the repo root — that is Next's working
+directory now that the app is a subdirectory (see [Repository layout](#repository-layout)).
 
 ```bash
 # .env.local
@@ -162,11 +186,18 @@ AUTH_SECRET=                   # generate with: npx auth secret   (or: openssl r
 AUTH_GITHUB_ID=                # GitHub App "Client ID"  (NOT the App ID)
 AUTH_GITHUB_SECRET=            # GitHub App client secret
 NEXT_PUBLIC_GITHUB_APP_SLUG=   # the <slug> in https://github.com/apps/<slug>
+NEXT_PUBLIC_RELAY_ORIGIN=      # Agent Link service origin; optional, see below
 # AUTH_URL=http://localhost:3000   # only if not the default dev origin / behind a proxy
 ```
 
 `NEXT_PUBLIC_GITHUB_APP_SLUG` is public (it's the App's URL name) and only builds
 the "Install on GitHub" / "Configure repository access" links in the repo picker.
+
+`NEXT_PUBLIC_RELAY_ORIGIN` points browser tabs at an [Agent Link
+service](#agent-link--let-a-coding-agent-edit-the-open-document); leave it unset
+to use the shared one. It must be `https://…`, or `http://localhost:7391` for a
+service you run yourself. Not a secret — the service issues nothing, and pairing with
+it needs a code only your tab knows.
 
 ### 4. Run
 
@@ -192,12 +223,11 @@ kind; the **+** buttons (at the root or on any folder) let you start a mermaid
 diagram, a markdown document or a canvas. Exports can be downloaded or copied to
 the clipboard, and any surface can be expanded to fill the browser window.
 
-## Agent Link (beta) — let a coding agent edit the open document
+## Agent Link — let a coding agent edit the open document
 
-> **Beta.** The tool surface and the wire protocol between the app and the MCP
-> server can still change between versions. The two sides carry a protocol version
-> and refuse to talk on a mismatch rather than guessing, so the failure is loud:
-> update whichever side is older.
+> The app and the service carry a **protocol version** and refuse to talk on a
+> mismatch rather than guessing, so a version skew is a loud failure rather than a
+> silent one: update whichever side is older.
 
 Ideate ships an **MCP server**, so an agent can read and edit the document that is
 **open in your browser right now**. Edits arrive in the editor as ordinary undoable
@@ -208,57 +238,81 @@ you to find.
 **Nothing is ever committed.** Saving stays a human action, so the most an agent can
 touch is your uncommitted working copy — on screen, and one ⌘Z away.
 
+> **Agent Link needs the service to be reachable, and so no longer works offline.**
+> Everything else in local mode still does. Until v3 the MCP server ran on your own
+> machine and listened on loopback, which Safari blocks outright from an `https://`
+> page (no loopback exemption for mixed content) and which confined the feature to
+> an agent on the same machine as the browser. The service is a single binary you
+> can run yourself (`docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay`)
+> — see [`ideate-relay/README.md`](./ideate-relay/README.md).
+
 ### Setting it up
 
-Every MCP client takes a command and its arguments. Add Ideate as an MCP server with:
+Two things, and only the first is a one-time step.
+
+**1. Register the service with your agent.** It is a remote MCP server over
+Streamable HTTP, so a URL rather than a command:
 
 ```
-command  npx
-args     -y  github:hasathcharu/ideate
+claude mcp add --transport http ideate https://ideate-mcp.haru.lk/mcp
 ```
 
-Most clients read that from a JSON config file:
+Most clients read the same thing from a JSON config file:
 
 ```json
 {
   "mcpServers": {
     "ideate": {
-      "command": "npx",
-      "args": ["-y", "github:hasathcharu/ideate"]
+      "type": "http",
+      "url": "https://ideate-mcp.haru.lk/mcp"
     }
   }
 }
 ```
 
-Some offer a CLI instead — for example `claude mcp add ideate -- npx -y
-github:hasathcharu/ideate`, or the equivalent in your own tool.
+A client that only speaks stdio can front it with
+`npx mcp-remote https://ideate-mcp.haru.lk/mcp`.
 
-From a checkout of this repo, point the client at `npx` with args `tsx
-mcp/index.ts` instead, which skips the download entirely.
+**2. Give your agent this tab's pairing code.** In the app, click **Connect Agent**
+in the toolbar, switch it on, and a code like `K7QM-4XZP` appears. Hand it to your
+agent when you ask for something. Case and the dash are ignored, and the alphabet
+omits I, L, O and U so it survives being read aloud.
 
-> **Don't hand an MCP client `npm run mcp`.** `npm run` prints a two-line banner to
-> **stdout**, which is the JSON-RPC channel — it corrupts the stream before the
-> server says a word. `npm run mcp` is fine for eyeballing the server by hand
-> (it logs to stderr); for a client, use `npx tsx mcp/index.ts`, or
-> `npm run mcp --silent`.
-
-> The `npx` form installs this repo's whole dependency tree (~1050 packages,
-> ~840MB) because the server shares the root `package.json`. It is a one-time,
-> cached cost; running it from a checkout avoids it.
-
-Then, in the app, click **Connect Agent** in the toolbar and switch it on. There is
-no port and no token to copy — the two sides find each other on the loopback
-interface.
+The code is an argument on every tool rather than a header, which is what makes the
+useful thing possible: **naming a different tab's code is how you point the agent at
+a different tab**, mid-session, with nothing to reconfigure. Press **Regenerate** to
+revoke the current one without switching the feature off.
 
 Two deliberate steps stand between an agent and your document, and they answer
 different questions:
 
-- **Which tab** is yours to answer. The switch is **per tab**, so it arms the tab you
-  flip it in and no other — with several Ideate tabs open, you choose which document
-  is reachable. The button then reads **Awaiting Agent**.
-- **Whether to drive it** is the agent's. It must call `ideate_connect` on its own
-  side; until it does, nothing can read or edit. The button reads **Agent Connected**
-  once it has, naming the agent that attached.
+- **Which tab** is yours to answer. The switch and the code are **per tab**, so they
+  arm the tab you flip it in and no other. The button then reads **Awaiting Agent**.
+- **Whether to drive it** is the agent's. It must call `ideate_connect` with your
+  code; until it does, nothing can read or edit — except `ideate_status`, which
+  answers with metadata only and never content, so an agent can tell you what it
+  would be attaching to. The button reads **Agent Connected** once it has, naming the
+  agent that attached.
+
+### Running the service yourself
+
+The shared service caps how many tabs it holds at once, and says so when it is full.
+Running your own is one container — no configuration, nothing on disk:
+
+```bash
+docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay
+```
+
+From a checkout, `npm run relay:dev` (or `npm run relay:docker`) does the same.
+Then point the tab at `http://localhost:7391` under **Agent Link → Advanced
+options**, and register `http://localhost:7391/mcp` with your agent:
+
+```bash
+claude mcp add --transport http ideate-local http://localhost:7391/mcp
+```
+
+Every environment variable and the security model are in
+[`ideate-relay/README.md`](./ideate-relay/README.md).
 
 ### Tools
 
@@ -282,11 +336,17 @@ different questions:
 | `npm run dev` | Start the dev server |
 | `npm run build` | Production build |
 | `npm start` | Serve the production build |
-| `npm run typecheck` | `tsc --noEmit` (strict) over both the app and `mcp/` |
-| `npm run mcp` | Run the Agent Link MCP server by hand (clients need `npx tsx mcp/index.ts` — see above) |
-| `npm run build:mcp` | Compile the MCP server to `dist-mcp/` (runs on `prepare`) |
-| `npm run gen:agent-key` | Generate the Ed25519 key that signs Agent Link tokens |
-| `npm run vendor:excalidraw` | Copy Excalidraw's fonts into `public/` (runs automatically on `postinstall`, `dev` and `build`) |
+| `npm run typecheck` | `tsc --noEmit` (strict) over the app |
+| `npm --prefix app run test` | The Agent Link frame-fixture guard (vitest) |
+| `npm run relay:dev` | Run the Agent Link service locally on `:7391` |
+| `npm run relay:test` | `go vet` + `go test` for the service |
+| `npm run relay:build` | Compile the service to `ideate-relay/server` |
+| `npm run relay:docker` | Build the service's container image |
+| `npm --prefix app run vendor:excalidraw` | Copy Excalidraw's fonts into `app/public/` (runs automatically on `postinstall`, `dev` and `build`) |
+
+Everything at the root delegates into `app/` with `npm --prefix app`; there are no
+npm workspaces, because only one JS package remains. The Go service is a separate
+module under `ideate-relay/`.
 
 ## Security model
 
@@ -308,23 +368,31 @@ different questions:
 
 ### Agent Link
 
-- **Off by default**, switched on per browser, and the toolbar always shows whether
-  an agent is attached — an agent can never be editing invisibly.
-- The MCP server listens on **loopback only** (`127.0.0.1`); nothing is reachable
-  from your network.
-- A WebSocket has no same-origin policy, so any page could otherwise claim that
-  socket, answer your agent's commands and feed it poisoned text. Two things stop
-  it: an `Origin` allowlist on the handshake (browsers must send it and page script
-  cannot forge it), and a **single-use signed token** the tab mints from
-  `/api/agent/token`. That route deliberately returns **no CORS headers** — and
-  that, rather than the signature, is what means only a real Ideate page can obtain
-  a token.
-- Tokens are Ed25519, last 60 seconds, and are held in memory only — never in
-  `localStorage`. The server pins which issuers it trusts and never fetches a key
-  from an issuer it was not told about.
-- Any process already running as you on your machine could reach the socket. That
-  is accepted rather than defended: such a process can already read your files and
-  your browser profile. It is the same footing as the Docker socket.
+- **Off by default**, switched on per browser tab, and the toolbar always shows
+  whether an agent is attached — an agent can never be editing invisibly.
+- **The pairing code is the credential, and it is the only one.** The service issues
+  nothing: your tab generates its own code and the service buckets by the code's
+  hash. A hostile page can generate a code and pair with itself, which is harmless;
+  what it cannot do is guess yours.
+- The code is 8 characters of Crockford base32 — 2^40 — which only holds up because
+  guesses are rationed: the service applies a per-IP rate limit, and a much tighter
+  one to codes that match no tab. **Regenerate** revokes the current code at once.
+- **The code is never logged, never in a URL, never in a query string.** The service
+  writes at most an 8-character prefix of its hash.
+- **TLS is mandatory**, except for a service you run yourself on
+  `http://localhost:7391`. Both the app and the service enforce that rule, because
+  plaintext anywhere else would put the code — and every document the tab reads — on
+  the wire in the clear.
+- A WebSocket has no same-origin policy, so the service also checks `Origin` on the
+  handshake. That is a **soft** control that stops it being used as free
+  infrastructure; it is not what keeps your tab safe, since a local process can forge
+  the header and still cannot guess a code.
+- **Your document travels through the service** while Agent Link is on, in local mode
+  as much as in repo mode. The service holds nothing durable — every record it keeps
+  describes a live socket and dies with the process — but if that is not a trade you
+  want, run your own: [`ideate-relay/README.md`](./ideate-relay/README.md).
+- **Nothing an agent does reaches GitHub.** There is no commit tool, and rename and
+  delete are not exposed either, because in this app those *are* commits.
 - **Prompt injection is the larger risk here.** Your agent reads documents from your
   repository, and a `.md` file can contain instructions aimed at it. Agent Link does
   not create that risk, but it does give the agent write access to the open
@@ -344,8 +412,12 @@ different questions:
 - A canvas's background is theme-driven chrome and is deliberately **not** saved
   into the scene file, so a `.excalidraw` file's own background is preserved as
   written but not editable from inside this app.
-- Agent Link serves **one tab per server**: a second agent session takes the next
-  port in its range, and a second tab is refused while one holds the connection.
+- Agent Link's service holds all its state in memory and does not shard, so it is
+  one instance with a hard cap on concurrent tabs (`MAX_WS_SESSIONS`). At capacity it
+  says so and points you at running your own. A pairing code holds **one tab**: a
+  second tab claiming the same code is refused.
+- Agent Link needs the service to be reachable, so it does **not** work offline.
+  Everything else in local mode does.
 - Agent Link exposes no commit, rename or delete tool. In this app rename and delete
   *are* commits, so exposing them would break the "an agent cannot write to your
   repository" guarantee.

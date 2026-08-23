@@ -41,13 +41,24 @@ surface and the export pipeline differ.
    prop.
 3. **localStorage stores only** uncommitted editor drafts and app config
    (selected repo, active theme, export prefs, scratch-document kind, editor
-   line-wrap and viewfinder). Never tokens/secrets. **Agent Link's on/off state is
-   the one browser-persisted setting that is deliberately *not* in `AppConfig`**:
-   it lives in `sessionStorage` (`loadAgentLink`/`saveAgentLink`) so it is scoped to
-   one tab. In config it was shared by the whole origin, so switching it on once
-   armed every tab afterwards, they all raced for the bridge, and whichever won
-   became the tab the agent drove — leaving the human no way to choose. It still
-   survives a reload, which a plain `useState` would not.
+   line-wrap and viewfinder, **and the Agent Link service origin**). Never
+   tokens/secrets. Two pieces of Agent Link state are deliberately *not* in
+   `AppConfig` and live in `sessionStorage` instead, because config is shared by
+   every tab on the origin:
+   - **The on/off switch** (`loadAgentLink`/`saveAgentLink`). In config it was
+     shared by the whole origin, so switching it on once armed every tab
+     afterwards, they all raced for the bridge, and whichever won became the tab
+     the agent drove — leaving the human no way to choose.
+   - **The pairing code** (`loadPairingCode`/`savePairingCode`), for that reason
+     and one more: it is the name *this tab* answers to, so sharing it across the
+     origin would make every tab answer to the same code and reintroduce exactly
+     that race.
+
+   Both survive a reload, which a plain `useState` would not — and for the code
+   that matters twice over, since coming back under a different one would strand
+   an agent holding a code that reaches nothing. **`AppConfig.relayOrigin` is the
+   opposite case and belongs in config**: *where the service is* is a property of
+   the deployment, not of one tab, and it is a URL rather than a credential.
 4. **Every read/write server action takes a caller-supplied `branch`** — there
    is no fixed branch constant. The selected `{owner, name, defaultBranch,
    branch}` (`RepoRef`, `lib/types.ts`) lives in `AppConfig.repo`;
@@ -92,12 +103,25 @@ surface and the export pipeline differ.
     live outside the canvas: behind it (the host element, for display) or
     composited around it (for export). Never hand Excalidraw a background color and
     expect it back.
-12. **Agent Link's token route must never gain CORS headers.**
-   `app/api/agent/token/route.ts` is readable only same-origin, and *that* — not
-   the signature on the token — is what stops any web page from driving the user's
-   editor over a WebSocket (WebSockets have no same-origin policy; `fetch` does).
-   Nor may `mcp/verify.ts` fetch a JWKS before checking `iss` against its pinned
-   list. See "An agent can drive the live editor".
+12. **Agent Link: the pairing code is the credential, and TLS is not optional.**
+   Protocol 3 deleted the old token route along with the property that used to
+   guard it (its *absence* of CORS headers). The service now issues nothing: the
+   tab generates its own code client-side and the service buckets by
+   `sha256(code)`, so a hostile page can generate a code and pair with itself,
+   which is harmless — it cannot guess the user's. What replaces the old rule:
+   - **The service URL must be `https:`, or `http:` on `localhost`/`127.0.0.1`
+     port 7391.** Enforced on *both* sides, in one implementation each —
+     `validateRelayOrigin` (`lib/relayOrigin.ts`) and
+     `internal/config.ValidateRelayOrigin`. Plaintext anywhere else puts the code
+     and every document the tab reads on the wire in the clear.
+   - **The code never reaches a URL, a query string, or a log line.** Logs carry
+     an 8-character prefix of the hash at most.
+   - **The TS↔Go wire contract is guarded only by `ideate-relay/testdata/frames/`.**
+     Add a frame, add its fixture in the same change — see §"The wire contract is
+     written twice".
+   - **Add no CORS configuration to the service.** Its two callers are a browser
+     opening a WebSocket (no same-origin policy, so no preflight) and an MCP
+     client, which is not a browser.
 13. **No agent tool may write to GitHub.** There is no commit tool, and rename and
    delete are deliberately not exposed either, because in this app they *are*
    commits. An agent's blast radius is the uncommitted working copy.
@@ -345,6 +369,28 @@ may touch at install time and can change that later. Consequences to keep in min
   `GITHUB_APP_INSTALL_URL` in `lib/config.ts`) builds the install links. It's the
   App's public URL name, not a secret.
 
+## Repository layout
+
+Two programs, two languages, one repo:
+
+```
+package.json          thin root: scripts delegating into app/, plus relay:*
+app/                  the Next.js app — every path in this document is relative
+  app/                …to here, so the router lands at app/app/
+  components/ lib/ public/ scripts/ types/
+  auth.ts proxy.ts next.config.ts tsconfig.json package.json .env.local
+ideate-relay/          Go: the Agent Link MCP server + tab relay
+  cmd/server/ internal/ testdata/frames/ Dockerfile README.md
+```
+
+**`app/app/` is not a typo.** The package directory and Next's router directory
+share a name; it is standard in monorepos and mildly confusing on first read.
+
+Only one JS package remains, so there are **no npm workspaces** — the root
+`package.json` holds no dependencies and delegates with `npm --prefix app`. Its
+`postinstall` runs the app's install, so a bare `npm install` at the root still
+works. `.env.local` lives in `app/`, because that is Next's working directory.
+
 ## Non-obvious file facts
 
 - `proxy.ts` — Next 16 request hook (the old `middleware.ts` convention);
@@ -363,12 +409,19 @@ may touch at install time and can change that later. Consequences to keep in min
   `ensureContrast`). No DOM: it must work on a color *before* it becomes a CSS
   string, which is why `applyThemeToSite` blends numerically instead of emitting
   `color-mix()` for anything it then has to measure.
-- `lib/agentProtocol.ts` — Agent Link's wire contract; types and constants
-  only, because it compiles under both tsconfigs (browser and node).
-- `lib/agentKey.server.ts` — `server-only`, like `lib/session.server.ts`.
-- `mcp/` — the MCP server. Excluded from the root tsconfig; typechecked by
-  `tsconfig.mcp.json` and emitted by `tsconfig.mcp.build.json`. Never writes to
-  stdout.
+- `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. It no
+  longer has to compile under two tsconfigs (the old constraint), but every frame
+  it declares needs a fixture in `ideate-relay/testdata/frames/`.
+- `lib/relayOrigin.ts` — the TLS rule for the Agent Link service origin, and the
+  `ws://`/`wss://` derivation. Mirrored by `internal/config.ValidateRelayOrigin`,
+  whose test carries the same cases.
+- `lib/agentFrames.test.ts` — the only vitest file in the app, and the TypeScript
+  half of the cross-language wire guard. Its frames must stay hand-written
+  literals: deriving one from the fixture it is compared against would assert that
+  a file equals itself.
+- `ideate-relay/` — a separate Go module, not part of any tsconfig. Unlike the Node
+  server it replaced it may log freely, since stdout is no longer a JSON-RPC
+  channel; it logs structured JSON to stderr anyway.
 - `types/markdown-it-emoji.d.ts` — the plugin ships no types.
 
 ## Rendering & theming
@@ -691,105 +744,170 @@ fetched yet — so the fetch effect only claims the file was created in this com
 when there is genuinely nothing more to page in; otherwise it asks the user to
 load more history.
 
-## Agent Link (beta) — an agent drives the live editor
+## Agent Link — an agent drives the live editor
 
-Shipped as **beta**, and the UI says so (a badge on `AgentLinkModal`'s title, plus
-the toolbar tooltip). What that buys is licence to change `PROTOCOL_VERSION` and the
-tool surface without a migration path: the two sides already refuse to talk on a
-mismatch (`CLOSE_PROTOCOL_MISMATCH`), so bumping it is a loud, diagnosable break
-rather than a silent one. Drop the beta label only once that stops being true.
+**The beta label is gone from the UI** (it was a badge on `AgentLinkModal`'s title
+and a word in every toolbar tooltip), so the licence it carried — change
+`PROTOCOL_VERSION` and the tool surface with no migration path — is gone with it.
+What has not changed is the mechanism: the two sides refuse to talk on a mismatch
+(`CLOSE_PROTOCOL_MISMATCH`), so a bump is a loud, diagnosable break rather than a
+silent one. Which means **ship both ends of a bump together** — a version skew now
+strands a user who has no label telling them to expect it.
 
-`mcp/` is a Model Context Protocol server that hands a coding agent **the document
-open in the browser right now**, not a file on disk. That is the whole point: the
-agent edits, mermaid renders, and the renderer's verdict comes back in the result
-of the agent's own tool call, so a broken diagram gets fixed in the same turn. An
-agent editing files finds out when a human next opens them.
+`ideate-relay/` is a Model Context Protocol server that hands a coding agent **the
+document open in the browser right now**, not a file on disk. That is the whole
+point: the agent edits, mermaid renders, and the renderer's verdict comes back in
+the result of the agent's own tool call, so a broken diagram gets fixed in the same
+turn. An agent editing files finds out when a human next opens them.
 
-**The MCP process listens and the browser dials out** (`ws://127.0.0.1`). Not a
-preference — a web page cannot open a listening socket, and Next route handlers get
-no access to the HTTP upgrade. Everything awkward follows from that inversion: the
-socket belongs to the *agent's* process, which starts and stops with an agent
-session, while the tab stays open for days. So "Agent Link: on" means *keep trying
-to connect*, disconnection is the resting state, and `BRIDGE_PORTS`
-(`lib/agentProtocol.ts`) is walked one port per reconnect attempt — never scanned in
-parallel, which is the behaviour Chrome's Local Network Access work exists to
-discourage. Neither side reads a port from the environment: one shared constant
-means they agree by construction rather than by the user keeping two settings in
-step.
+### One remote service, and why the socket turned around
 
-`lib/agentProtocol.ts` is the wire contract and must stay **types and constants
-only** — it compiles under both `tsconfig.json` (DOM, no emit) and
-`tsconfig.mcp.json` (node, emitted), and an import would break one of them.
+```
+agent ──MCP Streamable HTTP──► ideate-relay (Go) ──WebSocket──► browser tab
+```
+
+Until protocol 3 this was inverted: the MCP server was a Node process on the user's
+own machine that **listened** on `ws://127.0.0.1:7391-7395`, and the tab dialled out
+to it. That was forced rather than chosen — a web page cannot open a listening
+socket — and it had to go, for reasons no amount of care would have fixed:
+
+- **Safari could not use it at all.** No loopback exemption for mixed content, so
+  `ws://127.0.0.1` from an `https://` page is blocked outright. Chrome's Local
+  Network Access work is heading the same way.
+- **Only an agent on the same machine could reach the tab.** Containers,
+  Codespaces, SSH boxes and browser-based agents were all impossible.
+- Everything awkward about the old design — the port walk, the `Origin` allowlist
+  doing security work, the whole JWT/JWKS apparatus — existed *only* to make a
+  loopback listener safe. Inverting the socket deleted all of it in one go.
+
+The tab is still the WebSocket client; it just dials a service instead of loopback.
+**A pairing code the tab generates, and the human hands to their agent, joins the
+two halves.** The honest cost, and it belongs in the README: **Agent Link no longer
+works offline.**
+
+`lib/agentProtocol.ts` is the wire contract. It has lost its old "must compile under
+two tsconfigs" rule — the app is its only TypeScript consumer now — and gained a
+cross-language mirror in its place; see below.
 
 ### Which tab, and whose decision
 
 Two deliberate steps gate this, one on each side, and they answer different
-questions.
+questions. This is unchanged by the transport, and it is the part most worth not
+breaking.
 
-**Which tab** is the human's answer, given by switching Agent Link on there — hence
-the per-tab `sessionStorage` scoping in rule 3. The bridge holds exactly one tab
-(`CLOSE_SLOT_TAKEN` turns away any second one), so the MCP server cannot choose and
-is never even told another tab exists. Relaxing that to a pool the agent picks from
-is a plausible extension — the plumbing already separates holding from attaching —
-but it would move the choice away from the human, so it is not the default.
+**Which tab** is the human's answer, given by switching Agent Link on there and
+handing over that tab's code — hence the per-tab `sessionStorage` scoping in rule 3.
+One code holds one tab (`CLOSE_SLOT_TAKEN` turns away any second one), so the
+service never chooses.
 
-**Whether to drive it** is the agent's answer, given by calling `ideate_connect`.
-An authenticated tab is parked as *waiting* and every command that touches the
-document is refused until then, because this process starts when an agent session
-starts, which is nobody's decision: adopting whichever tab was open would mean
-editing a human's document with no one having chosen to. `ideate_status` is the one
-tool allowed through unattached, and it returns metadata only — never content — so
-an agent can say what attaching would give it without first helping itself.
+**Whether to drive it** is the agent's answer, given by calling `ideate_connect`. A
+paired tab is parked as *waiting* and every command that touches the document is
+refused until then, because a pairing code existing is nobody's decision: adopting
+whichever tab was paired would mean editing a human's document with no one having
+chosen to. `ideate_status` is the one tool allowed through unattached, and it returns
+metadata only — never content — so an agent can say what attaching would give it
+without first helping itself.
 
-`lib/agentLink.ts` therefore has three live states, and conflating them makes the
-toolbar lie: `linked` (this tab holds the bridge, nothing can touch the document)
-is not `attached` (an agent claimed it and can edit now).
+`lib/agentLink.ts` therefore has these live states, and conflating them makes the
+toolbar lie: `paired` (this tab holds its code, nothing can touch the document) is
+not `attached` (an agent claimed it and can edit now).
 
-### Security: two controls, and only one of them is load-bearing
+**`full` is its own state and not a flavour of `blocked`**, because the two want
+opposite behaviour. `blocked` (a protocol mismatch) means retrying is pointless;
+capacity frees up, so it is not — but hammering a full service is not how to wait
+for it either. So `full` stops the automatic loop and waits for an explicit Retry,
+which also holds the message still long enough to read.
 
-WebSockets have **no CORS and no same-origin policy**. `new
-WebSocket('ws://127.0.0.1:7391')` from any page opens a real bidirectional channel
-the moment the server accepts the handshake — nobody is asked. So an unguarded
-bridge could be claimed by an ad iframe, which would then answer the agent's
-commands, harvest the repo content it reads, and feed poisoned text back as "your
-document": prompt injection into the user's own agent.
+### Security: the code is the credential
 
-1. **`Origin` allowlist** on the handshake (`mcp/bridge.ts`). Browsers must send it
-   and page JS cannot forge it, so this reliably rejects other pages. An absent
-   `Origin` means a non-browser client and is refused outright. Cheap pre-filter.
-2. **A signed, single-use connection token** — this is the one that matters. The tab
-   mints it from `/api/agent/token` before connecting. **The security is the absence
-   of CORS headers on that route, not the signature**: a signature only proves
-   "Ideate minted this", but `fetch` *does* have a same-origin policy, so only
-   same-origin JS can ever read the response. It launders the connection through a
-   channel where the same-origin policy applies and carries the proof into the
-   channel where it does not. **Never add `Access-Control-Allow-Origin` there.**
+WebSockets have **no CORS and no same-origin policy**, and that fact used to drive
+the whole design. It no longer does, because there is nothing on the socket worth
+claiming: the service issues nothing, holds nothing durable, and buckets purely by
+`sha256(code)`. A hostile page can generate its own code and pair with itself, which
+is harmless. It cannot guess the user's.
 
-Two rules inside the token path that look like detail and are not:
+So the old "the security is the absence of CORS headers on the token route" property
+did not move — it **disappeared**, along with the route. What carries the weight now:
 
-- **`mcp/verify.ts` checks `iss` against a pinned list *before* fetching any
-  JWKS.** Trusting `iss` and fetching the key it names verifies happily against a
-  hostile deployment signing with its own key — the check would prove nothing.
-- **`createRemoteJWKSet` refetches on an unknown `kid`**, which is what absorbs key
-  rotation. `lib/agentKey.server.ts` generates an ephemeral keypair per dev server
-  process (so local setup needs no key at all), so every `next dev` restart rotates
-  the key under a running MCP process. Production must have a stable
-  `IDEATE_AGENT_PRIVATE_KEY` and fails loudly without one.
+1. **The pairing code**, 8 characters of Crockford base32 (2^40), which only holds up
+   because guesses are rationed: a per-IP token bucket on `/mcp` and `/v1/tab`, plus a
+   much tighter per-IP counter on codes matching no tab. The general limiter has to run
+   *before* the body is parsed, since the code arrives as a tool argument and cannot be
+   read until after — which is why it is keyed on the address rather than on the code.
+2. **TLS**, per rule 12, enforced on both sides in one implementation each.
 
-A local process can still spoof `Origin`, and if it can read the browser profile it
-can reach a token — but such a process can already read `~/.ssh` and every repo on
-disk, the same footing as the Docker socket. Tokens are **per-connection and held in
-memory**, never in localStorage (rule 3).
+The `Origin` allowlist on the tab handshake survives as a **soft** control: it stops
+the service being used as free infrastructure by unrelated pages. It is not the
+security control, and the code comments say so — a browser cannot forge `Origin` but
+a local process can, and neither can guess a code.
 
 **There is no commit tool, and rename/delete are not exposed either** — in this app
-those *are* commits (`renameFile`/`deletePaths` push to the branch), so exposing
-them would break the guarantee that an agent cannot write to the user's repository.
+those *are* commits (`renameFile`/`deletePaths` push to the branch), so exposing them
+would break the guarantee that an agent cannot write to the user's repository.
 `ideate_create_file` is offered because it is genuinely local: it does exactly what
 the create prompt does, leaving an uncommitted document with `loadedSha === null`.
 The blast radius is the working copy: on screen, and one ⌘Z away.
 
-**`mcp/` must never write to stdout.** That is the MCP stdio channel; a stray line
-corrupts the protocol. Diagnostics go to stderr.
+The standing risk is prompt injection, and none of this changes it: an agent reads
+documents from the user's repo, and a `.md` file can contain instructions aimed at
+it. That is why there is no commit tool.
+
+### The code is a tool argument, not a header — and that is the point
+
+Every tool takes a required `code`. An `Authorization: Bearer` header is the more
+standard remote-MCP shape and would keep the credential out of the model's context,
+but a header lives in client config — so switching which tab is driven would mean
+re-running `claude mcp add` and tearing down the MCP connection. **Switching tabs
+mid-session is a hard requirement**, and only an argument gives it: the human names a
+different code and the next call lands on a different tab.
+
+The `code` argument's *description* is what makes that work in practice, so keep its
+last clause. Accepted costs: the code appears repeatedly in agent transcripts (the
+same exposure as typing it into chat), and the bucket cannot be resolved until the
+body is parsed.
+
+MCP runs **stateless** — no `Mcp-Session-Id` binding, since every request carries its
+own code. That removes a map and a session lifecycle. It does *not* make the service
+stateless: the registry of live tab sockets is irreducible, and both ends of a pairing
+must live in one process to be piped. Hence no Redis, no Postgres, and no horizontal
+scaling without sharding — and no datastore either, because every record describes a
+connection that dies with the process.
+
+Losing the stateful session is why **attachment needs an idle timeout**: a stateful
+server would detach on client teardown for free, and without it a killed agent leaves
+the toolbar claiming somebody can edit the document. It is wanted regardless — a
+stateful client can also vanish without a clean teardown.
+
+### Two things the transport cannot say out loud
+
+- **529 cannot reach a browser.** A rejected WebSocket handshake surfaces in the tab
+  as `onclose` 1006 with an empty reason, indistinguishable from the service being
+  down. So the capacity refusal reaches the tab as `CLOSE_RELAY_FULL` on an
+  **accepted** socket, and the readable 529 lives on `/v1/capacity` where a
+  non-browser client can see it.
+- **A grace-window rejoin must re-send `attached`.** A bucket outlives its tab socket
+  by `TAB_GRACE`, so a reload keeps the agent's attachment — but the reloaded tab has
+  no memory of it, and without the re-send the toolbar would show nobody attached
+  while an agent carried on editing.
+
+### The wire contract is written twice
+
+`lib/agentProtocol.ts` and `ideate-relay/internal/protocol` are hand-mirrored, and the
+compiler that used to hold them together is gone. `ideate-relay/testdata/frames/` is
+the replacement, and it only works if all three locks are held:
+
+1. `lib/agentFrames.test.ts` builds each frame as a **typed TypeScript literal** and
+   asserts it deep-equals the fixture. `tsc` checks the literal, so moving the TS types
+   forces a change here.
+2. The Go tests decode every fixture with `DisallowUnknownFields` and re-encode it. A
+   field Go is missing, has misnamed, or drops on the way out fails.
+3. **A frame with no fixture is checked by neither**, so add the fixture in the same
+   change as the frame. A fixture written afterwards is written against whatever the
+   code already does, which is what it was supposed to be checking.
+
+Round-tripping is why optionality is load-bearing on the Go side: `read` with no
+`path` and `scene_get` with `full: false` have their own fixtures precisely because a
+bare `string`/`bool` with `omitempty` round-trips both of them wrong.
 
 ### Edits land as CodeMirror transactions, and the echo guard is why they survive
 
@@ -816,6 +934,13 @@ Two things here were bugs found by running it, not by typechecking:
   next render — reading state back here reported on the document as it was *before*
   the edit, so breaking a diagram looked clean and fixing it looked broken.
 
+**Known, unfixed:** `ideate_write` immediately followed by `ideate_edit` can race.
+`writeText` goes through React state while `applyEdits` resolves anchors against the
+*live* CodeMirror document, so the edit can look for text the editor has not received
+yet and fail with "oldText not found". It predates protocol 3 and the remote
+transport makes it *less* likely, not more. The fix, if it is wanted, is to route
+`writeText` through the editor handle when one is mounted.
+
 ### Scene edits go through `setText`, and route their own arrows
 
 `lib/sceneEdit.ts` reaches `@excalidraw/excalidraw` only through a per-function
@@ -832,36 +957,43 @@ each target's `boundElements`, or dragging the shape leaves the arrow behind. Do
 it ourselves is also what lets an arrow attach to something already on the canvas,
 which the converter cannot do (it only resolves ids inside its own batch).
 
+The tool schema flattens the add/update/delete union into one object, because a JSON
+Schema generated from a Go struct cannot express a discriminated union. That loses the
+schema's ability to say "id is required for update"; `internal/tools.sceneOps` says it
+instead, in a message naming the op and the missing field. A worse schema and a better
+error — and the error is what the agent actually reads when it gets it wrong.
+
 ### Running it
 
-Every MCP client takes a command and its arguments, so the setup shown in the modal
-is exactly that pair and nothing vendor-specific:
+The service is remote, so an MCP client needs a URL rather than a command:
 
 ```
-command  npx
-args     -y  github:hasathcharu/ideate
+claude mcp add --transport http ideate https://<service>/mcp
 ```
 
-From a checkout, the command to give a client is `npx tsx mcp/index.ts`. **Not
-`npm run mcp`**: `npm run` prints its `> pkg@ver script` banner to *stdout*, which is
-the JSON-RPC channel, so it corrupts the stream before the server emits anything.
-The script stays for running the server by hand; `--silent` also fixes it. This is
-the same stdout-is-sacred rule as inside `mcp/`, one level up.
+Run once. After that the **pairing code** is the only thing that changes, and it is
+how the human points an agent at a different tab. A stdio-only client can front it
+with `npx mcp-remote https://<service>/mcp`.
 
-The `npx -y github:hasathcharu/ideate` form works through `bin` → `mcp/bin.mjs` → `dist-mcp/`, built by the **`prepare`**
-script — the hook npm runs for a git dependency after installing devDependencies and
-before packing, and the only place a from-GitHub install can be built. The `files`
-allowlist is what gets `dist-mcp/` into the tarball at all (it is gitignored) and
-keeps the app itself out; `scripts/vendor-excalidraw-assets.mjs` therefore checks for
-`app/` and skips, since `postinstall` would otherwise copy 13MB of fonts into a
-consumer that never renders a canvas.
+Locally, from a checkout:
 
-**The git-install path still pulls the app's whole dependency tree — ~1050 packages,
-~840MB — because the server shares the root `package.json`.** Measured, not
-estimated. Slimming it means publishing the server as its own package with only its
-four runtime deps (`@modelcontextprotocol/sdk`, `ws`, `zod`, `jose`); it is not
-fixable by editing `files`, and moving the app's deps to `devDependencies` to achieve
-it would risk any deploy that installs with `--omit=dev`.
+```bash
+npm run relay:dev      # go run ./cmd/server on :7391
+npm run dev            # the app
+claude mcp add --transport http ideate-local http://localhost:7391/mcp
+```
+
+Without a checkout, the service is published as
+`docker.io/hasathcharu/ideate-agent-relay` and takes no configuration:
+`docker run --rm -p 7391:7391 hasathcharu/ideate-agent-relay`. The same command is
+offered inside **Agent Link → Advanced options**, beside the field that points the
+tab at the result — the docs link there is for the environment variables, not for
+the one line that gets you running.
+
+Then point the tab at it in **Agent Link → Advanced options**. `http://localhost:7391`
+is the one plaintext origin either side accepts (rule 12); 7391 is the old bridge
+port, kept because it is the number in everyone's muscle memory.
+
 
 ## Export
 
@@ -958,22 +1090,51 @@ records (rule 10).
 ## Verify
 
 ```bash
-npm run typecheck && npm run build
+npm run typecheck && npm run build && npm --prefix app run test
+cd ideate-relay && go vet ./... && go test -race ./...
 ```
 
-`typecheck` covers both programs — the Next app and `mcp/`. The MCP server has a
-third build worth running before trusting the `npx` path, since `prepare` is the
-only thing that produces it:
+`typecheck` now covers one program (the Next app); the Go module is checked by its
+own toolchain. `npm --prefix app run test` is the frame-fixture guard and nothing
+else — it is the only vitest file in the repo, and it exists because the compiler
+no longer keeps the two ends of the wire in agreement.
+
+**Agent Link's behaviour is not reachable by any of that**, and this is where the
+bugs actually are. Four real ones have been found only by driving it: the
+lost-every-second-edit race, diagnostics reporting on the pre-edit document, the Go
+SDK's own 4MiB body limit silently overriding `MAX_BODY_BYTES`, and a close code
+that could never reach the tab because cancelling a read tears the socket down
+before the close frame goes out. So drive it, end to end, in `?mode=local` with no
+repo connected:
 
 ```bash
-npm run build:mcp && node mcp/bin.mjs
+npm run relay:dev                                                   # :7391
+NEXT_PUBLIC_RELAY_ORIGIN=http://localhost:7391 npm run dev
+claude mcp add --transport http ideate-local http://localhost:7391/mcp
 ```
 
-The bridge's own behaviour is not reachable by typechecking, and two real bugs in it
-were found only by driving it (the lost-every-second-edit race, and diagnostics
-reporting on the pre-edit document). Exercise it for real: `npm run dev`, switch on
-the plug icon in the toolbar, and drive the tools from an agent — then send edits
-faster than a human could and confirm none are dropped.
+Switch Agent Link on, read the code, `ideate_connect` with it, write a *broken*
+diagram and confirm **the renderer's diagnostics come back in the tool result** —
+that loop is the whole reason the feature exists. Then walk the matrix, none of
+which typechecking can see:
+
+- wrong code → refused; repeated wrong codes trip the limiter
+- **two tabs, switching between them mid-session by naming the other code** — the
+  requirement this design exists to serve
+- Regenerate → the old code stops working, the new one works, no reconfiguration
+- agent restart → same code still works, no re-pair
+- service restart → both sides reconnect, one re-pair
+- tab reload → rejoins inside `TAB_GRACE`, agent keeps its attachment
+- kill the agent → the attachment idles out and the toolbar stops claiming an agent
+  can edit
+- `MAX_WS_SESSIONS=1`, then a second tab → 4005, the modal shows the capacity copy
+  with a working Retry, and `/v1/capacity` returns 529
+- **edits sent faster than React commits** — chain each edit's anchor on what the
+  previous one produced, so a dropped edit makes the *next* one fail loudly rather
+  than quietly ending up short
+- **Safari**, which is the reason for the break
+- a `.excalidraw` scene through the scene tools, and a markdown document with a
+  broken ```mermaid fence
 
 Excalidraw chrome that only appears in a particular state is easy to get wrong from
 a CSS grep alone (both the main-menu and bottom-bar selectors were wrong on the first

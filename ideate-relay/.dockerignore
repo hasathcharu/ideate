@@ -1,0 +1,7 @@
+# Only cmd/, internal/ and the module files are needed to build. Everything else
+# is either the app (a different language and a different image) or test data.
+*
+!cmd/
+!internal/
+!go.mod
+!go.sum

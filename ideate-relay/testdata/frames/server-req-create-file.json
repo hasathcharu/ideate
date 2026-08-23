@@ -1,0 +1,5 @@
+{
+  "t": "req",
+  "id": 8,
+  "command": { "cmd": "create_file", "path": "notes/untitled.md", "content": "# Untitled\n" }
+}
