@@ -37,8 +37,17 @@
  *  "the open document" and started meaning "a document in the repo, the open one
  *  by default" — see `Command` below. A break rather than an additive change
  *  because the *results* grew fields too, and a tab that answers `edit` without
- *  saying which document it edited is exactly the ambiguity the path introduces. */
-export const PROTOCOL_VERSION = 4
+ *  saying which document it edited is exactly the ambiguity the path introduces.
+ *
+ *  5: the agent can see the theme (`BridgeState.theme`, and the colors on
+ *  `SceneElementSummary`), and `create_canvas` was added. Additive in shape, and a
+ *  break all the same, for the reason 4 was: nothing in these types distinguishes
+ *  a tab that reports its theme from one that answers `status` without the field,
+ *  and an agent that reads no theme is an agent that hardcodes colors into a
+ *  document the app was going to theme at render time. Same for the command — an
+ *  older tab would refuse `create_canvas` as unknown, which reads as the tool
+ *  being broken rather than as the two ends being different vintages. */
+export const PROTOCOL_VERSION = 5
 
 /** Where the tab opens its WebSocket, under the configured service origin. */
 export const TAB_PATH = '/v1/tab'
@@ -174,9 +183,9 @@ export type SceneOp = SceneAddOp | SceneUpdateOp | SceneDeleteOp
  * exactly as an omitted path would, or the human's undo history and cursor would
  * depend on which spelling the agent happened to pick.
  *
- * `open` and `create_file` have always required a path, because a command whose
- * entire purpose is to change *which* document is open cannot default to the
- * current one.
+ * `open`, `create_file` and `create_canvas` have always required a path, because a
+ * command whose entire purpose is to change *which* document is open cannot
+ * default to the current one.
  */
 export type Command =
   | { cmd: 'status' }
@@ -186,6 +195,18 @@ export type Command =
   | { cmd: 'write'; path?: string; text: string }
   | { cmd: 'open'; path: string }
   | { cmd: 'create_file'; path: string; content?: string }
+  /** A new canvas, drawn and **opened** in one command.
+   *
+   *  Both halves of that already existed and neither did the job: `create_file`
+   *  can make a `.excalidraw` file, but its content argument is raw scene JSON —
+   *  element records with ids, bindings, seeds and measured text boxes — which is
+   *  not something to ask a model to author. `scene_edit` creates the file its
+   *  path names and draws into it properly, but deliberately does **not** move the
+   *  editor, because it exists to work on files the human is not looking at. A new
+   *  canvas is the one case where they should be looking at it: nothing was there
+   *  to browse away from, and a drawing nobody is shown may as well not have been
+   *  drawn. */
+  | { cmd: 'create_canvas'; path: string; ops?: SceneOp[] }
   | { cmd: 'check'; path?: string }
   | { cmd: 'scene_get'; path?: string; full?: boolean }
   | { cmd: 'scene_edit'; path?: string; ops: SceneOp[] }
@@ -200,6 +221,28 @@ export type CommandName = Command['cmd']
  *  keeps its no-imports rule. */
 export type DocKind = 'mermaid' | 'markdown' | 'excalidraw'
 
+/**
+ * The palette the app is rendering with, which the agent has to know about
+ * because it is **not in the document**.
+ *
+ * A mermaid theme lives in `AppConfig.mermaidConfig` and is injected at render
+ * time; the file on the branch holds bare ```mermaid fences. So an agent that
+ * writes `style A fill:#f00` has not colored a node, it has opted that node out
+ * of every theme the human ever picks — and it had no way to know that until this
+ * field existed.
+ *
+ * `mode` is the same light/dark the canvas runs in (`resolveThemeMode`), and it is
+ * reported for a *different* reason: Excalidraw renders dark mode as a filter over
+ * the whole canvas, so scene colors are authored light and inverted on display.
+ * Knowing the mode is how an agent knows not to "help" by picking dark ones.
+ */
+export interface StateTheme {
+  /** The preset's id (`'tokyo-night'`), `'custom'` for a hand-tuned palette, or
+   *  null when no theme is set and mermaid's own default look applies. */
+  name: string | null
+  mode: 'light' | 'dark'
+}
+
 /** Pushed by the tab whenever the answer changes, so `ideate_status` is accurate
  *  without a round trip and the MCP can reject a text tool aimed at a scene
  *  before spending one. */
@@ -211,6 +254,9 @@ export interface BridgeState {
   dirty: boolean
   lineCount: number
   charCount: number
+  /** Never omitted, like `repo` and `openPath`: the TypeScript declares it
+   *  required, so an absent key would arrive as undefined. */
+  theme: StateTheme
 }
 
 export interface StatusResult extends BridgeState {
@@ -289,6 +335,14 @@ export interface SceneElementSummary {
   width: number
   height: number
   text: string | null
+  /** The element's own colors, so an addition can match what is already on the
+   *  canvas. Reported because a scene *is* its colors — unlike a mermaid diagram
+   *  there is no theme layer to re-resolve them, so the only way to be consistent
+   *  with the neighbours is to have seen them. Omitting these was what forced an
+   *  agent to ask for `full` (the whole scene JSON) to answer a question about two
+   *  hex strings. */
+  strokeColor: string | null
+  backgroundColor: string | null
 }
 
 export interface SceneGetResult {

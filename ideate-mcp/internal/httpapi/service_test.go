@@ -157,6 +157,13 @@ func TestStatusWorksUnattachedAndReturnsNoContent(t *testing.T) {
 	if tabInfo["openPath"] != "diagrams/flow.mmd" {
 		t.Errorf("status did not report which document is open: %v", body["tab"])
 	}
+	// The theme is metadata about how the app *renders*, not about what the document
+	// says, so it belongs on the unattached side of the line with the rest of
+	// BridgeState — and an agent that cannot see it writes colors into files.
+	themeInfo, _ := tabInfo["theme"].(map[string]any)
+	if themeInfo["name"] != "tokyo-night" || themeInfo["mode"] != "dark" {
+		t.Errorf("status did not report the theme: %v", tabInfo["theme"])
+	}
 	// BridgeState has no field carrying document text, and this is the assertion
 	// that keeps it that way: adding one would leak the document to an unattached
 	// agent through this call.
@@ -506,6 +513,43 @@ func TestSceneOpValidation(t *testing.T) {
 		"code": testCode,
 		"ops":  []map[string]any{{"op": "add", "type": "arrow", "start": "a", "end": "b"}},
 	}).ok(t, "a bound arrow with no coordinates")
+}
+
+// create_canvas is the one tool that refuses a path outright rather than creating
+// what it was given: the extension is what decides the editor, so a .md path here
+// would produce a markdown document from a request to draw.
+func TestCreateCanvasValidation(t *testing.T) {
+	h := newHarness(t, nil)
+	tab, cs := h.pair(testCode)
+
+	call(t, cs, "ideate_create_canvas", map[string]any{"code": testCode, "path": ""}).
+		failsWith(t, "empty")
+	call(t, cs, "ideate_create_canvas", map[string]any{"code": testCode, "path": "notes/plan.md"}).
+		failsWith(t, "not a canvas")
+	// Bad ops are refused here, before the tab is asked to open anything — an
+	// invalid drawing must not leave a blank canvas in the human's editor.
+	call(t, cs, "ideate_create_canvas", map[string]any{
+		"code": testCode,
+		"path": "canvas/new.excalidraw",
+		"ops":  []map[string]any{{"op": "add", "type": "hexagon", "x": 0.0, "y": 0.0}},
+	}).failsWith(t, "rectangle")
+	if _, ok := tab.nextRequest(200 * time.Millisecond); ok {
+		t.Fatal("a refused create_canvas still reached the tab")
+	}
+
+	// No ops is a request for a blank canvas, not a malformed call.
+	tab.answer(func(cmd protocol.Command) any {
+		if cmd.Cmd != protocol.CmdCreateCanvas {
+			t.Errorf("tab was asked for %q", cmd.Cmd)
+		}
+		if cmd.Ops != nil {
+			t.Errorf("blank create_canvas forwarded %d ops", len(cmd.Ops))
+		}
+		return map[string]any{"path": "canvas/new.excalidraw", "created": true, "elementCount": 0}
+	})
+	call(t, cs, "ideate_create_canvas", map[string]any{
+		"code": testCode, "path": "canvas/new.excalidraw",
+	}).ok(t, "create_canvas with no ops")
 }
 
 func TestEditValidation(t *testing.T) {

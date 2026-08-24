@@ -25,6 +25,10 @@ Round-tripping is why optionality matters here as much as naming. `read` with no
 `path` and `scene_get` with `full: false` are separate fixtures precisely because
 a Go `string`/`bool` with `omitempty` would round-trip both of them wrong.
 
+`create_canvas` has a pair for the same reason, on a different field: with `ops` and
+without. A Go slice with `omitempty` round-trips both to the same bytes, and "open me
+a blank canvas" is a request rather than an omission.
+
 Which is also why every command that takes an optional `path` has **two**
 fixtures, one with the key and one without. Since protocol 4 that is `read`,
 `edit`, `write`, `check`, `scene_get` and `scene_edit`, and the pair matters more

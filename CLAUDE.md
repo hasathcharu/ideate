@@ -229,6 +229,16 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
   keeps browsing while the agent works — the exemption is the *untitled* document, which
   has no path to name. A path that matches no file is **created**, and `edit` resolves its
   anchors before creating anything so a failed anchor creates nothing.
+- **The theme is not in the document, so the agent is told it** (`BridgeState.theme`). A
+  mermaid theme is injected at render time and the file keeps bare fences, so colors
+  written into a diagram outlive every theme the human picks — the tool descriptions say
+  so, and must keep saying so. A **scene is the opposite**: it stores its own colors and
+  has no theme layer, so `scene_get` reports them for matching, and both ends tell the
+  agent to author *light* values whatever the mode is, because dark mode is a filter
+  (rule 11) that inverts a dark color into a light one.
+- **`create_canvas` opens what it makes; `scene_edit` deliberately does not.** That is the
+  only reason it is a separate tool — `scene_edit` creates a missing path too, but it
+  exists to leave the human's editor alone. Both validate ops before writing anything.
 - **A background edit writes a draft and lights the sidebar's dirty dot** (`writeBack`),
   and clears both when an edit restores the saved content. Nothing about this reaches
   GitHub — rule 13 is intact.

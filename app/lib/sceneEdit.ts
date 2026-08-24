@@ -600,6 +600,12 @@ function applyDelete(elements: ExcalidrawElement[], id: string): ExcalidrawEleme
     })
 }
 
+/** One color off an element, or null when the file does not carry it. */
+function colorOf(element: ExcalidrawElement, key: 'strokeColor' | 'backgroundColor'): string | null {
+  const value = (element as Partial<Record<typeof key, unknown>>)[key]
+  return typeof value === 'string' && value !== '' ? value : null
+}
+
 /**
  * What is on the canvas, compactly. The full scene JSON is enormous — mostly
  * per-element bookkeeping an agent has no use for — so the default answer is one
@@ -636,6 +642,13 @@ export function summarizeScene(
       width: Math.round(element.width),
       height: Math.round(element.height),
       text: labels.get(element.id) ?? (element as { text?: string }).text ?? null,
+      // A scene *is* its colors — there is no theme layer over a canvas the way
+      // there is over a mermaid diagram — so an agent adding to an existing drawing
+      // has to see them to match them. Nullable rather than defaulted: a scene file
+      // written by another tool may not carry them, and inventing Excalidraw's
+      // default here would report a color the element does not have.
+      strokeColor: colorOf(element, 'strokeColor'),
+      backgroundColor: colorOf(element, 'backgroundColor'),
     }))
 
   return {

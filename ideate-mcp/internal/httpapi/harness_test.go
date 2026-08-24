@@ -307,6 +307,7 @@ func (tab *fakeTab) pushState(state protocol.BridgeState) {
 
 func sampleState() protocol.BridgeState {
 	path := "diagrams/flow.mmd"
+	theme := "tokyo-night"
 	return protocol.BridgeState{
 		Mode:      "github",
 		Repo:      &protocol.StateRepo{Owner: "hasathcharu", Name: "ideate", Branch: "v3", DefaultBranch: "main"},
@@ -315,6 +316,7 @@ func sampleState() protocol.BridgeState {
 		Dirty:     true,
 		LineCount: 12,
 		CharCount: 214,
+		Theme:     protocol.StateTheme{Name: &theme, Mode: "dark"},
 	}
 }
 

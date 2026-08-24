@@ -13,6 +13,10 @@
     "kind": "mermaid",
     "dirty": true,
     "lineCount": 12,
-    "charCount": 214
+    "charCount": 214,
+    "theme": {
+      "name": "tokyo-night",
+      "mode": "dark"
+    }
   }
 }
