@@ -172,6 +172,47 @@ server would detach on client teardown for free, and without it a killed agent l
 the toolbar claiming somebody can edit the document. It is wanted regardless — a
 stateful client can also vanish without a clean teardown.
 
+### A redeployed tool list, and the one event that reveals a stale one
+
+The tools are registered once at boot, so no process ever observes its own list
+changing. A *client* does: it lists the tools at connect and keeps them for its
+session, so a service redeployed with a new tool leaves every connected agent driving
+the surface of the build it met. Nothing in the request/response flow corrects that —
+the agent simply never learns the tool exists, which is indistinguishable from the
+tool not existing.
+
+`tools: {listChanged: true}` was always advertised (the SDK infers it from a server
+having tools; `tools.Capabilities` now states it instead, because a mechanism resting
+on an inference is a mechanism that can be switched off by an upstream refactor). But
+until SEP-2575 it was undeliverable **here**: stateless mode answers `GET /mcp` with
+405 and every POST's session dies with its request, so there was no channel for a
+server-initiated notification. SEP-2575 adds one and adds it *only* for stateless
+servers — `subscriptions/listen` is a long-lived POST whose SSE stream is the channel.
+That is exactly this transport.
+
+The capability was never the missing piece, though; the **trigger** was. There is one
+observable that says somebody may be holding an older list: a client subscribing. It
+arrives either because the client is new — it just listed the tools, so a notification
+costs it one redundant `tools/list` — or because its stream died and it came back,
+which after a deploy is precisely the client holding the stale list. So a subscription
+is answered with a notification (`refresh.go`), coalesced on the trailing edge because
+a deploy brings every client back at once, and capped so a steady trickle of
+subscriptions cannot postpone the pulse forever. Silently never firing is the one
+failure mode that looks exactly like the bug.
+
+The notification has to be **provoked rather than sent**: the SDK owns the subscriber
+map and exposes no "notify this session", so the only lever is re-registering a tool,
+which `AddTool` treats as a change unconditionally. `Register` hands that closure over
+built from the first tool it registers, so no tool definition is written twice for the
+purpose.
+
+A client that never subscribes still cannot be told, and for it the recourse is the
+agent's own eyes: `ideate_status` reports `service.build` and `service.tools`, and the
+tool description tells the agent to compare that list against the `ideate_` tools it
+was given and to ask the human to reconnect if the service names one it lacks. Which
+makes the reported list load-bearing — a test asserts it is exactly what `tools/list`
+serves, because a wrong list is worse than no list.
+
 ### Two things the transport cannot say out loud
 
 - **529 cannot reach a browser.** A rejected WebSocket handshake surfaces in the tab
@@ -559,6 +600,12 @@ which typechecking can see:
 - tab reload → rejoins inside `TAB_GRACE`, agent keeps its attachment
 - kill the agent → the attachment idles out and the toolbar stops claiming an agent
   can edit
+- **restart the service while an agent is connected, having added a tool first** —
+  the new tool appears in the running agent's own list without anybody reconnecting
+  anything. `go test` covers the notification leaving the service; only a real client
+  proves it re-lists on receipt. If it does not, check that the client negotiated
+  SEP-2575 at all — a client that never opens a `subscriptions/listen` stream cannot
+  be told, and its fallback is `ideate_status`'s `service.tools`
 - `MAX_WS_SESSIONS=1`, then a second tab → 4005, the modal shows the capacity copy
   with a working Retry, and `/v1/capacity` returns 529
 - **edits sent faster than React commits** — chain each edit's anchor on what the

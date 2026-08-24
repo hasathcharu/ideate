@@ -31,6 +31,10 @@ import (
 
 const testCode = "K7QM4XZP"
 
+// testBuild stands in for the version main stamps into the binary. Distinct from
+// the Implementation version above so an assertion on it means something.
+const testBuild = "test-build"
+
 /* ------------------------------------------------------------------ */
 /* Clock                                                               */
 /* ------------------------------------------------------------------ */
@@ -112,7 +116,11 @@ func newHarness(t *testing.T, tune func(*config.Config)) *harness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "ideate", Version: "test"}, nil)
+	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "ideate", Version: "test"},
+		// The same capabilities the real server advertises: tools.listChanged is what
+		// the tool-list refresh rests on, and a test server that inferred it while the
+		// real one declared something else would prove nothing about the real one.
+		&mcp.ServerOptions{Capabilities: tools.Capabilities()})
 	api, err := httpapi.New(httpapi.Options{
 		Config: cfg, Registry: reg, MCP: mcpServer, Logger: log, BaseContext: ctx,
 		// The same clock the registry gets, so the CPU-usage window in /v1/stats is
@@ -122,7 +130,9 @@ func newHarness(t *testing.T, tune func(*config.Config)) *harness {
 	if err != nil {
 		t.Fatalf("httpapi: %v", err)
 	}
-	tools.Register(mcpServer, &tools.Deps{Registry: reg, UnknownCode: api.UnknownCodeLimiter()})
+	tools.Register(mcpServer, &tools.Deps{
+		Registry: reg, UnknownCode: api.UnknownCodeLimiter(), Build: testBuild, Logger: log,
+	})
 
 	server := httptest.NewServer(api.Handler())
 	t.Cleanup(server.Close)
@@ -343,6 +353,35 @@ func (h *harness) agent() *mcp.ClientSession {
 	}
 	h.t.Cleanup(func() { _ = cs.Close() })
 	return cs
+}
+
+// agentWatchingTools is an agent that cares when the tool list changes.
+//
+// Setting ToolListChangedHandler is what makes the SDK client open a SEP-2575
+// subscriptions/listen stream on connect, which is the only channel a stateless
+// server has for a server-initiated notification — so this client is also the
+// assertion that the channel exists at all.
+func (h *harness) agentWatchingTools() (*mcp.ClientSession, <-chan struct{}) {
+	h.t.Helper()
+	changed := make(chan struct{}, 8)
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "0"}, &mcp.ClientOptions{
+		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) {
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: h.server.URL + "/mcp",
+	}, nil)
+	if err != nil {
+		h.t.Fatalf("connect MCP client: %v", err)
+	}
+	h.t.Cleanup(func() { _ = cs.Close() })
+	return cs, changed
 }
 
 type toolCall struct {

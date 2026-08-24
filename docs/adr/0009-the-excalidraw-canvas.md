@@ -72,6 +72,17 @@ Three pieces make the canvas look like part of the app rather than an embed:
   canvas itself is cleared to `transparent`, so the surface renders at the exact
   theme color while the *drawing* still gets the dark-mode inversion that keeps
   strokes legible on it.
+- **Theme.** Imposed on *every* path into the editor — `initialData` at mount and
+  the external-sync `updateScene` alike — rather than passed as the `theme` prop
+  and left there. Excalidraw resolves an incoming scene's theme as
+  `actionResult.appState.theme || this.props.theme`, so the appState wins, and
+  `restore` fills a scene out to a *complete* appState whose theme defaults to
+  light because no scene file carries one. An agent edit (or a history restore, or
+  a late draft) arriving under a dark palette therefore dropped the canvas out of
+  dark mode until the palette changed or the file was reopened. Imposing it is
+  safe for the same reason `exportScale` is: `theme` is excluded from
+  `serializeAsJSON`, so it cannot dirty a file — unlike `viewBackgroundColor`,
+  which is why rule 10 has to take the opposite approach.
 - **Chrome.** `app/globals.css` remaps Excalidraw's own CSS custom properties
   (`--island-bg-color`, `--text-primary-color`, `--color-surface-*`,
   `--color-primary-*`, borders, buttons) onto the shadcn tokens `applyThemeToSite`

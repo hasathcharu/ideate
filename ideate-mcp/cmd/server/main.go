@@ -83,6 +83,9 @@ func run(log *slog.Logger) error {
 		Name:    "ideate",
 		Version: version,
 	}, &mcp.ServerOptions{
+		// Stated rather than inferred, and stated by the tool layer, which is the
+		// thing that depends on it. See tools.Capabilities.
+		Capabilities: tools.Capabilities(),
 		Instructions: "Ideate hands you the diagram, markdown document or canvas open in a " +
 			"human's browser right now. Every tool takes the pairing code shown in that " +
 			"tab's Agent Link dialog; call ideate_status with it first to see what is " +
@@ -105,6 +108,8 @@ func run(log *slog.Logger) error {
 	tools.Register(mcpServer, &tools.Deps{
 		Registry:    registry,
 		UnknownCode: api.UnknownCodeLimiter(),
+		Build:       version,
+		Logger:      log,
 	})
 
 	go sweep(ctx, registry, api)
