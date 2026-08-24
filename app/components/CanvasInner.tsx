@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { CaptureUpdateAction, Excalidraw, restore, serializeAsJSON } from '@excalidraw/excalidraw'
 import type { AppState, BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
@@ -55,6 +55,26 @@ export default function CanvasInner({
   viewMode = false,
   backgroundColor,
 }: CanvasInnerProps) {
+  /**
+   * Everything in `IMPOSED_APP_STATE`, plus the theme — imposed on *every* path
+   * into the editor, mount and external sync alike.
+   *
+   * The theme has to be spelled out here because `restore` (below) fills a scene
+   * out to a *complete* appState, `theme` included, and Excalidraw prefers the
+   * appState it is handed over the `theme` prop: `syncActionResult` resolves it as
+   * `actionResult.appState.theme || this.props.theme`. A scene file carries no
+   * theme of its own, so what `restore` hands back is its default — light. An
+   * external edit arriving while a dark palette was active therefore knocked the
+   * canvas out of dark mode, and it stayed out until the palette changed or the
+   * file was reopened. That is what an agent drawing on a canvas looked like:
+   * a scene ignoring the theme around it, fixed by navigating away and back.
+   *
+   * Safe to impose for the same reason as `exportScale`: `theme` is one of the
+   * keys Excalidraw excludes from `serializeAsJSON`, so forcing it can never
+   * dirty a file or reach a commit.
+   */
+  const imposedAppState = useMemo(() => ({ ...IMPOSED_APP_STATE, theme }), [theme])
+
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
@@ -229,13 +249,17 @@ export default function CanvasInner({
       elements: restored.elements,
       appState: {
         ...restored.appState,
-        ...IMPOSED_APP_STATE,
+        ...imposedAppState,
         ...(displayBackground ? { viewBackgroundColor: displayBackground } : {}),
       },
       // Capture into the undo stack so recovering a version can be undone.
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     })
-  }, [value, displayBackground])
+    // `imposedAppState` changes with the theme, but that can't re-run the body:
+    // a theme switch leaves `value` matching `lastTextRef`, so the guard above
+    // returns first. The theme itself is already on the live canvas by then —
+    // Excalidraw applies the `theme` prop on its own when it changes.
+  }, [value, displayBackground, imposedAppState])
 
   return (
     <div
@@ -269,7 +293,7 @@ export default function CanvasInner({
                 elements: initialScene.elements,
                 appState: {
                   ...initialScene.appState,
-                  ...IMPOSED_APP_STATE,
+                  ...imposedAppState,
                   ...(displayBackground ? { viewBackgroundColor: displayBackground } : {}),
                 },
                 files: initialScene.files,
@@ -277,7 +301,7 @@ export default function CanvasInner({
               }
             : {
                 appState: {
-                  ...IMPOSED_APP_STATE,
+                  ...imposedAppState,
                   ...(displayBackground ? { viewBackgroundColor: displayBackground } : {}),
                 },
               }

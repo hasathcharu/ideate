@@ -749,3 +749,68 @@ func TestStatsAbsentWithoutCredentials(t *testing.T) {
 		t.Errorf("stats with no credentials configured = %d, want 404", status)
 	}
 }
+
+/* ------------------------------------------------------------------ */
+/* The tool list                                                       */
+/* ------------------------------------------------------------------ */
+
+// The bug this fixes: the service is redeployed with a new tool, and an agent that
+// listed the tools against the previous build never hears about it. Nothing in a
+// request/response flow tells it, and a fresh process has no idea its own list is
+// news to anybody — the only observable that says "somebody may be holding an older
+// list" is a client subscribing.
+//
+// So a subscription has to be answered with a notification, and that is what this
+// asserts. It also asserts the channel underneath it: a stateless server answers
+// GET /mcp with 405, and subscriptions/listen is the only way a notification
+// reaches a client here at all.
+func TestSubscribingProvokesAToolListRefresh(t *testing.T) {
+	h := newHarness(t, nil)
+	_, changed := h.agentWatchingTools()
+
+	select {
+	case <-changed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no tools/list_changed after subscribing — a client that reconnected " +
+			"after a deploy would keep using the tool list of the build it left")
+	}
+}
+
+// A client that never subscribes cannot be told, so the recourse is that its agent
+// can read the surface and say so out loud. Which makes the reported list load
+// bearing: it has to be the list the server actually serves, or the agent's report
+// is worse than nothing.
+func TestStatusReportsTheToolSurface(t *testing.T) {
+	h := newHarness(t, nil)
+	tab := h.dialTab(testCode, protocol.Version)
+	tab.expectReady()
+	tab.pushState(sampleState())
+
+	cs := h.agent()
+	body := call(t, cs, "ideate_status", map[string]any{"code": testCode}).
+		ok(t, "ideate_status").decode(t)
+
+	service, _ := body["service"].(map[string]any)
+	if service["build"] != testBuild {
+		t.Errorf("service.build = %v, want %q", service["build"], testBuild)
+	}
+	reported := map[string]bool{}
+	for _, name := range service["tools"].([]any) {
+		reported[name.(string)] = true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	served, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("tools/list: %v", err)
+	}
+	if len(served.Tools) != len(reported) {
+		t.Errorf("status reported %d tools, tools/list serves %d", len(reported), len(served.Tools))
+	}
+	for _, tool := range served.Tools {
+		if !reported[tool.Name] {
+			t.Errorf("tools/list serves %q but status does not report it", tool.Name)
+		}
+	}
+}

@@ -181,7 +181,10 @@ that same YAML via `setThemeInYaml`/`setLayoutInYaml` rather than owning separat
 - **`scrollbar-color` must be declared on `*`** (it is inherited and resolves where
   declared). **Standard properties only**, with `::-webkit-scrollbar` behind
   `@supports not (scrollbar-color: auto)`. **`color-scheme` goes on `<html>`**, not `<body>`.
-- The canvas takes the *mode* of the active theme (`resolveThemeMode`). Excalidraw chrome
+- The canvas takes the *mode* of the active theme (`resolveThemeMode`), and that mode is
+  **imposed on every path into the editor** — `initialData` *and* the external-sync
+  `updateScene` — never left to the `theme` prop alone: Excalidraw prefers the appState it
+  is handed, and `restore` hands back a default light theme. Excalidraw chrome
   rules in `globals.css` are prefixed `body ` on purpose (specificity). The main-menu
   selector is `.main-menu-trigger` — **not** `dropdown-menu-button` or its `data-testid`.
   View-mode rules must stay scoped to view mode.
@@ -215,6 +218,14 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
 - **Ship both ends of a `PROTOCOL_VERSION` bump together.** The two sides refuse to talk
   on a mismatch (`CLOSE_PROTOCOL_MISMATCH`), and there is no longer a beta label warning
   users to expect it.
+- **A subscription is answered with `tools/list_changed`.** Tools are registered once
+  at boot, so nothing else ever tells a client that reconnected after a deploy that
+  its cached tool list is stale — a client subscribing is the only observable that
+  says somebody may hold an older one. Keep `tools.Capabilities` stating
+  `listChanged` rather than letting the SDK infer it, keep the pulse coalesced *and*
+  capped (never firing is the failure mode that looks like the bug), and keep
+  `ideate_status`'s `service.tools` exactly what `tools/list` serves — it is the only
+  recourse for a client that never subscribes.
 - **`paired` ≠ `attached`.** A paired tab is parked as *waiting*; every command that
   touches the document is refused until `ideate_connect`. `ideate_status` is the one tool
   allowed through unattached, and it returns metadata only — never content.

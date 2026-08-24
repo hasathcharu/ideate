@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,6 +47,16 @@ type Deps struct {
 	// looks like from here, and this is the only thing between an 8-character code
 	// and an attacker willing to spend a weekend.
 	UnknownCode *ratelimit.Limiter
+	// Build is the service's own version, reported by ideate_status. Diagnostic
+	// only — what the two ends actually agree on is protocol.Version.
+	Build  string
+	Logger *slog.Logger
+
+	// toolNames is the tool surface this build offers, filled in by Register.
+	// ideate_status reports it so an agent whose client cached an older build can
+	// say so, which is the only recourse left to a client that never subscribes for
+	// tool-list changes and therefore cannot be told (see refresh.go).
+	toolNames []string
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,7 +225,9 @@ type pointArg struct {
 // what tells an agent that `kind` decides text tools versus scene tools, and that
 // ideate_status is the thing to call first.
 func Register(server *mcp.Server, deps *Deps) {
-	mcp.AddTool(server, &mcp.Tool{
+	var surface toolSurface
+
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_connect",
 		Title: "Ideate: connect",
 		Description: "Attach to the Ideate browser tab holding this pairing code. Required " +
@@ -225,7 +238,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"want to check what is open before committing to it.",
 	}, deps.connect)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_disconnect",
 		Title: "Ideate: disconnect",
 		Description: "Let go of the tab. Agent Link stays switched on in the browser and the " +
@@ -234,7 +247,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"can edit their document.",
 	}, deps.disconnect)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_status",
 		Title: "Ideate: status",
 		Description: "What is open in the Ideate editor right now: mode (github/local), " +
@@ -244,10 +257,13 @@ func Register(server *mcp.Server, deps *Deps) {
 			"use the text tools or the scene tools, and the theme decides how to color " +
 			"things: the app applies that palette when it renders, so a diagram needs no " +
 			"colors of its own. Works before ideate_connect, so you can report what is open " +
-			"before attaching to it.",
+			"before attaching to it. The result also carries `service`: the build running " +
+			"and every tool it offers. If that list names an ideate_ tool you have not been " +
+			"given, your client is holding a tool list from an older build — tell the human, " +
+			"and ask them to reconnect the Ideate MCP server so the missing tools appear.",
 	}, deps.status)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_list_files",
 		Title: "Ideate: list files",
 		Description: "Every file the human can open: a diagram, a document or a canvas. In " +
@@ -256,7 +272,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"the human picked no repository.",
 	}, deps.listFiles)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_read",
 		Title: "Ideate: read",
 		Description: "Read a document. Omit `path` for the open document. A path reads that file " +
@@ -265,7 +281,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"text matches the saved copy.",
 	}, deps.read)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_edit",
 		Title: "Ideate: edit",
 		Description: "Replace exact strings in a document. Name the file in `path`. An edit to " +
@@ -282,7 +298,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"the human picks afterwards, which is rarely what they meant.",
 	}, deps.edit)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_write",
 		Title: "Ideate: write",
 		Description: "Replace all the content of a document. Name the file in `path`. If no " +
@@ -294,7 +310,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"in the file outlive it.",
 	}, deps.write)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_open",
 		Title: "Ideate: open file",
 		Description: "Open a file in the editor, so the human sees it. The other tools do not " +
@@ -302,7 +318,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"document, so switching loses nothing.",
 	}, deps.open)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_create_file",
 		Title: "Ideate: create file",
 		Description: "Create a new file and open it. It exists only in the browser as an " +
@@ -311,7 +327,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"document, .excalidraw for a canvas.",
 	}, deps.createFile)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_create_canvas",
 		Title: "Ideate: create canvas",
 		Description: "Draw a new Excalidraw canvas and open it, in one call. The path must " +
@@ -327,7 +343,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"anything holding a long label enough width for it.",
 	}, deps.createCanvas)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_check",
 		Title: "Ideate: check",
 		Description: "Report what the renderer thinks of a document. This tool changes nothing. " +
@@ -336,7 +352,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"same diagnostics. Use this tool only for text you did not write yourself.",
 	}, deps.check)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_scene_get",
 		Title: "Ideate: read canvas",
 		Description: "List the elements on an Excalidraw canvas. Omit `path` for the open " +
@@ -349,7 +365,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"a canvas up.",
 	}, deps.sceneGet)
 
-	mcp.AddTool(server, &mcp.Tool{
+	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_scene_edit",
 		Title: "Ideate: edit canvas",
 		Description: "Add, move, restyle or remove elements on an Excalidraw canvas. Name the " +
@@ -368,6 +384,31 @@ func Register(server *mcp.Server, deps *Deps) {
 			"failed — a canvas has no renderer to refuse it, which is exactly why you cannot " +
 			"see any of it — so read them and fix what they name.",
 	}, deps.sceneEdit)
+
+	// What ideate_status reports as this build's tool surface. Collected while
+	// registering rather than written out a second time, because a hand-kept list
+	// would drift and the whole point of reporting it is to be trusted.
+	deps.toolNames = surface.names
+	// And the notification that saves an agent from having to read it. See refresh.go.
+	announceRefresh(server, deps.Logger, surface.readd)
+}
+
+// toolSurface is what Register accumulates as it registers.
+//
+// readd re-registers one tool — whichever came first — and is the only way to make
+// the SDK emit notifications/tools/list_changed, which is why it is captured here
+// instead of a tool definition being repeated somewhere for the purpose.
+type toolSurface struct {
+	names []string
+	readd func()
+}
+
+func add[In, Out any](server *mcp.Server, s *toolSurface, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	s.names = append(s.names, t.Name)
+	if s.readd == nil {
+		s.readd = func() { mcp.AddTool(server, t, h) }
+	}
+	mcp.AddTool(server, t, h)
 }
 
 /* ------------------------------------------------------------------ */
@@ -420,9 +461,36 @@ func (d *Deps) status(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) 
 			"attached": false,
 			"hint":     "A tab holds this code. Call ideate_connect to attach before reading or editing.",
 			"tab":      s.State(),
+			"service":  d.service(),
 		})
 	}
-	return d.forward(ctx, s, protocol.Command{Cmd: protocol.CmdStatus})
+	return d.forwardStatus(ctx, s)
+}
+
+// forwardStatus is forward plus this build's own identity.
+//
+// Folded into the tab's object rather than sent as a second content block: an agent
+// reads one JSON document here, and a status answer split across two of them is a
+// worse trade than losing the tab's key order to a re-encode.
+func (d *Deps) forwardStatus(ctx context.Context, s *session.Session) (*mcp.CallToolResult, any, error) {
+	data, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdStatus})
+	if err != nil {
+		return nil, nil, translate(err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(data, &status); err != nil {
+		// Not an object, which should not happen. Pass the tab's answer through
+		// rather than lose it to a report about this service.
+		return textResult(string(data)), nil, nil
+	}
+	status["service"] = d.service()
+	return jsonResult(status)
+}
+
+// service describes the build answering, so a client running on a stale tool list
+// can be told by its own agent. See refresh.go for the case where it need not be.
+func (d *Deps) service() map[string]any {
+	return map[string]any{"build": d.Build, "tools": d.toolNames}
 }
 
 func (d *Deps) listFiles(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) (*mcp.CallToolResult, any, error) {
