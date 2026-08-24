@@ -106,6 +106,10 @@ export interface AgentLinkCapabilities {
   writeText: (text: string, path?: string) => Promise<Touched>
   openFile: (path: string) => Promise<void>
   createFile: (path: string, content: string | undefined) => void
+  /** Create a `.excalidraw` file, draw `ops` into it and open it. Async where
+   *  `createFile` is not, because the ops go through `applySceneOps` — which waits
+   *  on the fonts before it measures a single label. */
+  createCanvas: (path: string, ops: readonly SceneOp[]) => Promise<SceneEditResult>
   /** Diagnostics for `text` when given — the text an edit just produced, which is
    *  not yet anywhere else — else for the document `path` names, else for the open
    *  one. `path` also decides which *kind* the text is diagnosed as. */
@@ -483,6 +487,8 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
     case 'create_file':
       caps.createFile(command.path, command.content)
       return {}
+    case 'create_canvas':
+      return await caps.createCanvas(command.path, command.ops ?? [])
     case 'check':
       return await caps.check({ path: command.path })
     case 'scene_get':

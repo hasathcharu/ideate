@@ -325,13 +325,14 @@ Every environment variable and the security model are in
 
 | Tool | Does |
 |---|---|
-| `ideate_status` | What is open: repo, branch, path, kind, dirty, cursor |
+| `ideate_status` | What is open: repo, branch, path, kind, dirty, cursor, theme |
 | `ideate_list_files` | Every file in the repository, or in local mode the browser |
 | `ideate_read` | The working copy of the open document, or of any file |
 | `ideate_edit` | Anchored string replacements — one undo step, plus diagnostics |
 | `ideate_write` | Replace a document's whole content |
 | `ideate_open` | Open a file in the editor |
 | `ideate_create_file` | A new unsaved file, seeded from a template |
+| `ideate_create_canvas` | A new canvas, drawn and opened in one call |
 | `ideate_check` | Ask the renderer what it thinks, without editing |
 | `ideate_scene_get` | List the elements on an Excalidraw canvas |
 | `ideate_scene_edit` | Add / move / restyle / remove canvas elements |
@@ -344,6 +345,14 @@ changes as you browse, and an edit aimed at "the open document" would follow you
 A path that matches no file is created. Nothing is ever committed: an agent's
 changes land in the working copy, appear as unsaved in the file tree, and wait for
 you.
+
+`ideate_status` also reports the **theme**, because an agent otherwise has no way to
+know one exists. Diagram themes are applied when the app renders and the file keeps
+bare ```mermaid fences, so an agent that writes a hex color into a diagram has opted
+that node out of every theme you pick afterwards — the tools now say so. A canvas
+works the other way round: it stores its own colors, `ideate_scene_get` reports them
+so a new element can match the ones already there, and both ends know to author light
+colors even in dark mode, because dark mode is a filter over the whole canvas.
 
 ## Scripts
 

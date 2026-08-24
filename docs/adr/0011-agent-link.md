@@ -138,9 +138,9 @@ a local process can, and neither can guess a code.
 **There is no commit tool, and rename/delete are not exposed either** — in this app
 those *are* commits (`renameFile`/`deletePaths` push to the branch), so exposing them
 would break the guarantee that an agent cannot write to the user's repository.
-`ideate_create_file` is offered because it is genuinely local: it does exactly what
-the create prompt does, leaving an uncommitted document with `loadedSha === null`.
-The blast radius is the working copy: on screen, and one ⌘Z away.
+`ideate_create_file` and `ideate_create_canvas` are offered because they are genuinely
+local: they do exactly what the create prompt does, leaving an uncommitted document with
+`loadedSha === null`. The blast radius is the working copy: on screen, and one ⌘Z away.
 
 The standing risk is prompt injection, and none of this changes it: an agent reads
 documents from the user's repo, and a `.md` file can contain instructions aimed at
@@ -332,6 +332,61 @@ schema's ability to say "id is required for update"; `internal/tools.sceneOps` s
 instead, in a message naming the op and the missing field. A worse schema and a better
 error — and the error is what the agent actually reads when it gets it wrong.
 
+### The agent is told the theme, because the theme is not in the document
+
+Protocol 5. An agent asked to color a node used to have exactly one way to do it —
+write the color into the file — and that is the one thing it should not do. A mermaid
+theme lives in `AppConfig.mermaidConfig` and is **injected at render time**; the file
+on the branch holds bare ```mermaid fences. So `style A fill:#f00` does not color a
+node, it opts that node out of every theme the human picks afterwards, and there was
+nothing anywhere in the tool surface to say so. Adding `theme` to `BridgeState` and
+the reasoning to `ideate_edit`'s description is the whole fix: the agent can see there
+is a palette, and it is told the palette is applied later.
+
+**A canvas is the opposite case, and the same field carries it.** Excalidraw stores a
+literal `strokeColor` on every element — there is no token layer to re-resolve, so
+nothing about a scene *can* follow the theme. What makes scenes look theme-responsive
+is rule 11: dark mode is `filter: invert(93%) hue-rotate(180deg)` over the whole
+canvas. Which means an agent being helpful in the obvious way — the app is dark, so
+draw in light colors — produces a drawing that inverts to dark-on-dark. Hence
+`theme.mode` and the schema notes on the color fields: author light values, always,
+and the display handles the rest. The mermaid theme only ever contributes the canvas
+*mode* and the background painted behind it, never an element color.
+
+`SceneElementSummary` grew `strokeColor`/`backgroundColor` for the consequence of all
+that: a scene *is* its colors, so matching the neighbours means having seen them, and
+the only way to see them before was `full` — the entire scene JSON, to answer a
+question about two hex strings.
+
+Both are nullable, and neither is defaulted. A theme `name` is null when no theme is
+set and mermaid's own look applies; an element color is null when the file does not
+carry one. Substituting Excalidraw's default here would report a color the element
+does not have, which is worse than reporting nothing.
+
+### `ideate_create_canvas` exists because `scene_edit` deliberately will not open a file
+
+Both halves already existed and neither did the job. `create_file` can make a
+`.excalidraw` file, but its `content` is raw scene JSON — element records with ids,
+bindings, seeds and measured text boxes — which is not something to ask a model to
+author. `scene_edit` creates the file its path names and draws into it properly, but
+**leaves the editor where it is**, because it exists to work on files the human is not
+looking at, and yanking their editor around is the cost that buys.
+
+A brand-new canvas is the one case where that trade inverts: there is nothing to yank
+them away from, and a drawing nobody is shown may as well not have been drawn. So
+`create_canvas` is `create_file`'s path handling with `scene_edit`'s ops, and its last
+two lines are the reason it is a separate tool — it opens what it made.
+
+The ops are validated **twice on purpose**: `internal/tools.createCanvas` refuses a bad
+op before the tab is asked for anything, so a malformed drawing cannot leave a blank
+canvas open in the human's editor, and `applySceneOps` runs before anything is written
+so a failure leaves no half-made file. Same all-or-nothing rule `edit` follows. The
+extension check is also on both sides, because the tab is the side that would otherwise
+open a markdown document in response to a request to draw.
+
+`ops` is optional, and absent rather than empty is a request in its own right — "give
+me a blank canvas" — which is why it has its own fixture beside the drawn one.
+
 ### Running it
 
 The service is remote, so an MCP client needs a URL rather than a command:
@@ -414,3 +469,9 @@ which typechecking can see:
   created when the edit's anchor fails
 - **local mode with files**: create, save, rename, delete, and the same agent matrix
   against `km:file:` instead of a branch
+- **`ideate_status` after changing the Theme dropdown** — the reported `name` follows
+  it through preset → Custom (a hand-edited palette) → None, and `mode` flips with a
+  dark preset
+- **`ideate_create_canvas`** — the canvas opens with the drawing on it, a second call
+  on the same path is refused, a `.md` path is refused, a bad op leaves no file behind
+  and no blank canvas in the editor, and no ops at all opens an empty one

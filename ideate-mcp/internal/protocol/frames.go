@@ -32,7 +32,15 @@ import (
 // have to change for it — which is precisely why the version had to: nothing about
 // these types distinguishes a service that will forward a path on an edit from one
 // that will silently drop it, and dropping it edits the wrong document.
-const Version = 4
+//
+// 5 told the agent about the theme (BridgeState.Theme, and the colors the scene
+// summary now carries) and added create_canvas. Additive in shape, bumped for the
+// same reason 4 was: a tab that answers status without a theme is indistinguishable
+// from one whose human set no theme, and an agent that reads no theme hardcodes
+// colors into a document the app was going to theme at render time. An older tab
+// would also refuse create_canvas as an unknown command, which reads as a broken
+// tool rather than as two ends of different vintages.
+const Version = 5
 
 // Close codes, in the WebSocket private-use range (4000–4999), so they cannot
 // collide with the protocol's own and the tab can tell a refusal from the service
@@ -122,28 +130,29 @@ type SceneOp struct {
 	Points          []ScenePoint `json:"points,omitempty"`
 }
 
-// Command names of the ten commands a tab can be asked to run.
+// Command names of the eleven commands a tab can be asked to run.
 const (
-	CmdStatus     = "status"
-	CmdListFiles  = "list_files"
-	CmdRead       = "read"
-	CmdEdit       = "edit"
-	CmdWrite      = "write"
-	CmdOpen       = "open"
-	CmdCreateFile = "create_file"
-	CmdCheck      = "check"
-	CmdSceneGet   = "scene_get"
-	CmdSceneEdit  = "scene_edit"
+	CmdStatus       = "status"
+	CmdListFiles    = "list_files"
+	CmdRead         = "read"
+	CmdEdit         = "edit"
+	CmdWrite        = "write"
+	CmdOpen         = "open"
+	CmdCreateFile   = "create_file"
+	CmdCreateCanvas = "create_canvas"
+	CmdCheck        = "check"
+	CmdSceneGet     = "scene_get"
+	CmdSceneEdit    = "scene_edit"
 )
 
 // Command is the union of everything the tab can be asked to do, again flattened.
 // Cmd is the discriminant; every other field belongs to a subset of the commands.
 type Command struct {
 	Cmd string `json:"cmd"`
-	// Path is required for open and create_file, and optional for read, edit,
-	// write, check, scene_get and scene_edit — where absent means "the document
-	// the human has open". Absent and empty are therefore different commands, and
-	// the pointer is what keeps them apart; see the package comment.
+	// Path is required for open, create_file and create_canvas, and optional for
+	// read, edit, write, check, scene_get and scene_edit — where absent means "the
+	// document the human has open". Absent and empty are therefore different
+	// commands, and the pointer is what keeps them apart; see the package comment.
 	Path    *string    `json:"path,omitempty"`
 	Edits   []TextEdit `json:"edits,omitempty"`
 	Text    *string    `json:"text,omitempty"`
@@ -164,6 +173,18 @@ type StateRepo struct {
 	DefaultBranch string `json:"defaultBranch"`
 }
 
+// StateTheme is the palette the app renders with, which is not in the document.
+//
+// A mermaid theme is injected at render time and the file holds bare fences, so an
+// agent that writes colors into a diagram opts it out of every theme the human
+// picks. Mode is also what tells an agent to leave scene colors light: Excalidraw
+// renders dark mode as a filter over the whole canvas. Name is nullable but never
+// omitted, for the same reason as Repo below.
+type StateTheme struct {
+	Name *string `json:"name"`
+	Mode string  `json:"mode"`
+}
+
 // BridgeState is pushed by the tab whenever the answer changes, so ideate_status
 // can answer without a round trip and a text tool aimed at a scene can be refused
 // before one is spent.
@@ -178,6 +199,7 @@ type BridgeState struct {
 	Dirty     bool       `json:"dirty"`
 	LineCount int        `json:"lineCount"`
 	CharCount int        `json:"charCount"`
+	Theme     StateTheme `json:"theme"`
 }
 
 /* ------------------------------------------------------------------ */

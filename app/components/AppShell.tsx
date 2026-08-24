@@ -1140,8 +1140,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
       dirty,
       lineCount: text === '' ? 0 : text.split('\n').length,
       charCount: text.length,
+      // Reported so an agent stops hardcoding colors. The name is the dropdown's
+      // own answer minus its UI sentinels: a preset id, `custom` for a hand-tuned
+      // palette, null for no theme at all. `mode` is the same light/dark the canvas
+      // runs in, which is the part that matters for a scene.
+      theme: {
+        name:
+          currentTheme === NONE_THEME
+            ? null
+            : currentTheme === CUSTOM_THEME
+              ? 'custom'
+              : currentTheme,
+        mode: canvasTheme,
+      },
     }),
-    [githubEnabled, repo, openPath, kind, dirty, text],
+    [githubEnabled, repo, openPath, kind, dirty, text, currentTheme, canvasTheme],
   )
 
   /**
@@ -1431,6 +1444,48 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setLoadedSha(null)
       setBaseline('')
       setText(body)
+    },
+
+    // `createFile` for a canvas, with the drawing in the same call.
+    //
+    // Separate from `sceneEdit`'s create-if-missing path because of the last two
+    // lines: this one *opens* what it made. `sceneEdit` exists to work on files the
+    // human is not looking at and must not yank their editor around, but a canvas
+    // that did not exist a moment ago has nothing to yank them away from, and a
+    // drawing nobody is shown may as well not have been drawn.
+    createCanvas: async (path, ops) => {
+      if (!hasWorkspace) {
+        throw new Error('No repository is connected — nothing to create a canvas in.')
+      }
+      const invalid = validatePath(path)
+      if (invalid) throw new Error(invalid)
+      // The extension is the whole of `fileKind`, so this is the same check the
+      // service makes — kept here as well because the tab is the side that would
+      // otherwise open a markdown document in response to a request to draw.
+      if (fileKind(path) !== 'excalidraw') {
+        throw new Error(
+          `${path} is not a canvas: the extension decides the editor, and a canvas ends ` +
+            'in .excalidraw. Use ideate_create_file for a diagram or a document.',
+        )
+      }
+      if (repoFilePaths.includes(path)) {
+        throw new Error(`${path} already exists. Use ideate_scene_edit to draw on it.`)
+      }
+      // Drawn before anything is written, so a bad op leaves no half-made file
+      // behind — the same all-or-nothing rule `applyEdits` follows.
+      const drawn = ops.length
+        ? await applySceneOps(EMPTY_SCENE, ops)
+        : { text: EMPTY_SCENE, elementCount: 0 }
+      setLinkTrail([])
+      setCreatedPaths((prev) => withPath(prev, path))
+      // Written straight away rather than left to the autosave effect: nothing is
+      // saved behind this file, so its draft is the only copy of the drawing.
+      saveDraft(docIdForPath(path), drawn.text)
+      setOpenPath(path)
+      setLoadedSha(null)
+      setBaseline('')
+      setText(drawn.text)
+      return { path, created: true, applied: ops.length, elementCount: drawn.elementCount }
     },
 
     // Takes the text to check rather than always reading the document: after an

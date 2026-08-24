@@ -126,6 +126,31 @@ describe('server frames', () => {
       command: { cmd: 'create_file', path: 'notes/untitled.md', content: '# Untitled\n' },
     }))
 
+  it('req create_canvas', () =>
+    matches('server-req-create-canvas', {
+      t: 'req',
+      id: 17,
+      command: {
+        cmd: 'create_canvas',
+        path: 'canvas/onboarding.excalidraw',
+        ops: [
+          { op: 'add', id: 'box-a', type: 'rectangle', x: 0, y: 0, text: 'Sign up' },
+          { op: 'add', id: 'box-b', type: 'rectangle', x: 300, y: 0, text: 'Verify' },
+          { op: 'add', type: 'arrow', x: 0, y: 0, start: 'box-a', end: 'box-b' },
+        ],
+      },
+    }))
+
+  // Absent `ops` rather than an empty array, for the same reason `read` has a
+  // no-path fixture: a Go slice with `omitempty` round-trips both spellings to the
+  // same bytes, and "open me a blank canvas" is a request in its own right.
+  it('req create_canvas (blank)', () =>
+    matches('server-req-create-canvas-blank', {
+      t: 'req',
+      id: 18,
+      command: { cmd: 'create_canvas', path: 'canvas/blank.excalidraw' },
+    }))
+
   it('req check', () => matches('server-req-check', { t: 'req', id: 9, command: { cmd: 'check' } }))
 
   it('req check (path)', () =>
@@ -250,6 +275,7 @@ describe('client frames', () => {
         dirty: true,
         lineCount: 12,
         charCount: 214,
+        theme: { name: 'tokyo-night', mode: 'dark' },
       },
     }))
 })

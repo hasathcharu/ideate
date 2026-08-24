@@ -93,10 +93,22 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		"server-req-write",
 		"server-req-open",
 		"server-req-create-file",
+		"server-req-create-canvas",
+		"server-req-create-canvas-blank",
 		"server-req-check",
 		"server-req-scene-edit",
 	} {
 		roundTrip[Request](t, name)
+	}
+
+	// create_canvas with no ops is the one command where an absent slice is a
+	// meaningful request rather than an omission — "open me a blank canvas" — so it
+	// gets the same paired treatment as the optional paths below.
+	if got := roundTrip[Request](t, "server-req-create-canvas-blank"); got.Command.Ops != nil {
+		t.Errorf("blank create_canvas decoded %d ops", len(got.Command.Ops))
+	}
+	if got := roundTrip[Request](t, "server-req-create-canvas"); len(got.Command.Ops) != 3 {
+		t.Errorf("create_canvas ops = %d, want 3", len(got.Command.Ops))
 	}
 
 	// The shapes whose whole point is an absent or falsy optional field. A bare
@@ -156,6 +168,15 @@ func TestClientFramesRoundTrip(t *testing.T) {
 	event := roundTrip[StateEvent](t, "client-event-state")
 	if event.State.Repo == nil || event.State.Repo.Branch != "v3" {
 		t.Errorf("state repo = %+v, want branch v3", event.State.Repo)
+	}
+	// The theme is the field an agent reads to decide whether to write colors at
+	// all, so a name silently dropped on the way through is a diagram with hex
+	// codes baked into it.
+	if event.State.Theme.Name == nil || *event.State.Theme.Name != "tokyo-night" {
+		t.Errorf("state theme name = %v, want tokyo-night", event.State.Theme.Name)
+	}
+	if event.State.Theme.Mode != "dark" {
+		t.Errorf("state theme mode = %q, want dark", event.State.Theme.Mode)
 	}
 }
 

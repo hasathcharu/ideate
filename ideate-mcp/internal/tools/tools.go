@@ -1,4 +1,4 @@
-// Package tools registers the twelve MCP tools an agent drives the editor with.
+// Package tools registers the thirteen MCP tools an agent drives the editor with.
 //
 // The whole point of these, and the reason the feature exists at all, is that they
 // act on a document **in a browser right now** rather than on a file on disk. An
@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -148,6 +149,18 @@ type createFileArgs struct {
 	Content *string `json:"content,omitempty" jsonschema:"Initial content. Omit for a starter template appropriate to the kind."`
 }
 
+// createCanvasArgs is create_file's path plus scene_edit's ops.
+//
+// Path is required and non-pointer, like openArgs and createFileArgs: a command
+// whose purpose is to make a *new* document has nothing to default to. Ops is
+// optional, because "give me a blank canvas to draw on next" is a reasonable thing
+// to ask for and refusing it would only push the agent into two calls.
+type createCanvasArgs struct {
+	codeArgs
+	Path string       `json:"path" jsonschema:"Repo-relative path ending in .excalidraw. Must not already exist — use ideate_scene_edit to change a canvas that does."`
+	Ops  []sceneOpArg `json:"ops,omitempty" jsonschema:"The drawing, as ideate_scene_edit ops. Applied in order with all adds first, so arrows can bind to shapes created in the same call. Omit for an empty canvas."`
+}
+
 type sceneGetArgs struct {
 	codeArgs
 	docPathArgs
@@ -177,8 +190,8 @@ type sceneOpArg struct {
 	Width           *float64   `json:"width,omitempty"`
 	Height          *float64   `json:"height,omitempty"`
 	Text            *string    `json:"text,omitempty" jsonschema:"The content of a text element, or a label centred inside a shape. On update, rewrites the element's text or its bound label."`
-	StrokeColor     *string    `json:"strokeColor,omitempty" jsonschema:"CSS color, e.g. \"#1e1e1e\"."`
-	BackgroundColor *string    `json:"backgroundColor,omitempty" jsonschema:"Fill color, or \"transparent\"."`
+	StrokeColor     *string    `json:"strokeColor,omitempty" jsonschema:"CSS color, e.g. \"#1e1e1e\". Omit unless the human asked for a specific color, or you are matching colors ideate_scene_get reported on neighbouring elements. Author light values whatever theme the app is in: dark mode is a filter over the whole canvas, so a dark color you pick is inverted to a light one on screen."`
+	BackgroundColor *string    `json:"backgroundColor,omitempty" jsonschema:"Fill color, or \"transparent\". Same rule as strokeColor: omit by default, and author light values even in dark mode."`
 	FillStyle       *string    `json:"fillStyle,omitempty" jsonschema:"One of \"hachure\", \"cross-hatch\", \"solid\"."`
 	StrokeWidth     *float64   `json:"strokeWidth,omitempty"`
 	Roughness       *float64   `json:"roughness,omitempty" jsonschema:"0 = architect, 1 = artist, 2 = cartoonist."`
@@ -226,9 +239,11 @@ func Register(server *mcp.Server, deps *Deps) {
 		Title: "Ideate: status",
 		Description: "What is open in the Ideate editor right now: mode (github/local), " +
 			"repository and branch, the open file path, its kind (mermaid / markdown / " +
-			"excalidraw), whether it has uncommitted changes, its size, and the cursor " +
-			"position. Call this first — the kind decides whether to use the text tools or " +
-			"the scene tools. Works before ideate_connect, so you can report what is open " +
+			"excalidraw), whether it has uncommitted changes, its size, the cursor " +
+			"position, and the active theme. Call this first — the kind decides whether to " +
+			"use the text tools or the scene tools, and the theme decides how to color " +
+			"things: the app applies that palette when it renders, so a diagram needs no " +
+			"colors of its own. Works before ideate_connect, so you can report what is open " +
 			"before attaching to it.",
 	}, deps.status)
 
@@ -260,7 +275,11 @@ func Register(server *mcp.Server, deps *Deps) {
 			"extension. To write a new file from whole content, use ideate_write. The result " +
 			"carries diagnostics from the renderer, so you can fix a broken diagram in the same " +
 			"turn. This tool does not commit to GitHub. Every anchor must match the document as " +
-			"it is now. If one anchor fails, nothing changes and nothing is created.",
+			"it is now. If one anchor fails, nothing changes and nothing is created. Write no " +
+			"colors into a diagram unless the human asked for one. The theme ideate_status " +
+			"reports is applied when the app renders, and the file keeps bare ```mermaid " +
+			"fences — so a style or classDef line with a hex color in it survives every theme " +
+			"the human picks afterwards, which is rarely what they meant.",
 	}, deps.edit)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -270,7 +289,9 @@ func Register(server *mcp.Server, deps *Deps) {
 			"file matches the path, this tool creates the file with the text you give. For " +
 			"anything smaller than a rewrite, use ideate_edit. A full replacement discards the " +
 			"cursor position and hides the change in the diff. The result carries diagnostics " +
-			"from the renderer. This tool does not commit to GitHub.",
+			"from the renderer. This tool does not commit to GitHub. As with ideate_edit, " +
+			"leave colors out of a diagram: the theme is applied at render time, and colors " +
+			"in the file outlive it.",
 	}, deps.write)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -291,6 +312,19 @@ func Register(server *mcp.Server, deps *Deps) {
 	}, deps.createFile)
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:  "ideate_create_canvas",
+		Title: "Ideate: create canvas",
+		Description: "Draw a new Excalidraw canvas and open it, in one call. The path must " +
+			"end in .excalidraw and must not exist yet. Pass the drawing as ideate_scene_edit " +
+			"ops, or no ops for a blank canvas. This is the tool for a canvas the human should " +
+			"see: ideate_scene_edit also creates a file its path does not match, but it " +
+			"deliberately leaves the editor where it is, which for a brand new drawing means " +
+			"nobody is looking at it. Like ideate_create_file, the canvas exists only in the " +
+			"browser as an uncommitted document until the human saves it — nothing is pushed " +
+			"to GitHub.",
+	}, deps.createCanvas)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_check",
 		Title: "Ideate: check",
 		Description: "Report what the renderer thinks of a document. This tool changes nothing. " +
@@ -304,8 +338,10 @@ func Register(server *mcp.Server, deps *Deps) {
 		Title: "Ideate: read canvas",
 		Description: "List the elements on an Excalidraw canvas. Omit `path` for the open " +
 			"canvas. A path reads that file and does not open it. Each element gets one line " +
-			"with its id, type, position, size and text. ideate_scene_edit addresses these ids. " +
-			"Ask for `full` to get the whole scene JSON. It is large and mostly bookkeeping.",
+			"with its id, type, position, size, text and colors. ideate_scene_edit addresses " +
+			"these ids, and the colors are there so an addition can match what is already " +
+			"drawn. Ask for `full` to get the whole scene JSON. It is large and mostly " +
+			"bookkeeping.",
 	}, deps.sceneGet)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -313,10 +349,15 @@ func Register(server *mcp.Server, deps *Deps) {
 		Title: "Ideate: edit canvas",
 		Description: "Add, move, restyle or remove elements on an Excalidraw canvas. Name the " +
 			"file in `path`. If no file matches a `.excalidraw` path, this tool creates a blank " +
-			"canvas. Thus you can draw a new diagram in one call. An edit to the open canvas " +
-			"appears at once. An edit to another file marks that file unsaved in the file tree, " +
-			"and the editor does not move. This tool does not commit to GitHub. Adds run first, " +
-			"as one batch, so an arrow can join two shapes from the same call.",
+			"canvas. Use ideate_create_canvas instead when you want the human to see the new " +
+			"canvas. An edit to the open canvas appears at once. An edit to another file marks " +
+			"that file unsaved in the file tree, and the editor does not move. This tool does " +
+			"not commit to GitHub. Adds run first, as one batch, so an arrow can join two " +
+			"shapes from the same call. Unlike a diagram, a canvas stores its colors: there is " +
+			"no theme to apply later, so omitting them keeps the app's defaults and matching " +
+			"the colors ideate_scene_get reported keeps a drawing consistent. Author light " +
+			"colors even when the theme is dark — dark mode is a filter over the whole canvas, " +
+			"so a dark color comes out light.",
 	}, deps.sceneEdit)
 }
 
@@ -428,6 +469,38 @@ func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in create
 	}
 	return d.attached(ctx, in.Code, protocol.Command{
 		Cmd: protocol.CmdCreateFile, Path: &in.Path, Content: in.Content,
+	})
+}
+
+// createCanvas is create_file and scene_edit in one command.
+//
+// The ops are validated here, before the tab is asked for anything, so a malformed
+// drawing does not leave a blank canvas open in the human's editor with an error in
+// the agent's transcript. The tab applies the same all-or-nothing rule internally
+// (sceneEdit resolves before it writes), but the cheap refusal belongs on this side.
+func (d *Deps) createCanvas(ctx context.Context, _ *mcp.CallToolRequest, in createCanvasArgs) (*mcp.CallToolResult, any, error) {
+	if in.Path == "" {
+		return nil, nil, errors.New(
+			"path is empty — pass a repo-relative path ending in .excalidraw.")
+	}
+	if !strings.HasSuffix(strings.ToLower(in.Path), ".excalidraw") {
+		return nil, nil, fmt.Errorf(
+			"%s is not a canvas: the extension decides the editor, and only .excalidraw "+
+				"opens one. Use ideate_create_file for a .mmd diagram or a .md document.", in.Path)
+	}
+	// Empty and absent are the same thing here, unlike everywhere else in this
+	// package: a canvas with no elements is a legitimate request, and "ops": [] is
+	// how a model spells it about as often as omitting the field.
+	var ops []protocol.SceneOp
+	if len(in.Ops) > 0 {
+		converted, err := sceneOps(in.Ops)
+		if err != nil {
+			return nil, nil, err
+		}
+		ops = converted
+	}
+	return d.attached(ctx, in.Code, protocol.Command{
+		Cmd: protocol.CmdCreateCanvas, Path: &in.Path, Ops: ops,
 	})
 }
 

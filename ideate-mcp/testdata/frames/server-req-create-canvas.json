@@ -1,0 +1,13 @@
+{
+  "t": "req",
+  "id": 17,
+  "command": {
+    "cmd": "create_canvas",
+    "path": "canvas/onboarding.excalidraw",
+    "ops": [
+      { "op": "add", "id": "box-a", "type": "rectangle", "x": 0, "y": 0, "text": "Sign up" },
+      { "op": "add", "id": "box-b", "type": "rectangle", "x": 300, "y": 0, "text": "Verify" },
+      { "op": "add", "type": "arrow", "x": 0, "y": 0, "start": "box-a", "end": "box-b" }
+    ]
+  }
+}
