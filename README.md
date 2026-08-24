@@ -331,7 +331,7 @@ Every environment variable and the security model are in
 | `ideate_edit` | Anchored string replacements — one undo step, plus diagnostics |
 | `ideate_write` | Replace a document's whole content |
 | `ideate_open` | Open a file in the editor |
-| `ideate_create_file` | A new unsaved file, seeded from a template |
+| `ideate_create_file` | A new unsaved diagram or document, seeded from a template |
 | `ideate_create_canvas` | A new canvas, drawn and opened in one call |
 | `ideate_check` | Ask the renderer what it thinks, without editing |
 | `ideate_scene_get` | List the elements on an Excalidraw canvas |

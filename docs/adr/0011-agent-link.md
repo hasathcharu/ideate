@@ -515,12 +515,13 @@ does not have, which is worse than reporting nothing.
 
 ### `ideate_create_canvas` exists because `scene_edit` deliberately will not open a file
 
-Both halves already existed and neither did the job. `create_file` can make a
+Both halves already existed and neither did the job. `create_file` could once make a
 `.excalidraw` file, but its `content` is raw scene JSON — element records with ids,
 bindings, seeds and measured text boxes — which is not something to ask a model to
-author. `scene_edit` creates the file its path names and draws into it properly, but
-**leaves the editor where it is**, because it exists to work on files the human is not
-looking at, and yanking their editor around is the cost that buys.
+author, and omitting it only opens an empty canvas nobody asked to look at. `scene_edit`
+creates the file its path names and draws into it properly, but **leaves the editor
+where it is**, because it exists to work on files the human is not looking at, and
+yanking their editor around is the cost that buys.
 
 A brand-new canvas is the one case where that trade inverts: there is nothing to yank
 them away from, and a drawing nobody is shown may as well not have been drawn. So
@@ -533,6 +534,14 @@ canvas open in the human's editor, and `applySceneOps` runs before anything is w
 so a failure leaves no half-made file. Same all-or-nothing rule `edit` follows. The
 extension check is also on both sides, because the tab is the side that would otherwise
 open a markdown document in response to a request to draw.
+
+**`create_file` refuses `.excalidraw` for the mirror-image reason**, on both sides too.
+Once `create_canvas` exists, the only thing the old path bought was an empty canvas or a
+hand-authored scene file, and both are worse than the retry the refusal costs. So the
+two creating tools now partition the extensions between them rather than overlapping on
+one: `create_file` takes `.mmd`/`.mermaid`/`.md`/`.markdown`, `create_canvas` takes
+`.excalidraw`, and each refusal names the other tool. This needs no `PROTOCOL_VERSION`
+bump — the `create_file` frame is unchanged and the refusal is an ordinary tool error.
 
 `ops` is optional, and absent rather than empty is a request in its own right — "give
 me a blank canvas" — which is why it has its own fixture beside the drawn one.

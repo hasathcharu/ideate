@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   Check,
   CheckCircle2,
@@ -44,9 +44,26 @@ import { normalizeMcpOrigin, validateMcpOrigin } from '@/lib/mcpOrigin'
  * service of your own — sits inside Advanced options, beside the field that points
  * this tab at the result.
  *
+ * The code has **two** copy buttons for two different destinations: the bare code for
+ * a human writing a request around it, and `connectPrompt` for an agent, which needs
+ * to be told what the eight characters are for.
+ *
  * "Waiting" remains the ordinary resting state rather than a fault — the service is
  * shared and always up, but no agent has claimed this tab until one decides to.
  */
+
+/**
+ * The one-line ask, for handing to an agent instead of the bare code.
+ *
+ * The code alone is what a human needs, because they are about to type a request
+ * around it. An agent pasted the same eight characters has to infer what to do with
+ * them, so this spells out the one thing: attach to this tab. It names the tool
+ * rather than only the product, because "Ideate" is a word an agent may not have
+ * seen and `ideate_connect` is in its tool list.
+ */
+function connectPrompt(code: string): string {
+  return `Connect to Ideate with ideate_connect using the pairing code ${code}.`
+}
 
 /** Where a self-hoster is sent from the capacity message. */
 const SELF_HOST_DOCS = `${REPO_URL}/blob/main/ideate-mcp/README.md`
@@ -170,8 +187,9 @@ export default function AgentLinkModal({
               <code className="text-foreground">{mcpOrigin}/mcp</code>.
             </p>
             <p className="mt-2">
-              Give your agent the code when you ask it for something. Naming a different tab’s
-              code switches which tab it drives — nothing to reconfigure.
+              Give your agent the code when you ask it for something, or paste the
+              ready-made instruction. Naming a different tab’s code switches which tab it
+              drives — nothing to reconfigure.
             </p>
             {mode === 'local' ? (
               <p className="mt-2">
@@ -237,6 +255,12 @@ function PairingCode({
         </code>
         <CopyButton text={code} target={codeRef} label="pairing code" />
       </div>
+      {/* A second copy affordance rather than a second thing to read: the code row
+          is for a human transcribing it, this is for pasting straight into an agent.
+          It has no `target`, because the sentence is nowhere on screen to select. */}
+      <CopyButton text={code ? connectPrompt(code) : ''} label="connect instruction">
+        Copy instruction for agent
+      </CopyButton>
     </div>
   )
 }
@@ -349,7 +373,10 @@ function AdvancedOptions({
  * The last resort is not a failure message but a **selection** of the visible text,
  * so ⌘C finishes the job the button started.
  */
-async function copyText(text: string, target: HTMLElement | null): Promise<'copied' | 'selected'> {
+async function copyText(
+  text: string,
+  target: HTMLElement | null,
+): Promise<'copied' | 'selected' | 'unavailable'> {
   try {
     await navigator.clipboard.writeText(text)
     return 'copied'
@@ -374,48 +401,66 @@ async function copyText(text: string, target: HTMLElement | null): Promise<'copi
     scratch.remove()
   }
 
-  if (target) {
-    const range = document.createRange()
-    range.selectNodeContents(target)
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range)
-  }
+  // Nothing to select when the text is not on screen — which is the case for text
+  // assembled for the clipboard rather than displayed. Saying so beats a toast that
+  // claims a selection the human cannot find.
+  if (!target) return 'unavailable'
+  const range = document.createRange()
+  range.selectNodeContents(target)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
   return 'selected'
 }
 
-/** Mirrors the copy affordance in `ExportMenu`: a ghost icon button and a toast,
- *  with a moment of acknowledgement on the icon itself so the click is not silent. */
+/** Mirrors the copy affordance in `ExportMenu`: a ghost button and a toast, with a
+ *  moment of acknowledgement on the icon itself so the click is not silent.
+ *
+ *  Icon-only unless `children` are given, and `target` is optional: text that is not
+ *  rendered anywhere has nothing to fall back to selecting. */
 function CopyButton({
   text,
   target,
   label,
+  children,
 }: {
   text: string
-  target: RefObject<HTMLElement | null>
+  target?: RefObject<HTMLElement | null>
   label: string
+  children?: ReactNode
 }) {
   const [copied, setCopied] = useState(false)
   return (
     <Button
-      size="icon-sm"
+      size={children ? 'sm' : 'icon-sm'}
       variant="ghost"
-      className="mt-0.5 flex-none"
+      className={
+        children
+          ? 'h-7 w-full justify-start gap-1.5 px-2 text-xs text-muted-foreground'
+          : 'mt-0.5 flex-none'
+      }
       aria-label={`Copy ${label}`}
       title={`Copy ${label}`}
       disabled={!text}
       onClick={async () => {
-        const outcome = await copyText(text, target.current)
+        const outcome = await copyText(text, target?.current ?? null)
         if (outcome === 'copied') {
           setCopied(true)
           toast.success(`Copied ${label}`)
           window.setTimeout(() => setCopied(false), 1500)
-        } else {
+        } else if (outcome === 'selected') {
           toast.info(`Selected the ${label} — press ⌘C to copy.`)
+        } else {
+          toast.error(`This browser refused the clipboard — copy the ${label} by hand.`)
         }
       }}
     >
-      {copied ? <Check /> : <Copy />}
+      {copied ? (
+        <Check className={children ? 'size-3.5' : undefined} />
+      ) : (
+        <Copy className={children ? 'size-3.5' : undefined} />
+      )}
+      {children}
     </Button>
   )
 }

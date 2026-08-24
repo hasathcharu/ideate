@@ -1441,6 +1441,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       const invalid = validatePath(path)
       if (invalid) throw new Error(invalid)
+      // A canvas is deliberately not creatable here. `content` for one is raw scene
+      // JSON, and omitting it opens an empty canvas nobody asked to look at, so
+      // `createCanvas` — which draws in the same call — is the only door.
+      if (fileKind(path) === 'excalidraw') {
+        throw new Error(
+          `${path} is a canvas, and this tool does not create a canvas. Use ` +
+            'ideate_create_canvas. It takes the same path, and it draws the canvas in the ' +
+            'same call.',
+        )
+      }
       if (repoFilePaths.includes(path)) {
         // `edit`/`write`, not `open`: the path is all either of them needs, and
         // sending the agent through `open` would drag the human's editor to this file
@@ -1488,8 +1498,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // otherwise open a markdown document in response to a request to draw.
       if (fileKind(path) !== 'excalidraw') {
         throw new Error(
-          `${path} is not a canvas: the extension decides the editor, and a canvas ends ` +
-            'in .excalidraw. Use ideate_create_file for a diagram or a document.',
+          `${path} is not a canvas. The extension decides the editor, and a canvas ends ` +
+            'in .excalidraw. For a diagram or a document, use ideate_create_file.',
         )
       }
       if (repoFilePaths.includes(path)) {
