@@ -1206,8 +1206,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     if (!hasWorkspace) {
       throw new Error(
-        'No repository is connected, so there are no paths — this tab has one ' +
-          'untitled document. Call the tool again with no path.',
+        'This tab has no file workspace: the human is signed in and has picked no ' +
+          'repository, so there is nothing a path can name — only one untitled ' +
+          'document, reached by omitting the path. Ask them to connect a repository ' +
+          'if you need files.',
       )
     }
     const invalid = validatePath(path)

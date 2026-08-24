@@ -91,10 +91,10 @@ export interface AppliedEdit extends Touched {
  * Everything the hook needs from the app to serve a command.
  *
  * Every document capability takes an optional `path`, mirroring `Command`:
- * `undefined` is the open document, a string is a file in the repository whether or
+ * `undefined` is the open document, a string is a file in the workspace whether or
  * not anybody has opened it. Enforcing that a *mutation* names one is the app's job
- * and not this module's — it is the app that knows whether a repository is
- * connected, and local mode has no paths to name.
+ * and not this module's — only the app knows which document is open, and the
+ * untitled one has no path to name.
  */
 export interface AgentLinkCapabilities {
   /** The same snapshot that gets pushed as a `state` event, read on demand so a

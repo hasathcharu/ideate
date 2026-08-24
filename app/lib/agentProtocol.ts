@@ -159,14 +159,15 @@ export type SceneOp = SceneAddOp | SceneUpdateOp | SceneDeleteOp
  * - **`read`, `check` and `scene_get` may omit it**, and then mean the open
  *   document. "What is on screen" is a legitimate question, and answering it about
  *   the wrong document costs a wasted call.
- * - **`edit`, `write` and `scene_edit` must carry one** whenever the tab has a
- *   repository connected. The open document is not a stable address: the human
- *   browses their files while the agent works, so a mutation aimed at "the open
- *   document" is aimed at whatever they happened to click last, and it is not
- *   recoverable by reading again. The tab refuses those, naming the tool that
- *   reports the open path. The type keeps the field optional because local mode has
- *   no repository and no paths at all — one scratch document, addressable only by
- *   omission — and the tab is the only side that knows which it is.
+ * - **`edit`, `write` and `scene_edit` must carry one** whenever a file is open.
+ *   The open document is not a stable address: the human browses their files while
+ *   the agent works, so a mutation aimed at "the open document" is aimed at whatever
+ *   they happened to click last, and it is not recoverable by reading again. The tab
+ *   refuses those, naming the tool that reports the open path. The type keeps the
+ *   field optional for the one document that has no path to carry — the **untitled**
+ *   one, before it has been saved anywhere. That is a state of the tab rather than a
+ *   mode of the app: local mode has files of its own, and a connected repository
+ *   still has an untitled document. The tab is the only side that knows.
  *
  * What a path does *not* buy is a second way to reach the open document. When it
  * names the file already open, the tab routes the command through the live editor
@@ -239,12 +240,12 @@ export interface Diagnostic {
  *  and a path that matched nothing resolves to a file that did not exist a moment
  *  ago. Both are things the agent has to be told rather than assume. */
 export interface Touched {
-  /** The path acted on. Null only for the local scratch document, which has none
-   *  until the human saves it somewhere. */
+  /** The path acted on. Null only for the untitled document, which has none until
+   *  the human saves it somewhere. */
   path: string | null
-  /** The path named no file on the branch and none in the browser, so it was
-   *  created as an uncommitted document. Nothing was pushed to GitHub — the human
-   *  still has to commit it, exactly as with `create_file`. */
+  /** The path named no file the workspace had — no commit on the branch, no local
+   *  file, no draft — so it was created as an unsaved document. Nothing was pushed
+   *  to GitHub: the human still has to save it, exactly as with `create_file`. */
   created: boolean
 }
 

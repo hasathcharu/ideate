@@ -873,12 +873,13 @@ export interface EditorProps {
    *  the undo history. */
   wrap?: boolean
   /** The committed content of the open document, which the gutter marks the
-   *  working copy's divergence from. Null (a never-committed file, or the local
-   *  scratch document) leaves the gutter empty — there is nothing to diverge
+   *  working copy's divergence from. Null (a file with nothing saved behind it, or
+   *  the untitled document) leaves the gutter empty — there is nothing to diverge
    *  from, so marking every line as new would be noise. */
   baseline?: string | null
-  /** Every file in the connected repository, for completing markdown link
-   *  targets. Empty in local mode, which disables the completions. */
+  /** Every file in the workspace — the connected repository, or local mode's own
+   *  files — for completing markdown link targets. Empty only when there is no
+   *  workspace at all, which disables the completions. */
   filePaths?: readonly string[]
   /** Repo-relative path of the open document, so completed links are written
    *  relative to it. */

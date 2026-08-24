@@ -98,13 +98,15 @@ type docPathArgs struct {
 // reading it again can undo. Naming the path costs one ideate_status call and makes
 // the target the agent's own decision.
 //
-// The field stays a pointer, and the schema stays permissive, for one case: local
-// mode has no repository, no file list and exactly one scratch document, so omission
-// is the only way to name it. Only the tab knows which mode it is in, so the tab is
-// where the refusal lives (AppShell's requirePath) — one implementation, and the one
-// that cannot be wrong. Do not add a second here against the pushed state.
+// The field stays a pointer, and the schema stays permissive, for one case: the
+// **untitled** document has no path yet, so omission is the only way to name it. That
+// is a state of the tab, not a mode of the app — local mode has its own files, and a
+// connected repo still has an untitled document until the human saves it somewhere.
+// Only the tab knows which document is open, so the tab is where the refusal lives
+// (AppShell's requirePath) — one implementation, and the one that cannot be wrong. Do
+// not add a second here against the pushed state.
 type targetPathArgs struct {
-	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Required: the open document changes as the human browses, so an unnamed target can be a file you never read. Call ideate_status for the open path. Omit it only in local mode, which has no repository and one document."`
+	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Required: the open document changes as the human browses, so an unnamed target can be a file you never read. Call ideate_status for the open path. Omit it only when ideate_status reports no open path, which means the untitled document has no path to name yet."`
 }
 
 type readArgs struct {
@@ -233,17 +235,19 @@ func Register(server *mcp.Server, deps *Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_list_files",
 		Title: "Ideate: list files",
-		Description: "Every diagram, document and canvas file in the connected repository, on " +
-			"the branch currently selected. Empty in local mode (no repository).",
+		Description: "Every file the human can open: a diagram, a document or a canvas. In " +
+			"GitHub mode, the connected repository on its current branch. In local mode, the " +
+			"files this browser holds. The list includes unsaved files. It is empty only when " +
+			"the human picked no repository.",
 	}, deps.listFiles)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_read",
 		Title: "Ideate: read",
 		Description: "Read a document. Omit `path` for the open document. A path reads that file " +
-			"and does not open it. You always get the working copy. A file with uncommitted " +
-			"edits in this browser answers with those edits. The `committed` field tells you if " +
-			"the text matches the branch.",
+			"and does not open it. You always get the working copy. A file with unsaved edits " +
+			"in this browser answers with those edits. The `committed` field tells you if the " +
+			"text matches the saved copy.",
 	}, deps.read)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -272,9 +276,9 @@ func Register(server *mcp.Server, deps *Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_open",
 		Title: "Ideate: open file",
-		Description: "Open a file from the connected repository in the editor, so it becomes the " +
-			"document the other tools act on. Uncommitted edits to the current document are kept " +
-			"(they live in the browser's local draft storage) — nothing is lost by switching.",
+		Description: "Open a file in the editor, so the human sees it. The other tools do not " +
+			"need this: they take a path. The editor keeps unsaved edits to the current " +
+			"document, so switching loses nothing.",
 	}, deps.open)
 
 	mcp.AddTool(server, &mcp.Tool{
