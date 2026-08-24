@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 16,
+  "command": {
+    "cmd": "scene_edit",
+    "path": "canvas/sketch.excalidraw",
+    "ops": [{ "op": "add", "type": "rectangle", "x": 40, "y": 40, "text": "Start" }]
+  }
+}

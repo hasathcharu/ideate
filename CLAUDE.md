@@ -10,6 +10,12 @@ A diagram editor that uses **the user's GitHub repo as the database** — there 
 database. localStorage holds the uncommitted working copy; GitHub holds the committed
 state on the selected branch. Save = commit; open old version = checkout.
 
+**Local mode has files of its own**, saved in localStorage under `km:file:`, with drafts
+layered over them exactly as they layer over a commit. Same lifecycle, different store:
+`docIdForPath` and `readSaved` in `AppShell` are the only two places that ask which one.
+Local mode has no history, conflicts, branches or PR — those are git, not files. → [ADR
+0001](docs/adr/0001-github-as-the-database.md)
+
 Three document kinds, decided purely by file extension (`fileKind` in `lib/tree.ts`):
 **Mermaid** (`.mmd`/`.mermaid`), **Markdown** (`.md`/`.markdown`), **Excalidraw**
 (`.excalidraw`). All three are plain text on disk and share every GitHub path
@@ -23,10 +29,13 @@ pipeline differ. `.md` is markdown, **not** mermaid. → [ADR 0001](docs/adr/000
 2. **The GitHub access token — and the refresh token — never reach the browser.** Never
    add either to the object returned by the `session` callback, to localStorage, or to a
    client-component prop. Read the access token server-side via `getGitHubToken()`.
-3. **localStorage stores only** uncommitted editor drafts and app config. Never
-   tokens/secrets. Two pieces of Agent Link state belong in **`sessionStorage`**, not
-   `AppConfig` — the on/off switch and the pairing code, because config is shared by every
-   tab on the origin. `AppConfig.mcpOrigin` is the opposite case and belongs in config.
+3. **localStorage stores only** uncommitted editor drafts, app config, and — in local
+   mode — the saved files themselves (`km:file:`). Never tokens/secrets. `writeLocalFile`
+   is the one storage function that **reports failure**: a local file has no copy
+   anywhere else, so a swallowed quota error would claim work was saved when it was lost.
+   Two pieces of Agent Link state belong in **`sessionStorage`**, not `AppConfig` — the
+   on/off switch and the pairing code, because config is shared by every tab on the
+   origin. `AppConfig.mcpOrigin` is the opposite case and belongs in config.
 4. **Every read/write server action takes a caller-supplied `branch`** — there is no fixed
    branch constant. No PR-creation or merge logic of any kind: "Open PR" is a plain
    redirect to GitHub's compare URL.
@@ -98,6 +107,11 @@ Prefer shadcn primitives and Tailwind utilities over bespoke CSS.
   GitHub repo mode (sign in → `/editor`).
 - `/editor` — the app. Signed-in → `mode="github"`; `?mode=local` without a session →
   `mode="local"`; otherwise redirect to `/`.
+
+Both modes have a file tree, a Save and a Restore; `hasWorkspace` (a repo, or local mode)
+gates them, **not** `githubEnabled`. Signed in with no repo picked is the one state with
+neither. `repo === null` therefore no longer means "there are no files" — ask about the
+workspace.
 
 With nothing open, the Diagram/Markdown/Canvas toggle picks the surface via
 `AppConfig.scratchKind`. **Each kind gets its own localStorage draft slot** — route every
@@ -209,6 +223,15 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
 - **The `code` is a tool argument, not a header** — keep the last clause of its
   description. MCP runs **stateless**; attachment therefore needs an idle timeout.
 - **A grace-window rejoin must re-send `attached`.**
+- **Every document tool takes a `path`, and the mutating ones require it.** `read`,
+  `check` and `scene_get` may omit it and mean the open document. `edit`, `write` and
+  `scene_edit` must name a file whenever one is open (`requirePath`), because the human
+  keeps browsing while the agent works — the exemption is the *untitled* document, which
+  has no path to name. A path that matches no file is **created**, and `edit` resolves its
+  anchors before creating anything so a failed anchor creates nothing.
+- **A background edit writes a draft and lights the sidebar's dirty dot** (`writeBack`),
+  and clears both when an edit restores the saved content. Nothing about this reaches
+  GitHub — rule 13 is intact.
 - **`emittedRef` is the echo guard** — the editor keeps a short history of what it emitted
   and drops an incoming value it finds there. **Do not collapse this into a single
   `lastValue` ref.**
@@ -258,7 +281,12 @@ lives in `app/`, because that is Next's working directory.
   errors (`kind: 'conflict'`, `kind: 'unauthenticated'`) without try/catch.
 - Keep server-only code out of client bundles; `lib/session.server.ts` imports `server-only`.
 - **`useDebouncedValue` must stay keyed on the open document** (`docId`) — unkeyed,
-  everything downstream sees the outgoing document for a full delay window.
+  everything downstream sees the outgoing document for a full delay window. It holds the
+  key and the value as **one** `{key, value}` snapshot and answers a switch with a
+  comparison on the way out. **Do not go back to adjusting two `useState`s from the render
+  body**: that returns the outgoing value on the pass that adopts the new key, and React
+  commits that pass rather than discarding it — a freshly mounted mermaid preview then
+  renders the markdown document it replaced and paints a parse error.
 - **The draft is written only while the document is dirty**, and cleared the moment it
   isn't. Keep the `dirty` gate on any new autosave path.
 - **`refreshTree` never blanks the list.** Only the first load and a repo/branch switch

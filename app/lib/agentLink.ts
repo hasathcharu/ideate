@@ -9,8 +9,8 @@ import {
   PAIRING_CODE_LENGTH,
   PROTOCOL_VERSION,
   type BridgeState,
+  type CheckResult,
   type Command,
-  type Diagnostic,
   type EditResult,
   type ListFilesResult,
   type ReadResult,
@@ -20,6 +20,7 @@ import {
   type ServerFrame,
   type StatusResult,
   type TextEdit,
+  type Touched,
 } from './agentProtocol'
 import { mcpTabUrl } from './mcpOrigin'
 import { loadPairingCode, savePairingCode } from './storage'
@@ -76,25 +77,41 @@ export type AgentLinkStatus =
    *  which has the side benefit of holding the message still long enough to read. */
   | 'full'
 
+/** What an `applyEdits` produced, plus which document it landed on.
+ *
+ *  The text is here rather than read back from state because the command handler
+ *  needs it *synchronously* to diagnose what was just written — `setText` only
+ *  reaches React on the next render, so state would describe the document as it was
+ *  before the edit. */
+export interface AppliedEdit extends Touched {
+  text: string
+}
+
+/**
+ * Everything the hook needs from the app to serve a command.
+ *
+ * Every document capability takes an optional `path`, mirroring `Command`:
+ * `undefined` is the open document, a string is a file in the repository whether or
+ * not anybody has opened it. Enforcing that a *mutation* names one is the app's job
+ * and not this module's — it is the app that knows whether a repository is
+ * connected, and local mode has no paths to name.
+ */
 export interface AgentLinkCapabilities {
   /** The same snapshot that gets pushed as a `state` event, read on demand so a
    *  `status` call answers with the truth rather than the last debounced push. */
   state: () => BridgeState
   listFiles: () => ListFilesResult
-  readOpen: () => ReadResult
-  readPath: (path: string) => Promise<ReadResult>
-  /** Returns the resulting document. The command handler needs it synchronously
-   *  to report diagnostics on what was just written — `setText` only reaches React
-   *  on the next render, so anything read back from state here would describe the
-   *  document as it was *before* the edit. */
-  applyEdits: (edits: readonly TextEdit[]) => Promise<string>
-  writeText: (text: string) => void
+  read: (path?: string) => Promise<ReadResult>
+  applyEdits: (edits: readonly TextEdit[], path?: string) => Promise<AppliedEdit>
+  writeText: (text: string, path?: string) => Promise<Touched>
   openFile: (path: string) => Promise<void>
   createFile: (path: string, content: string | undefined) => void
-  /** Diagnostics for `text`, or for the open document when omitted. */
-  check: (text?: string) => Promise<Diagnostic[]>
-  sceneGet: (full: boolean) => SceneGetResult
-  sceneEdit: (ops: readonly SceneOp[]) => Promise<SceneEditResult>
+  /** Diagnostics for `text` when given — the text an edit just produced, which is
+   *  not yet anywhere else — else for the document `path` names, else for the open
+   *  one. `path` also decides which *kind* the text is diagnosed as. */
+  check: (target: { text?: string; path?: string }) => Promise<CheckResult>
+  sceneGet: (full: boolean, path?: string) => Promise<SceneGetResult>
+  sceneEdit: (ops: readonly SceneOp[], path?: string) => Promise<SceneEditResult>
   cursor: () => { line: number; column: number } | null
 }
 
@@ -418,10 +435,13 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
       // debounced, and a status call is exactly when being 300ms stale is most
       // confusing.
       const state = caps.state()
+      const files = caps.listFiles().paths.length
       const result: StatusResult = {
         ...state,
         cursor: caps.cursor(),
-        fileCount: state.repo === null ? null : caps.listFiles().paths.length,
+        // Not `repo === null ? null` any more: local mode has files of its own, and
+        // reporting none there told an agent to stop looking.
+        fileCount: state.mode === 'local' || state.repo !== null ? files : null,
         protocol: PROTOCOL_VERSION,
       }
       return result
@@ -429,25 +449,31 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
     case 'list_files':
       return caps.listFiles()
     case 'read':
-      return command.path === undefined ? caps.readOpen() : await caps.readPath(command.path)
+      return await caps.read(command.path)
     case 'edit': {
       // Diagnostics are run against the text the edit *produced*, not against
       // whatever the tab's React state happens to hold — those are the same thing
       // only after a re-render, and this runs before one.
-      const next = await caps.applyEdits(command.edits)
+      const { path, created, text } = await caps.applyEdits(command.edits, command.path)
+      const { diagnostics } = await caps.check({ text, path: command.path })
       const result: EditResult = {
+        path,
+        created,
         applied: command.edits.length,
-        lineCount: next === '' ? 0 : next.split('\n').length,
-        diagnostics: await caps.check(next),
+        lineCount: lineCount(text),
+        diagnostics,
       }
       return result
     }
     case 'write': {
-      caps.writeText(command.text)
+      const { path, created } = await caps.writeText(command.text, command.path)
+      const { diagnostics } = await caps.check({ text: command.text, path: command.path })
       const result: EditResult = {
+        path,
+        created,
         applied: 1,
-        lineCount: command.text === '' ? 0 : command.text.split('\n').length,
-        diagnostics: await caps.check(command.text),
+        lineCount: lineCount(command.text),
+        diagnostics,
       }
       return result
     }
@@ -458,12 +484,17 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
       caps.createFile(command.path, command.content)
       return {}
     case 'check':
-      return { diagnostics: await caps.check() }
+      return await caps.check({ path: command.path })
     case 'scene_get':
-      return caps.sceneGet(command.full === true)
+      return await caps.sceneGet(command.full === true, command.path)
     case 'scene_edit':
-      return await caps.sceneEdit(command.ops)
+      return await caps.sceneEdit(command.ops, command.path)
   }
+}
+
+/** Lines in a document, counting an empty one as zero rather than as one. */
+function lineCount(text: string): number {
+  return text === '' ? 0 : text.split('\n').length
 }
 
 function describe(error: unknown, fallback: string): string {

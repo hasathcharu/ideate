@@ -604,10 +604,17 @@ function applyDelete(elements: ExcalidrawElement[], id: string): ExcalidrawEleme
  * What is on the canvas, compactly. The full scene JSON is enormous — mostly
  * per-element bookkeeping an agent has no use for — so the default answer is one
  * line per element and the whole file is opt-in.
+ *
+ * Everything but the `path`, which this cannot know: the text may have come from
+ * the open canvas, from a draft, or from a file on the branch. The caller resolved
+ * the document and so owns that field.
  */
-export function summarizeScene(sceneText: string, full = false): SceneGetResult {
+export function summarizeScene(
+  sceneText: string,
+  full = false,
+): Omit<SceneGetResult, 'path'> {
   const scene = parseScene(sceneText)
-  if (!scene) throw new Error('The open document is not a readable Excalidraw scene.')
+  if (!scene) throw new Error('That document is not a readable Excalidraw scene.')
 
   // A container's caption lives in a separate text element, so resolve it back
   // onto the shape it labels — otherwise every rectangle reads as untitled and

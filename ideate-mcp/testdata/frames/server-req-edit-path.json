@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 12,
+  "command": {
+    "cmd": "edit",
+    "path": "docs/architecture.md",
+    "edits": [{ "oldText": "A --> B", "newText": "A --> C" }]
+  }
+}

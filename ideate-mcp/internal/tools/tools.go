@@ -1,11 +1,16 @@
 // Package tools registers the twelve MCP tools an agent drives the editor with.
 //
 // The whole point of these, and the reason the feature exists at all, is that they
-// act on the document **open in a browser right now** rather than on a file on
-// disk. An edit lands in CodeMirror as a real transaction, mermaid re-renders, and
-// the renderer's verdict comes back in the result of the agent's own tool call — so
-// a broken diagram is fixed in the same turn. An agent editing files finds out its
+// act on a document **in a browser right now** rather than on a file on disk. An
+// edit lands in CodeMirror as a real transaction, mermaid re-renders, and the
+// renderer's verdict comes back in the result of the agent's own tool call — so a
+// broken diagram is fixed in the same turn. An agent editing files finds out its
 // diagram is broken when a human next opens it.
+//
+// From protocol 4 that document need not be the one on screen: every tool that
+// names a document takes an optional path (docPathArgs), and only the *default* is
+// the open one. The renderer still has the last word either way, because the tab is
+// still what runs the command.
 //
 // Two rules shape everything here:
 //
@@ -71,13 +76,45 @@ type connectArgs struct {
 	Agent *string `json:"agent,omitempty" jsonschema:"Who is attaching, e.g. \"Claude Code\". Shown to the human in the app so the connection is not anonymous."`
 }
 
+// docPathArgs names the document a *reading* tool acts on, and may be omitted.
+//
+// Before this existed the tools meant "whatever the human is looking at", so an
+// agent asked to fix six diagrams had to ideate_open each one — which drags the
+// human's editor to a different file six times and loses their cursor each time.
+// The path makes that work invisible to them.
+//
+// Optional here because "what is on screen" is a real question, and reading the
+// wrong document costs one wasted call. The mutating tools take targetPathArgs
+// below instead, where it is not optional at all.
+type docPathArgs struct {
+	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Omit it to read the open document. A path leaves the editor where it is, so prefer it to ideate_open for work across several files."`
+}
+
+// targetPathArgs names the document a *mutating* tool changes, and is required.
+//
+// Required because the open document is not a stable address. The human keeps
+// browsing their files while the agent works, so "the open document" means whichever
+// one they clicked last — and an edit that lands on the wrong file is not something
+// reading it again can undo. Naming the path costs one ideate_status call and makes
+// the target the agent's own decision.
+//
+// The field stays a pointer, and the schema stays permissive, for one case: local
+// mode has no repository, no file list and exactly one scratch document, so omission
+// is the only way to name it. Only the tab knows which mode it is in, so the tab is
+// where the refusal lives (AppShell's requirePath) — one implementation, and the one
+// that cannot be wrong. Do not add a second here against the pushed state.
+type targetPathArgs struct {
+	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Required: the open document changes as the human browses, so an unnamed target can be a file you never read. Call ideate_status for the open path. Omit it only in local mode, which has no repository and one document."`
+}
+
 type readArgs struct {
 	codeArgs
-	Path *string `json:"path,omitempty" jsonschema:"Repo-relative path. Omit to read the open document."`
+	docPathArgs
 }
 
 type editArgs struct {
 	codeArgs
+	targetPathArgs
 	Edits []editArg `json:"edits" jsonschema:"Applied together against the document as it is now, not against the result of earlier edits in the same call."`
 }
 
@@ -89,7 +126,13 @@ type editArg struct {
 
 type writeArgs struct {
 	codeArgs
+	targetPathArgs
 	Text string `json:"text" jsonschema:"The complete new content of the document."`
+}
+
+type checkArgs struct {
+	codeArgs
+	docPathArgs
 }
 
 type openArgs struct {
@@ -105,11 +148,13 @@ type createFileArgs struct {
 
 type sceneGetArgs struct {
 	codeArgs
+	docPathArgs
 	Full *bool `json:"full,omitempty" jsonschema:"Also return the entire scene file. Large; rarely needed."`
 }
 
 type sceneEditArgs struct {
 	codeArgs
+	targetPathArgs
 	Ops []sceneOpArg `json:"ops" jsonschema:"Applied in order, with all adds first."`
 }
 
@@ -195,29 +240,33 @@ func Register(server *mcp.Server, deps *Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_read",
 		Title: "Ideate: read",
-		Description: "Read a document. With no path, returns the working copy of the open " +
-			"document — including uncommitted edits, which is what the human is looking at. " +
-			"With a path, returns that file as committed on the current branch.",
+		Description: "Read a document. Omit `path` for the open document. A path reads that file " +
+			"and does not open it. You always get the working copy. A file with uncommitted " +
+			"edits in this browser answers with those edits. The `committed` field tells you if " +
+			"the text matches the branch.",
 	}, deps.read)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_edit",
 		Title: "Ideate: edit",
-		Description: "Edit the open document by replacing exact strings. Every edit is applied " +
-			"as one undo step in the live editor, so the human sees the change appear and can " +
-			"take the whole batch back with one ⌘Z. The result carries the renderer's " +
-			"diagnostics, so a broken diagram can be fixed in the same turn without a separate " +
-			"check. Nothing is committed — this changes the working copy only. Anchors must " +
-			"match the document as it is now: if any one is missing or ambiguous, nothing is " +
-			"applied and the error says which.",
+		Description: "Replace exact strings in a document. Name the file in `path`. An edit to " +
+			"the open document makes one undo step in the live editor. An edit to another file " +
+			"marks that file unsaved in the file tree, and the editor does not move. If no file " +
+			"matches the path, this tool creates the file from the starter template for that " +
+			"extension. To write a new file from whole content, use ideate_write. The result " +
+			"carries diagnostics from the renderer, so you can fix a broken diagram in the same " +
+			"turn. This tool does not commit to GitHub. Every anchor must match the document as " +
+			"it is now. If one anchor fails, nothing changes and nothing is created.",
 	}, deps.edit)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_write",
 		Title: "Ideate: write",
-		Description: "Replace the whole open document. Prefer ideate_edit for anything smaller " +
-			"than a rewrite — a full replacement discards the human's cursor position and makes " +
-			"the change unreadable in the diff. Returns the renderer's diagnostics. Not committed.",
+		Description: "Replace all the content of a document. Name the file in `path`. If no " +
+			"file matches the path, this tool creates the file with the text you give. For " +
+			"anything smaller than a rewrite, use ideate_edit. A full replacement discards the " +
+			"cursor position and hides the change in the diff. The result carries diagnostics " +
+			"from the renderer. This tool does not commit to GitHub.",
 	}, deps.write)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -240,28 +289,30 @@ func Register(server *mcp.Server, deps *Deps) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_check",
 		Title: "Ideate: check",
-		Description: "Ask the renderer what it thinks of the open document, without changing it: " +
-			"mermaid parse errors for a diagram, or for every ```mermaid fence in a markdown " +
-			"document. ideate_edit already returns this, so reach for it only to check something " +
-			"you did not just write.",
+		Description: "Report what the renderer thinks of a document. This tool changes nothing. " +
+			"Omit `path` for the open document. You get mermaid parse errors for a diagram, and " +
+			"one error for each ```mermaid fence in a markdown document. ideate_edit returns the " +
+			"same diagnostics. Use this tool only for text you did not write yourself.",
 	}, deps.check)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_scene_get",
 		Title: "Ideate: read canvas",
-		Description: "What is on the open Excalidraw canvas: one line per element with its id, " +
-			"type, position, size and text. Ids are what ideate_scene_edit addresses. The full " +
-			"scene JSON is available but large and mostly bookkeeping — the summary is nearly " +
-			"always what you want.",
+		Description: "List the elements on an Excalidraw canvas. Omit `path` for the open " +
+			"canvas. A path reads that file and does not open it. Each element gets one line " +
+			"with its id, type, position, size and text. ideate_scene_edit addresses these ids. " +
+			"Ask for `full` to get the whole scene JSON. It is large and mostly bookkeeping.",
 	}, deps.sceneGet)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:  "ideate_scene_edit",
 		Title: "Ideate: edit canvas",
-		Description: "Add, move, restyle or remove elements on the open Excalidraw canvas. The " +
-			"change appears on the canvas immediately and is not committed. Adds are processed " +
-			"first, as one batch, so an arrow can join two shapes created in the same call, and " +
-			"an update can target something the call just added.",
+		Description: "Add, move, restyle or remove elements on an Excalidraw canvas. Name the " +
+			"file in `path`. If no file matches a `.excalidraw` path, this tool creates a blank " +
+			"canvas. Thus you can draw a new diagram in one call. An edit to the open canvas " +
+			"appears at once. An edit to another file marks that file unsaved in the file tree, " +
+			"and the editor does not move. This tool does not commit to GitHub. Adds run first, " +
+			"as one batch, so an arrow can join two shapes from the same call.",
 	}, deps.sceneEdit)
 }
 
@@ -325,10 +376,16 @@ func (d *Deps) listFiles(ctx context.Context, _ *mcp.CallToolRequest, in codeArg
 }
 
 func (d *Deps) read(ctx context.Context, _ *mcp.CallToolRequest, in readArgs) (*mcp.CallToolResult, any, error) {
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
 	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdRead, Path: in.Path})
 }
 
 func (d *Deps) edit(ctx context.Context, _ *mcp.CallToolRequest, in editArgs) (*mcp.CallToolResult, any, error) {
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
 	if len(in.Edits) == 0 {
 		return nil, nil, errors.New("edits is empty — pass at least one { oldText, newText } pair.")
 	}
@@ -344,11 +401,14 @@ func (d *Deps) edit(ctx context.Context, _ *mcp.CallToolRequest, in editArgs) (*
 			OldText: e.OldText, NewText: e.NewText, ReplaceAll: e.ReplaceAll,
 		})
 	}
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdEdit, Edits: edits})
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdEdit, Path: in.Path, Edits: edits})
 }
 
 func (d *Deps) write(ctx context.Context, _ *mcp.CallToolRequest, in writeArgs) (*mcp.CallToolResult, any, error) {
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdWrite, Text: &in.Text})
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdWrite, Path: in.Path, Text: &in.Text})
 }
 
 func (d *Deps) open(ctx context.Context, _ *mcp.CallToolRequest, in openArgs) (*mcp.CallToolResult, any, error) {
@@ -367,25 +427,50 @@ func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in create
 	})
 }
 
-func (d *Deps) check(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) (*mcp.CallToolResult, any, error) {
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdCheck})
+func (d *Deps) check(ctx context.Context, _ *mcp.CallToolRequest, in checkArgs) (*mcp.CallToolResult, any, error) {
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdCheck, Path: in.Path})
 }
 
 func (d *Deps) sceneGet(ctx context.Context, _ *mcp.CallToolRequest, in sceneGetArgs) (*mcp.CallToolResult, any, error) {
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdSceneGet, Full: in.Full})
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdSceneGet, Path: in.Path, Full: in.Full})
 }
 
 func (d *Deps) sceneEdit(ctx context.Context, _ *mcp.CallToolRequest, in sceneEditArgs) (*mcp.CallToolResult, any, error) {
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
 	ops, err := sceneOps(in.Ops)
 	if err != nil {
 		return nil, nil, err
 	}
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdSceneEdit, Ops: ops})
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdSceneEdit, Path: in.Path, Ops: ops})
 }
 
 /* ------------------------------------------------------------------ */
 /* Plumbing                                                            */
 /* ------------------------------------------------------------------ */
+
+// checkDocPath refuses a path that is present but empty.
+//
+// Absent and empty are different commands on this wire (see protocol.Command), and
+// only one of them is a decision: a model that fills in "" for an optional string
+// has not chosen the open document, it has failed to omit the field. Forwarding it
+// would reach the tab as a path naming no file, which the tab would then offer to
+// create.
+func checkDocPath(path *string) error {
+	if path != nil && *path == "" {
+		return errors.New(
+			"path is present but empty. Omit the field entirely to act on the open " +
+				"document, or pass a repo-relative path as listed by ideate_list_files.")
+	}
+	return nil
+}
 
 // resolve turns a pairing code into a bucket, or into a message that tells the
 // agent what to ask the human for.
