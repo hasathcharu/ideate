@@ -515,6 +515,37 @@ func TestSceneOpValidation(t *testing.T) {
 	}).ok(t, "a bound arrow with no coordinates")
 }
 
+// create_file refuses the one extension it could otherwise honour, and badly: a
+// canvas's content is scene JSON no model should author, and omitting it opens an
+// empty canvas nobody asked to look at.
+func TestCreateFileRefusesACanvas(t *testing.T) {
+	h := newHarness(t, nil)
+	tab, cs := h.pair(testCode)
+
+	call(t, cs, "ideate_create_file", map[string]any{"code": testCode, "path": ""}).
+		failsWith(t, "empty")
+	call(t, cs, "ideate_create_file", map[string]any{
+		"code": testCode, "path": "canvas/new.excalidraw",
+	}).failsWith(t, "ideate_create_canvas")
+	// Case is not a way around it — fileKind lowercases too.
+	call(t, cs, "ideate_create_file", map[string]any{
+		"code": testCode, "path": "canvas/New.Excalidraw",
+	}).failsWith(t, "ideate_create_canvas")
+	if _, ok := tab.nextRequest(200 * time.Millisecond); ok {
+		t.Fatal("a refused create_file still reached the tab")
+	}
+
+	tab.answer(func(cmd protocol.Command) any {
+		if cmd.Cmd != protocol.CmdCreateFile {
+			t.Errorf("tab was asked for %q", cmd.Cmd)
+		}
+		return map[string]any{"path": "notes/new.md", "created": true}
+	})
+	call(t, cs, "ideate_create_file", map[string]any{
+		"code": testCode, "path": "notes/new.md",
+	}).ok(t, "create_file for a document")
+}
+
 // create_canvas is the one tool that refuses a path outright rather than creating
 // what it was given: the extension is what decides the editor, so a .md path here
 // would produce a markdown document from a request to draw.

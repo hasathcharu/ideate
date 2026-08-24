@@ -250,6 +250,10 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
 - **`create_canvas` opens what it makes; `scene_edit` deliberately does not.** That is the
   only reason it is a separate tool — `scene_edit` creates a missing path too, but it
   exists to leave the human's editor alone. Both validate ops before writing anything.
+  **The two creating tools partition the extensions**: `create_file` takes `.mmd`/`.md`
+  and **refuses `.excalidraw`** (its `content` would be raw scene JSON, and omitting it
+  opens an empty canvas), `create_canvas` takes only `.excalidraw`. Both refusals live on
+  **both sides** and each names the other tool.
 - **A scene edit must not need a canvas on screen.** Only a mounted editor registers
   Excalidraw's fonts, and text measured without them sizes every box for a face ~20% too
   narrow — so `lib/excalidrawFonts.ts` registers them itself **at page load**, from a

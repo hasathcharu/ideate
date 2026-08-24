@@ -197,15 +197,16 @@ export type Command =
   | { cmd: 'create_file'; path: string; content?: string }
   /** A new canvas, drawn and **opened** in one command.
    *
-   *  Both halves of that already existed and neither did the job: `create_file`
-   *  can make a `.excalidraw` file, but its content argument is raw scene JSON —
-   *  element records with ids, bindings, seeds and measured text boxes — which is
-   *  not something to ask a model to author. `scene_edit` creates the file its
-   *  path names and draws into it properly, but deliberately does **not** move the
-   *  editor, because it exists to work on files the human is not looking at. A new
-   *  canvas is the one case where they should be looking at it: nothing was there
-   *  to browse away from, and a drawing nobody is shown may as well not have been
-   *  drawn. */
+   *  Both halves of that already existed and neither did the job, which is also
+   *  why `create_file` now *refuses* a `.excalidraw` path outright: its content
+   *  argument is raw scene JSON — element records with ids, bindings, seeds and
+   *  measured text boxes — which is not something to ask a model to author, and
+   *  omitting it only opens an empty canvas nobody asked to look at. `scene_edit`
+   *  creates the file its path names and draws into it properly, but deliberately
+   *  does **not** move the editor, because it exists to work on files the human is
+   *  not looking at. A new canvas is the one case where they should be looking at
+   *  it: nothing was there to browse away from, and a drawing nobody is shown may
+   *  as well not have been drawn. */
   | { cmd: 'create_canvas'; path: string; ops?: SceneOp[] }
   | { cmd: 'check'; path?: string }
   | { cmd: 'scene_get'; path?: string; full?: boolean }

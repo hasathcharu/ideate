@@ -156,8 +156,8 @@ type openArgs struct {
 
 type createFileArgs struct {
 	codeArgs
-	Path    string  `json:"path" jsonschema:"Repo-relative path including the extension."`
-	Content *string `json:"content,omitempty" jsonschema:"Initial content. Omit for a starter template appropriate to the kind."`
+	Path    string  `json:"path" jsonschema:"Repo-relative path. It must end in .mmd, .mermaid, .md or .markdown. To create a canvas, use ideate_create_canvas."`
+	Content *string `json:"content,omitempty" jsonschema:"Initial content. Omit it for a starter template that matches the kind."`
 }
 
 // createCanvasArgs is create_file's path plus scene_edit's ops.
@@ -168,8 +168,8 @@ type createFileArgs struct {
 // to ask for and refusing it would only push the agent into two calls.
 type createCanvasArgs struct {
 	codeArgs
-	Path string       `json:"path" jsonschema:"Repo-relative path ending in .excalidraw. Must not already exist — use ideate_scene_edit to change a canvas that does."`
-	Ops  []sceneOpArg `json:"ops,omitempty" jsonschema:"The drawing, as ideate_scene_edit ops. Applied in order with all adds first, so arrows can bind to shapes created in the same call. Omit for an empty canvas."`
+	Path string       `json:"path" jsonschema:"Repo-relative path. It must end in .excalidraw, and no file can hold that path already. To change a canvas that exists, use ideate_scene_edit."`
+	Ops  []sceneOpArg `json:"ops,omitempty" jsonschema:"The drawing, as ideate_scene_edit ops. The app applies them in order and does all the adds first, thus an arrow can bind to a shape from the same call. Omit this field for an empty canvas."`
 }
 
 type sceneGetArgs struct {
@@ -321,26 +321,25 @@ func Register(server *mcp.Server, deps *Deps) {
 	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_create_file",
 		Title: "Ideate: create file",
-		Description: "Create a new file and open it. It exists only in the browser as an " +
-			"uncommitted document until the human saves it — nothing is pushed to GitHub. The " +
-			"extension decides the editor: .mmd/.mermaid for a diagram, .md/.markdown for a " +
-			"document, .excalidraw for a canvas.",
+		Description: "Create a diagram or a document, then open it. The extension decides the " +
+			"editor: .mmd or .mermaid for a diagram, .md or .markdown for a document. The new " +
+			"file stays in the browser as an uncommitted document until the human saves it. " +
+			"This tool does not push to GitHub. This tool does not create a canvas. To create " +
+			"a canvas, use ideate_create_canvas. It draws the canvas in the same call.",
 	}, deps.createFile)
 
 	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_create_canvas",
 		Title: "Ideate: create canvas",
-		Description: "Draw a new Excalidraw canvas and open it, in one call. The path must " +
-			"end in .excalidraw and must not exist yet. Pass the drawing as ideate_scene_edit " +
-			"ops, or no ops for a blank canvas. This is the tool for a canvas the human should " +
-			"see: ideate_scene_edit also creates a file its path does not match, but it " +
-			"deliberately leaves the editor where it is, which for a brand new drawing means " +
-			"nobody is looking at it. Like ideate_create_file, the canvas exists only in the " +
-			"browser as an uncommitted document until the human saves it — nothing is pushed " +
-			"to GitHub. The result carries the same `warnings` ideate_scene_edit returns, and " +
-			"a first drawing is where they matter most: lay shapes out on a 20px grid, leave " +
-			"40 to 80px between neighbours so the arrows between them have room, and give " +
-			"anything holding a long label enough width for it.",
+		Description: "Draw a new Excalidraw canvas and open it, in one call. Give the drawing " +
+			"as ideate_scene_edit ops. For an empty canvas, give no ops. Use this tool when " +
+			"the human must see the new canvas. ideate_scene_edit also creates a file that no " +
+			"path matches, but it keeps the editor on the current document, thus nobody sees " +
+			"the drawing. The new canvas stays in the browser as an uncommitted document until " +
+			"the human saves it. This tool does not push to GitHub. The result carries the " +
+			"same `warnings` as ideate_scene_edit, and a first drawing is where they matter " +
+			"most. Put the shapes on a 20px grid. Leave 40 to 80px between neighbors, thus " +
+			"the arrows have room. Give enough width to a shape that holds a long label.",
 	}, deps.createCanvas)
 
 	add(server, &surface, &mcp.Tool{
@@ -540,9 +539,20 @@ func (d *Deps) open(ctx context.Context, _ *mcp.CallToolRequest, in openArgs) (*
 	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdOpen, Path: &in.Path})
 }
 
+// createFile refuses a canvas, which is the one extension it could otherwise honour.
+//
+// It would honour it badly: `content` is scene JSON an agent has no business writing
+// by hand, and omitting it opens a blank canvas nobody asked to look at. Sending the
+// agent to create_canvas costs it one retry and gets it the drawing in that call.
 func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in createFileArgs) (*mcp.CallToolResult, any, error) {
 	if in.Path == "" {
 		return nil, nil, errors.New("path is empty — pass a repo-relative path including the extension.")
+	}
+	if strings.HasSuffix(strings.ToLower(in.Path), ".excalidraw") {
+		return nil, nil, fmt.Errorf(
+			"%s is a canvas, and this tool does not create a canvas. Use "+
+				"ideate_create_canvas. It takes the same path, and it draws the canvas in "+
+				"the same call.", in.Path)
 	}
 	return d.attached(ctx, in.Code, protocol.Command{
 		Cmd: protocol.CmdCreateFile, Path: &in.Path, Content: in.Content,
@@ -562,8 +572,9 @@ func (d *Deps) createCanvas(ctx context.Context, _ *mcp.CallToolRequest, in crea
 	}
 	if !strings.HasSuffix(strings.ToLower(in.Path), ".excalidraw") {
 		return nil, nil, fmt.Errorf(
-			"%s is not a canvas: the extension decides the editor, and only .excalidraw "+
-				"opens one. Use ideate_create_file for a .mmd diagram or a .md document.", in.Path)
+			"%s is not a canvas. The extension decides the editor, and only .excalidraw "+
+				"opens a canvas. For a .mmd diagram or a .md document, use "+
+				"ideate_create_file.", in.Path)
 	}
 	// Empty and absent are the same thing here, unlike everywhere else in this
 	// package: a canvas with no elements is a legitimate request, and "ops": [] is
