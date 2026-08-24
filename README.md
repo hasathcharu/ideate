@@ -326,7 +326,7 @@ Every environment variable and the security model are in
 | Tool | Does |
 |---|---|
 | `ideate_status` | What is open: repo, branch, path, kind, dirty, cursor |
-| `ideate_list_files` | Every file in the connected repository |
+| `ideate_list_files` | Every file in the repository, or in local mode the browser |
 | `ideate_read` | The working copy of the open document, or of any file |
 | `ideate_edit` | Anchored string replacements — one undo step, plus diagnostics |
 | `ideate_write` | Replace a document's whole content |
