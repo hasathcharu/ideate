@@ -18,6 +18,16 @@ per-function `await import(...)`. **`lib/excalidraw.ts` must never
 are fine — because `AppShell` loads it eagerly. Same reason `ExportMenu` may
 only reach the library via `lib/exportScene.ts`.
 
+`lib/excalidrawFonts.ts` is **not** a third door, and it is worth saying why it
+looks like one. It runs on page load for every user, canvas or not, and its whole
+job is to register Excalidraw's fonts — but it imports nothing from the library.
+It reads a 1.3KB manifest that `scripts/vendor-excalidraw-assets.mjs` lifts out of
+the bundle *at build time*, and hands the browser `FontFace` objects pointing at
+the already-vendored woff2 files. So a mermaid-only user pays one small fetch and
+no part of the ~1MB bundle; the woff2 files themselves stay unfetched until
+something is measured or drawn against them. See
+[ADR 0011](0011-agent-link.md) for the bug that made this necessary.
+
 ## Rule 9
 
 **Scene dirty-tracking is semantic, never byte-for-byte.** Re-serializing a

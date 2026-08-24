@@ -345,10 +345,60 @@ export interface SceneElementSummary {
   backgroundColor: string | null
 }
 
+/** What kind of layout defect a `SceneWarning` reports. Named rather than free
+ *  text so a caller can act on the kind and read the message for the numbers. */
+export type SceneWarningKind =
+  /** A bound label is bigger than the shape holding it, so the text runs outside. */
+  | 'label_overflow'
+  /** Two shapes are drawn over each other. */
+  | 'overlap'
+  /** A standalone text element sits inside a shape without being bound to it. */
+  | 'text_not_bound'
+  /** An arrow passes through a shape that is not one of its endpoints. */
+  | 'arrow_crosses'
+  /** Several arrows join the same pair of shapes, so they are drawn on top of each
+   *  other. */
+  | 'arrow_duplicate'
+  /** An arrow ends beside a shape without attaching to it, so moving the shape
+   *  leaves it behind. */
+  | 'arrow_unbound'
+  /** Two edges are close to lining up without doing so. */
+  | 'misaligned'
+  /** Excalidraw's own fonts were not loaded when the labels were measured, so every
+   *  box sized in this call may be narrower than the text it holds. Not a defect in
+   *  the drawing — a defect in the measurement, reported because the caller can act
+   *  on it (re-run the edit against an open canvas) and cannot otherwise see it. */
+  | 'font_unavailable'
+
+/**
+ * One layout problem found in a scene, for the agent that drew it.
+ *
+ * Warnings, never errors — see `lib/sceneLint.ts` for why the same geometry can be
+ * a mistake or a deliberate choice. They exist because a canvas has no equivalent
+ * of `ideate_check`: mermaid parses a diagram and lays it out, whereas `scene_edit`
+ * takes absolute coordinates and makes the caller the layout engine.
+ */
+export interface SceneWarning {
+  kind: SceneWarningKind
+  /** Plain prose, naming the elements and the numbers to change. This is the field
+   *  the agent acts on; `kind` is for grouping. */
+  message: string
+  /** The elements the finding is about, so a follow-up `update` op has its ids
+   *  without another `scene_get`. */
+  ids: string[]
+}
+
 export interface SceneGetResult {
   path: string | null
   elementCount: number
   elements: SceneElementSummary[]
+  /** Layout problems in the scene. **Always present, empty when there are none** —
+   *  and that is the whole reason this needed no `PROTOCOL_VERSION` bump. An older
+   *  tab omits the field rather than sending `[]`, so "checked and clean" and "this
+   *  tab does not check" are different answers on the wire, which is exactly what
+   *  the theme field could not manage when it forced the bump to 5. Nothing here
+   *  changes what a command *does*, so a stale tab loses advice and no correctness. */
+  warnings: SceneWarning[]
   /** Only when `full` was requested — the entire scene file. Large. */
   json?: string
 }
@@ -356,6 +406,11 @@ export interface SceneGetResult {
 export interface SceneEditResult extends Touched {
   applied: number
   elementCount: number
+  /** Layout problems in the scene *after* the edit — including ones the edit did not
+   *  cause, because the caller is the only party that can fix any of them and the
+   *  distinction is not worth a second tool call. Same always-present rule as
+   *  `SceneGetResult.warnings`. */
+  warnings: SceneWarning[]
 }
 
 /* ------------------------------------------------------------------ */

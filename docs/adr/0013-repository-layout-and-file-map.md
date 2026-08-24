@@ -49,6 +49,17 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
 - `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. It no
   longer has to compile under two tsconfigs (the old constraint), but every frame
   it declares needs a fixture in `ideate-mcp/testdata/frames/`.
+- `lib/sceneLint.ts` — the layout checks an agent's drawing is answered with. Pure
+  geometry over finished elements: no React, no I/O, and no value import of
+  Excalidraw, which is what lets both `applySceneOps` and `summarizeScene` call it.
+- `lib/excalidrawFonts.ts` — registers Excalidraw's scene fonts on `document.fonts`
+  from the build-time manifest, so measuring text does not need a mounted editor.
+  Imports nothing from `@excalidraw/excalidraw`; see rule 8 in
+  [ADR 0009](0009-the-excalidraw-canvas.md).
+- `scripts/vendor-excalidraw-assets.mjs` — copies the font files into `public/` **and**
+  extracts the `@font-face` descriptors that go with them into two manifests. The one
+  build step that reads the installed bundle's internals, so every assumption it makes
+  is asserted and a shape change fails the build.
 - `lib/mcpOrigin.ts` — the TLS rule for the Agent Link service origin, and the
   `ws://`/`wss://` derivation. Mirrored by `internal/config.ValidateMCPOrigin`,
   whose test carries the same cases.

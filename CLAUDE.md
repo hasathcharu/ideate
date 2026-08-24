@@ -239,6 +239,22 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
 - **`create_canvas` opens what it makes; `scene_edit` deliberately does not.** That is the
   only reason it is a separate tool — `scene_edit` creates a missing path too, but it
   exists to leave the human's editor alone. Both validate ops before writing anything.
+- **A scene edit must not need a canvas on screen.** Only a mounted editor registers
+  Excalidraw's fonts, and text measured without them sizes every box for a face ~20% too
+  narrow — so `lib/excalidrawFonts.ts` registers them itself **at page load**, from a
+  manifest `scripts/vendor-excalidraw-assets.mjs` lifts out of the bundle at build time.
+  Never make that registration conditional on the open document being a canvas: the tool
+  this serves is aimed at files nobody is looking at. It is **not** a third rule-8 door —
+  it imports nothing from the library. The extractor asserts everything it assumes and
+  **fails the build** on an upstream shape change; do not silence it, and keep Xiaolai
+  (209 CJK faces, ~40KB gz) in its own on-demand manifest.
+- **Every scene tool answers with `warnings`** (`lib/sceneLint.ts`) — a canvas has no
+  parser to refuse it and no layout engine, so `scene_edit` makes the agent the layout
+  engine and this is the only feedback it gets. **Findings are never errors**, they carry
+  ids and numbers, they cover the whole scene rather than the diff, and they are capped.
+  The field is **always present, empty when clean** — that is what let it ship without a
+  `PROTOCOL_VERSION` bump, so keep sending `[]`. `awaitTextFonts` reporting failure is one
+  of the kinds (`font_unavailable`); a silently mis-measured box was the original bug.
 - **A background edit writes a draft and lights the sidebar's dirty dot** (`writeBack`),
   and clears both when an edit restores the saved content. Nothing about this reaches
   GitHub — rule 13 is intact.
