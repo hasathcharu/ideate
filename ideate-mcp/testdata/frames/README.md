@@ -24,3 +24,10 @@ locks are held:
 Round-tripping is why optionality matters here as much as naming. `read` with no
 `path` and `scene_get` with `full: false` are separate fixtures precisely because
 a Go `string`/`bool` with `omitempty` would round-trip both of them wrong.
+
+Which is also why every command that takes an optional `path` has **two**
+fixtures, one with the key and one without. Since protocol 4 that is `read`,
+`edit`, `write`, `check`, `scene_get` and `scene_edit`, and the pair matters more
+here than anywhere else in this directory: the two spellings do not name the same
+document. A field silently dropped on the way out does not fail — it edits
+whatever the human happens to have open instead of the file the agent asked for.

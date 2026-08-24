@@ -1,0 +1,5 @@
+{
+  "t": "req",
+  "id": 13,
+  "command": { "cmd": "write", "path": "diagrams/new.mmd", "text": "flowchart TD\n  A --> B\n" }
+}

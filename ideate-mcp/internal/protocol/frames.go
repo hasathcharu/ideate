@@ -26,7 +26,13 @@ import (
 // PROTOCOL_VERSION in app/lib/agentProtocol.ts. The tab sends it in its hello and
 // a mismatch is refused with a message naming both numbers — the alternative, a
 // subtly wrong field, surfaces as an inexplicable tool failure much later.
-const Version = 3
+//
+// 4 made Path optional on every document command rather than only on read, so an
+// agent can work on files the human does not have open. The struct below did not
+// have to change for it — which is precisely why the version had to: nothing about
+// these types distinguishes a service that will forward a path on an edit from one
+// that will silently drop it, and dropping it edits the wrong document.
+const Version = 4
 
 // Close codes, in the WebSocket private-use range (4000–4999), so they cannot
 // collide with the protocol's own and the tab can tell a refusal from the service
@@ -133,7 +139,11 @@ const (
 // Command is the union of everything the tab can be asked to do, again flattened.
 // Cmd is the discriminant; every other field belongs to a subset of the commands.
 type Command struct {
-	Cmd     string     `json:"cmd"`
+	Cmd string `json:"cmd"`
+	// Path is required for open and create_file, and optional for read, edit,
+	// write, check, scene_get and scene_edit — where absent means "the document
+	// the human has open". Absent and empty are therefore different commands, and
+	// the pointer is what keeps them apart; see the package comment.
 	Path    *string    `json:"path,omitempty"`
 	Edits   []TextEdit `json:"edits,omitempty"`
 	Text    *string    `json:"text,omitempty"`

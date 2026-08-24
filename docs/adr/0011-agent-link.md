@@ -44,11 +44,15 @@ What has not changed is the mechanism: the two sides refuse to talk on a mismatc
 silent one. Which means **ship both ends of a bump together** — a version skew now
 strands a user who has no label telling them to expect it.
 
-`ideate-mcp/` is a Model Context Protocol server that hands a coding agent **the
-document open in the browser right now**, not a file on disk. That is the whole
-point: the agent edits, mermaid renders, and the renderer's verdict comes back in
-the result of the agent's own tool call, so a broken diagram gets fixed in the same
+`ideate-mcp/` is a Model Context Protocol server that hands a coding agent **a
+document in the browser right now**, not a file on disk. That is the whole point:
+the agent edits, mermaid renders, and the renderer's verdict comes back in the
+result of the agent's own tool call, so a broken diagram gets fixed in the same
 turn. An agent editing files finds out when a human next opens them.
+
+Since protocol 4 that document need not be the one on screen — see "Every document
+tool takes a path" below — but it is still a document *in the tab*, which is what
+keeps the renderer in the loop.
 
 ### One remote service, and why the socket turned around
 
@@ -199,6 +203,57 @@ Round-tripping is why optionality is load-bearing on the Go side: `read` with no
 `path` and `scene_get` with `full: false` have their own fixtures precisely because a
 bare `string`/`bool` with `omitempty` round-trips both of them wrong.
 
+### Every document tool takes a path, and the mutating ones require one
+
+Protocol 4. Until then every tool meant "whatever the human is looking at", which made the
+common case free and everything else impossible: an agent asked to fix six diagrams had to
+`ideate_open` each one, dragging the human's editor to a different file six times and
+losing their cursor each time. A `path` argument makes that work invisible to them.
+
+The interesting part is *where the field is optional*, and the two answers are opposite:
+
+- **`read`, `check`, `scene_get` — optional.** "What is on screen" is a real question, and
+  answering it about the wrong document costs one wasted call.
+- **`edit`, `write`, `scene_edit` — required.** The open document is not a stable address.
+  The human keeps browsing while the agent works, so "the open document" means whichever
+  file they clicked last, and an edit that lands on the wrong one is not something reading
+  it again can undo. `AppShell.requirePath` refuses those.
+
+The exemption is the **untitled** document, which has no path to name. Keying the refusal
+on `openPath === null` rather than on "is a repo connected" is what makes the rule hold in
+both modes — local mode has files now, and a connected repo still has an untitled
+document. It also means an agent that meant the untitled document, while the human opened
+a file mid-turn, is *refused* rather than silently redirected onto theirs. The wire keeps
+the field optional in all six because only the tab knows which case it is in; the schema
+says "required" in prose and `targetPathArgs` explains why the Go side does not enforce it
+too.
+
+`resolveTarget` is where a path becomes a document, and there are three places one can be
+living: React state (the open one), a localStorage draft (never saved), or the saved store.
+A draft is layered over the saved content whenever it differs, because the draft is what
+the human would see if they opened it — answering with saved bytes is how an agent talks
+itself into re-doing an edit it made one call earlier. It reads the draft *straight from
+storage* rather than consulting `pendingPaths`, because a command that creates a file has
+to be visible to the very next command and `createdPaths` only reaches `pendingPaths`
+through a render.
+
+**A path that matches no file is created.** `edit` seeds it from the starter template for
+its extension and `scene_edit` from a blank canvas, so an agent can draw a new diagram in
+one call; `write` creates it holding exactly the text given. `edit` resolves its anchors
+*before* anything is written, so a failed anchor leaves the file uncreated — half a file
+named after a template the agent never asked for is worse than no file.
+
+**A background edit is only complete when the UI says so.** `writeBack` writes the draft
+and adds the path to `dirtyPaths`, which is what lights the dot in the sidebar — and clears
+both when an edit happens to restore the saved content, or the file stays flagged forever
+over a difference of nothing. The same reasoning extended the once-per-workspace recovery
+pass to seed `dirtyPaths` from the drafts on disk: the markers used to live only as long as
+the tab, so an agent that edited six files nobody opened left the work in localStorage and
+no sign of it on screen after a reload.
+
+None of this touches GitHub, so rule 13 is intact: an agent's blast radius is still the
+uncommitted working copy, now including working copies of files nobody has opened.
+
 ### Edits land as CodeMirror transactions, and the echo guard is why they survive
 
 `EditorHandle` (`components/Editor.tsx`) resolves every anchor against the live
@@ -348,3 +403,14 @@ which typechecking can see:
 - **Safari**, which is the reason for the break
 - a `.excalidraw` scene through the scene tools, and a markdown document with a
   broken ```mermaid fence
+- **`ideate_edit` with a path to a file nobody has opened** — the sidebar's dirty dot
+  appears, the editor does not move, opening the file afterwards shows the edit, and
+  reloading keeps both the edit and the dot
+- **an edit that restores the saved content** — the dot goes out and the draft is gone
+- **`ideate_edit`/`ideate_write`/`ideate_scene_edit` with no path while a file is
+  open** — refused, naming the tool that reports the open path; and *accepted* on the
+  untitled document
+- **a path that matches no file** — created by `edit`/`write`/`scene_edit`, and *not*
+  created when the edit's anchor fails
+- **local mode with files**: create, save, rename, delete, and the same agent matrix
+  against `km:file:` instead of a branch

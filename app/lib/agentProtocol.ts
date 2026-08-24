@@ -31,8 +31,14 @@
  *  tool failure much later.
  *
  *  3: the loopback bridge became a remote relay (see above). Deliberately a
- *  one-way break: an old `npx github:` install and a new app refuse each other. */
-export const PROTOCOL_VERSION = 3
+ *  one-way break: an old `npx github:` install and a new app refuse each other.
+ *
+ *  4: every document command takes an optional `path`. The tools stopped meaning
+ *  "the open document" and started meaning "a document in the repo, the open one
+ *  by default" — see `Command` below. A break rather than an additive change
+ *  because the *results* grew fields too, and a tab that answers `edit` without
+ *  saying which document it edited is exactly the ambiguity the path introduces. */
+export const PROTOCOL_VERSION = 4
 
 /** Where the tab opens its WebSocket, under the configured service origin. */
 export const TAB_PATH = '/v1/tab'
@@ -137,17 +143,51 @@ export interface SceneDeleteOp {
 
 export type SceneOp = SceneAddOp | SceneUpdateOp | SceneDeleteOp
 
+/**
+ * The union of everything the tab can be asked to do.
+ *
+ * **Every command that names a document takes a `path`.** That is the whole of
+ * protocol 4, and it is a bigger change than one field: until then the tool surface
+ * was "whatever the human is looking at", so an agent asked to fix six diagrams had
+ * to `open` each one — which yanks the human's editor to a different file six
+ * times, and loses their cursor each time. With a path the same work never touches
+ * what is on screen.
+ *
+ * Where the field is *optional* differs by what the command does, and the split is
+ * deliberate:
+ *
+ * - **`read`, `check` and `scene_get` may omit it**, and then mean the open
+ *   document. "What is on screen" is a legitimate question, and answering it about
+ *   the wrong document costs a wasted call.
+ * - **`edit`, `write` and `scene_edit` must carry one** whenever the tab has a
+ *   repository connected. The open document is not a stable address: the human
+ *   browses their files while the agent works, so a mutation aimed at "the open
+ *   document" is aimed at whatever they happened to click last, and it is not
+ *   recoverable by reading again. The tab refuses those, naming the tool that
+ *   reports the open path. The type keeps the field optional because local mode has
+ *   no repository and no paths at all — one scratch document, addressable only by
+ *   omission — and the tab is the only side that knows which it is.
+ *
+ * What a path does *not* buy is a second way to reach the open document. When it
+ * names the file already open, the tab routes the command through the live editor
+ * exactly as an omitted path would, or the human's undo history and cursor would
+ * depend on which spelling the agent happened to pick.
+ *
+ * `open` and `create_file` have always required a path, because a command whose
+ * entire purpose is to change *which* document is open cannot default to the
+ * current one.
+ */
 export type Command =
   | { cmd: 'status' }
   | { cmd: 'list_files' }
   | { cmd: 'read'; path?: string }
-  | { cmd: 'edit'; edits: TextEdit[] }
-  | { cmd: 'write'; text: string }
+  | { cmd: 'edit'; path?: string; edits: TextEdit[] }
+  | { cmd: 'write'; path?: string; text: string }
   | { cmd: 'open'; path: string }
   | { cmd: 'create_file'; path: string; content?: string }
-  | { cmd: 'check' }
-  | { cmd: 'scene_get'; full?: boolean }
-  | { cmd: 'scene_edit'; ops: SceneOp[] }
+  | { cmd: 'check'; path?: string }
+  | { cmd: 'scene_get'; path?: string; full?: boolean }
+  | { cmd: 'scene_edit'; path?: string; ops: SceneOp[] }
 
 export type CommandName = Command['cmd']
 
@@ -175,7 +215,10 @@ export interface BridgeState {
 export interface StatusResult extends BridgeState {
   /** 1-based, and absent when the surface has no cursor (the canvas). */
   cursor: { line: number; column: number } | null
-  /** Files in the connected repo, or null in local mode. */
+  /** How many files `list_files` would return. Null only when there is no file
+   *  workspace at all — signed in with no repository picked. Local mode counts,
+   *  because local mode has files: `repo === null` no longer implies there is
+   *  nothing to list. */
   fileCount: number | null
   protocol: number
 }
@@ -188,7 +231,24 @@ export interface Diagnostic {
   message: string
 }
 
-export interface EditResult {
+/** Which document a command actually acted on, and whether it had to invent it.
+ *
+ *  Echoed on every mutating result rather than left implicit, because from
+ *  protocol 4 the agent's request no longer determines the answer on its own: an
+ *  omitted `path` resolves against whatever the human has open *at that moment*,
+ *  and a path that matched nothing resolves to a file that did not exist a moment
+ *  ago. Both are things the agent has to be told rather than assume. */
+export interface Touched {
+  /** The path acted on. Null only for the local scratch document, which has none
+   *  until the human saves it somewhere. */
+  path: string | null
+  /** The path named no file on the branch and none in the browser, so it was
+   *  created as an uncommitted document. Nothing was pushed to GitHub — the human
+   *  still has to commit it, exactly as with `create_file`. */
+  created: boolean
+}
+
+export interface EditResult extends Touched {
   /** Number of edits applied. Always `edits.length` — a partial apply is never
    *  reported, because every edit is resolved before any is dispatched. */
   applied: number
@@ -199,8 +259,14 @@ export interface EditResult {
 export interface ReadResult {
   path: string | null
   text: string
-  /** False for the open document (the uncommitted working copy), true when a
-   *  `path` was given and the committed content was fetched from GitHub. */
+  /** True when what came back is byte-for-byte (drawing-for-drawing, for a scene)
+   *  what the branch has committed.
+   *
+   *  Not "did you pass a path": a path whose file has uncommitted edits in this
+   *  browser answers with *those*, because the working copy is the thing the human
+   *  is looking at and the thing the next commit will carry. Reading committed
+   *  bytes past an edit somebody made — an agent's own edit, one call earlier — is
+   *  how an agent talks itself into re-applying work it has already done. */
   committed: boolean
 }
 
@@ -209,6 +275,8 @@ export interface ListFilesResult {
 }
 
 export interface CheckResult {
+  /** Which document was checked, for the same reason `Touched` carries it. */
+  path: string | null
   diagnostics: Diagnostic[]
 }
 
@@ -223,13 +291,14 @@ export interface SceneElementSummary {
 }
 
 export interface SceneGetResult {
+  path: string | null
   elementCount: number
   elements: SceneElementSummary[]
   /** Only when `full` was requested — the entire scene file. Large. */
   json?: string
 }
 
-export interface SceneEditResult {
+export interface SceneEditResult extends Touched {
   applied: number
   elementCount: number
 }

@@ -99,14 +99,42 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		roundTrip[Request](t, name)
 	}
 
-	// The two shapes whose whole point is an absent or falsy optional field. A
-	// bare string/bool with omitempty passes every other test in this file and
-	// fails these two.
-	if got := roundTrip[Request](t, "server-req-read-open"); got.Command.Path != nil {
-		t.Errorf("read with no path decoded a path: %q", *got.Command.Path)
+	// The shapes whose whole point is an absent or falsy optional field. A bare
+	// string/bool with omitempty passes every other test in this file and fails
+	// these.
+	for _, name := range []string{
+		"server-req-edit",
+		"server-req-write",
+		"server-req-check",
+		"server-req-scene-edit",
+		"server-req-read-open",
+	} {
+		if got := roundTrip[Request](t, name); got.Command.Path != nil {
+			t.Errorf("%s has no path but decoded one: %q", name, *got.Command.Path)
+		}
 	}
 	if got := roundTrip[Request](t, "server-req-scene-get"); got.Command.Full == nil || *got.Command.Full {
 		t.Errorf("scene_get full = %v, want a present false", got.Command.Full)
+	}
+
+	// And the same commands carrying one. Protocol 4 made the path optional on all
+	// of them, so each has a pair of fixtures — a dropped path here would not fail
+	// loudly, it would quietly act on whatever the human has open.
+	for name, want := range map[string]string{
+		"server-req-edit-path":       "docs/architecture.md",
+		"server-req-write-path":      "diagrams/new.mmd",
+		"server-req-check-path":      "docs/architecture.md",
+		"server-req-scene-get-path":  "canvas/sketch.excalidraw",
+		"server-req-scene-edit-path": "canvas/sketch.excalidraw",
+	} {
+		got := roundTrip[Request](t, name)
+		if got.Command.Path == nil {
+			t.Errorf("%s lost its path", name)
+			continue
+		}
+		if *got.Command.Path != want {
+			t.Errorf("%s path = %q, want %q", name, *got.Command.Path, want)
+		}
 	}
 }
 

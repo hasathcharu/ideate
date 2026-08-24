@@ -207,11 +207,18 @@ npm run dev
 
 Open <http://localhost:3000>. You land on a start page with two choices:
 
-- **Local mode** — start drawing immediately; edits stay in your browser
+- **Local mode** — start drawing immediately; everything stays in your browser
   (localStorage). No account needed. Editor, canvas, live themed preview and
-  export all work offline. A Diagram/Canvas toggle switches between the two
-  surfaces, and each keeps its own draft, so flipping between them never
-  overwrites your work.
+  export all work offline. You get a **file tree** here too: create, save,
+  rename and delete as many diagrams, documents and canvases as you like, with
+  the same unsaved markers and diff gutter as a repo. What local mode does not
+  have is what belongs to git rather than to a file — version history,
+  conflicts, branches and pull requests. A Diagram/Markdown/Canvas toggle picks
+  the surface before you have saved anything, and each keeps its own draft, so
+  flipping between them never overwrites your work.
+
+  Browser storage has a size limit of a few megabytes, and a local file exists
+  nowhere else — export anything you would be sorry to lose.
 - **GitHub repo mode** — sign in with GitHub, install the App on the
   repositories you want to share (the repo picker links you there if you haven't
   yet), connect one, pick or create a branch, and commit diagrams there; every
@@ -320,14 +327,23 @@ Every environment variable and the security model are in
 |---|---|
 | `ideate_status` | What is open: repo, branch, path, kind, dirty, cursor |
 | `ideate_list_files` | Every file in the connected repository |
-| `ideate_read` | The open working copy, or another file as committed |
+| `ideate_read` | The working copy of the open document, or of any file |
 | `ideate_edit` | Anchored string replacements — one undo step, plus diagnostics |
-| `ideate_write` | Replace the whole document |
+| `ideate_write` | Replace a document's whole content |
 | `ideate_open` | Open a file in the editor |
-| `ideate_create_file` | A new uncommitted file, seeded from a template |
+| `ideate_create_file` | A new unsaved file, seeded from a template |
 | `ideate_check` | Ask the renderer what it thinks, without editing |
 | `ideate_scene_get` | List the elements on an Excalidraw canvas |
 | `ideate_scene_edit` | Add / move / restyle / remove canvas elements |
+
+Every tool above that names a document takes a **`path`**, so an agent can work on
+files without opening them and without moving what you are looking at. It is
+optional on the three that only read (omit it for the open document) and required
+on `ideate_edit`, `ideate_write` and `ideate_scene_edit` — the file you have open
+changes as you browse, and an edit aimed at "the open document" would follow you.
+A path that matches no file is created. Nothing is ever committed: an agent's
+changes land in the working copy, appear as unsaved in the file tree, and wait for
+you.
 
 ## Scripts
 

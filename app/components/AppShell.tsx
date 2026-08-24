@@ -82,8 +82,15 @@ import {
   saveDraft,
   clearDraft,
   docIdForFile,
+  docIdForLocalFile,
   scratchDocIdFor,
   listDraftPaths,
+  listLocalDraftPaths,
+  listLocalFiles,
+  readLocalFile,
+  writeLocalFile,
+  deleteLocalFile,
+  renameLocalFile,
 } from '@/lib/storage'
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
@@ -212,6 +219,36 @@ function defaultFileName(kind: FileKind, base: string): string {
 const NONE_THEME = '__none__'
 const CUSTOM_THEME = '__custom__'
 const HISTORY_PAGE_SIZE = 30
+
+/**
+ * Whether two versions of the same document differ.
+ *
+ * Scenes cannot be compared byte-for-byte (rule 9): re-serializing a scene we just
+ * loaded legitimately changes the bytes — key order, the `source` field, a
+ * renarrowed appState — so a freshly opened file would read as unsaved before
+ * anybody touched it. `scenesEqual` compares the drawing instead.
+ *
+ * Every dirty decision in this file goes through here, including the ones an agent
+ * makes about a file nobody has opened. They have to agree: one of them lights the
+ * dot in the sidebar and another decides whether a draft is kept, and a disagreement
+ * means a file marked unsaved with nothing saved in it.
+ */
+function contentDiffers(a: string, b: string, kind: FileKind): boolean {
+  return kind === 'excalidraw' ? !scenesEqual(a, b) : a !== b
+}
+
+/**
+ * What `loadedSha` holds for a saved *local* file.
+ *
+ * `loadedSha` has always answered two questions at once — "which commit is this"
+ * and "is there a saved version behind this document at all" — and only the first
+ * is about GitHub. Local mode needs the second: Restore, the diff gutter, DiffView
+ * and `pendingPaths` all key on `loadedSha !== null`, and every one of them is
+ * right in local mode for the same reason it is right in a repo. A sentinel keeps
+ * those four working untouched, and it can never be mistaken for a real sha, which
+ * is a 40-character hex string.
+ */
+const LOCAL_SAVED = 'local'
 
 /** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
 function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
@@ -416,6 +453,34 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const repo = githubEnabled ? config.repo : null
 
+  /**
+   * Local mode: no GitHub, and localStorage holds the saved files as well as the
+   * drafts over them.
+   *
+   * The two modes are deliberately *one* file lifecycle with two backing stores,
+   * not two features. Everything below that reads or writes a document asks which
+   * store it is talking to and nothing else changes — which is why the diff gutter,
+   * the dirty markers, Restore, and the agent's path resolution all work in local
+   * mode without a line of their own.
+   */
+  const localMode = !githubEnabled
+
+  /** Whether there is a file workspace at all: a connected repo, or local mode.
+   *  Signed in with no repo picked there is none, and the sidebar has nothing to
+   *  show. */
+  const hasWorkspace = localMode || !!repo
+
+  /** Every saved local file, or null before the store has been read (which is one
+   *  render, and is not the same as "no files" — see `savedPaths`). */
+  const [localPaths, setLocalPaths] = useState<readonly string[] | null>(null)
+
+  /** Re-read the local store. Called after every write to it, because it *is* the
+   *  file system in local mode — there is nothing to fetch and nothing to be stale
+   *  against. */
+  const refreshLocalFiles = useCallback(() => {
+    setLocalPaths(listLocalFiles())
+  }, [])
+
   // Which editor the current document gets. For a repo file the extension decides;
   // with nothing open (local mode, or before picking a file) it's the user's
   // scratch choice. Everything else about a document — reading, committing,
@@ -438,18 +503,22 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // the app chrome around it. Imposed for display only — never written to the file.
   const canvasBackground = useMemo(() => themeBackgroundColor(appliedConfig), [appliedConfig])
 
-  // Mermaid files compare byte-for-byte, but scene JSON can't: re-serializing a
-  // scene we just loaded legitimately changes the bytes (key order, the `source`
-  // field, a renarrowed appState), so a freshly opened file would read as unsaved
-  // before the user touched it. `scenesEqual` compares the drawing instead.
-  const dirty =
-    kind === 'excalidraw' ? !scenesEqual(text, baseline) : text !== baseline
+  const dirty = contentDiffers(text, baseline, kind)
   // Each scratch kind gets its own draft slot, so toggling between diagram,
-  // document and canvas in local mode parks the current work rather than
+  // document and canvas with nothing open parks the current work rather than
   // overwriting it with content the other surface can't read.
   const scratchDocId = scratchDocIdFor(config.scratchKind)
-  const docId =
-    repo && openPath ? docIdForFile(repo.owner, repo.name, repo.branch, openPath) : scratchDocId
+
+  /** The draft slot for a path in whichever store is backing this session. Every
+   *  read and write of a draft goes through here, so the two stores can never end
+   *  up sharing a slot. */
+  const docIdForPath = useCallback(
+    (path: string): string =>
+      repo ? docIdForFile(repo.owner, repo.name, repo.branch, path) : docIdForLocalFile(path),
+    [repo],
+  )
+
+  const docId = openPath && hasWorkspace ? docIdForPath(openPath) : scratchDocId
 
   // Keyed on the open document: edits within a file debounce, but switching files
   // takes effect at once so nothing downstream ever sees the outgoing file's text.
@@ -479,13 +548,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // has no sha behind it. Filtering against the fetched tree means a path that got
   // committed (here or in another tab) stops being pending on the next refresh,
   // whether or not something remembered to remove it.
+  /**
+   * Every path that genuinely exists in the saved store: on the branch in GitHub
+   * mode, in localStorage in local mode.
+   *
+   * Null until that store has been read, which is *not* the same as empty and the
+   * difference is load-bearing: against an empty set every path an agent names
+   * looks like one it should create, so a command arriving before the first tree
+   * fetch would write files over paths that already exist.
+   */
+  const savedPaths = useMemo<ReadonlySet<string> | null>(() => {
+    if (localMode) return localPaths === null ? null : new Set(localPaths)
+    return tree ? new Set(tree.tree.flatMap(collectFilePaths)) : null
+  }, [localMode, localPaths, tree])
+
   const pendingPaths = useMemo<ReadonlySet<string>>(() => {
-    const committed = new Set((tree?.tree ?? []).flatMap(collectFilePaths))
     const next = new Set<string>()
-    for (const path of createdPaths) if (!committed.has(path)) next.add(path)
-    if (repo && openPath && loadedSha === null) next.add(openPath)
+    for (const path of createdPaths) if (!savedPaths?.has(path)) next.add(path)
+    if (hasWorkspace && openPath && loadedSha === null) next.add(openPath)
     return next
-  }, [tree, createdPaths, repo, openPath, loadedSha])
+  }, [savedPaths, createdPaths, hasWorkspace, openPath, loadedSha])
 
   // Every path with unsaved edits made *this session*, not just the open one —
   // so switching files without saving still shows the earlier file as dirty in
@@ -517,12 +599,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [])
 
   const displayNodes = useMemo(() => {
-    const base = tree?.tree ?? []
+    const base = localMode ? buildTree([...(localPaths ?? [])]) : (tree?.tree ?? [])
     if (pendingPaths.size === 0) return base
     const paths = base.flatMap(collectFilePaths)
     for (const path of pendingPaths) if (!paths.includes(path)) paths.push(path)
     return buildTree(paths)
-  }, [tree, pendingPaths])
+  }, [localMode, localPaths, tree, pendingPaths])
 
   // Flat list of every file in the repo, for completing markdown link targets in
   // the editor. Derived from the same tree the sidebar shows, so a file created or
@@ -639,6 +721,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setSidebarWidth(stored.sidebarWidth)
     setAgentLinkOn(loadAgentLink())
     setHydrated(true)
+    // The local store is the file system in local mode, so read it now rather than
+    // leave `localPaths` null — every "does this file exist" question below waits on
+    // it, the agent's included.
+    if (!githubEnabled) setLocalPaths(listLocalFiles())
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
     // reloads rather than clobbering it with the start state. Which slot to read
@@ -668,34 +754,46 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [githubEnabled, refreshTree, showRepoStartState])
 
   /**
-   * Recover never-committed files across a reload. Neither `openPath` nor
-   * `createdPaths` is persisted, so after a refresh nothing remembers them — but
-   * their drafts are still in localStorage, and a draft under a path the branch
-   * doesn't have can only be a file created here and never committed.
+   * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths`
+   * is persisted, so after a refresh nothing remembers them — but their drafts are
+   * still in localStorage, and a draft under a path the saved store doesn't have can
+   * only be a file created here and never saved.
    *
-   * Deliberately **once per repo/branch**, on its first tree load, rather than on
+   * Deliberately **once per workspace**, on its first file list, rather than on
    * every refresh. A rename or a commit moves a draft before the tree that proves
    * where the path now lives has arrived, so re-deriving this against a stale tree
    * would briefly re-flag a path that is in fact committed — and while it is
-   * flagged, rename and delete would take their local-only branch and skip GitHub.
+   * flagged, rename and delete would take their never-saved branch and skip GitHub.
    */
   const recoveredFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!repo || !tree) return
-    const key = docIdForFile(repo.owner, repo.name, repo.branch, '')
+    if (!hasWorkspace || !savedPaths) return
+    const key = repo ? docIdForFile(repo.owner, repo.name, repo.branch, '') : 'local'
     if (recoveredFor.current === key) return
     recoveredFor.current = key
-    const committed = new Set(tree.tree.flatMap(collectFilePaths))
-    const orphans = listDraftPaths(repo.owner, repo.name, repo.branch).filter(
-      (path) => !committed.has(path),
-    )
+    const committed = savedPaths
+    const drafts = repo
+      ? listDraftPaths(repo.owner, repo.name, repo.branch)
+      : listLocalDraftPaths()
+    if (drafts.length === 0) return
+    // A draft is only ever written while a document is dirty and is cleared the
+    // moment it isn't, so a draft under this branch *is* a file with uncommitted
+    // edits — light its marker in the sidebar. Without this the markers lived only
+    // as long as the tab: an agent that edited six files nobody opened left the
+    // work in localStorage and no sign of it anywhere on screen after a reload.
+    setDirtyPaths((prev) => {
+      const next = new Set(prev)
+      for (const path of drafts) next.add(path)
+      return next
+    })
+    const orphans = drafts.filter((path) => !committed.has(path))
     if (orphans.length === 0) return
     setCreatedPaths((prev) => {
       const next = new Set(prev)
       for (const path of orphans) next.add(path)
       return next
     })
-  }, [repo, tree])
+  }, [hasWorkspace, savedPaths, repo])
 
   // Signed in with no repository selected, the app can't read, commit or browse
   // anything — so lead with the picker instead of an inert editor and a hint in
@@ -905,43 +1003,70 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo, onSelectBranch],
   )
 
+  /**
+   * The saved copy of `path`: the committed file on the branch, or the local file
+   * in localStorage.
+   *
+   * One reader for both stores, because three callers need it — opening a file, the
+   * agent resolving a path, and version history's compare — and a second spelling
+   * of "which store am I in" is a second chance to get it wrong.
+   */
+  const readSaved = useCallback(
+    async (
+      path: string,
+    ): Promise<
+      | { ok: true; content: string; sha: string }
+      | { ok: false; message: string; expired: boolean }
+    > => {
+      if (!repo) {
+        const file = readLocalFile(path)
+        if (!file) {
+          return { ok: false, message: `${path} is not saved in this browser.`, expired: false }
+        }
+        return { ok: true, content: file.content, sha: LOCAL_SAVED }
+      }
+      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      if (!res.ok) {
+        return {
+          ok: false,
+          message: res.error.message,
+          expired: handleExpiredSession(res.error),
+        }
+      }
+      return { ok: true, content: res.data.content, sha: res.data.sha }
+    },
+    [repo],
+  )
+
   const openFile = useCallback(
     async (path: string) => {
-      if (!repo) return
+      if (!hasWorkspace) return
       // A never-committed file has nothing on GitHub under its path, so reading it
       // would 404. Its draft *is* the file: reopen it exactly as it was created —
       // no sha, empty baseline, so it still reads as unsaved.
       if (pendingPaths.has(path)) {
-        const draft = loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        const draft = loadDraft(docIdForPath(path))
         setBaseline('')
         setLoadedSha(null)
         setOpenPath(path)
         setText(draft?.content ?? templateFor(fileKind(path)))
         return
       }
-      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      const res = await readSaved(path)
       if (!res.ok) {
-        if (handleExpiredSession(res.error)) return
-        toast.error(res.error.message)
+        if (!res.expired) toast.error(res.message)
         return
       }
-      const id = docIdForFile(repo.owner, repo.name, repo.branch, path)
-      const draft = loadDraft(id)
-      setBaseline(res.data.content)
-      setLoadedSha(res.data.sha)
+      const draft = loadDraft(docIdForPath(path))
+      setBaseline(res.content)
+      setLoadedSha(res.sha)
       setOpenPath(path)
-      // Only prefer the draft when it actually differs from what's committed. For
-      // scenes that comparison has to be semantic: a draft the canvas wrote is in
-      // canonical form and so rarely matches the committed bytes exactly, even
-      // when it's the identical drawing.
+      // Only prefer the draft when it actually differs from what's saved.
       const draftDiffers =
-        draft !== null &&
-        (fileKind(path) === 'excalidraw'
-          ? !scenesEqual(draft.content, res.data.content)
-          : draft.content !== res.data.content)
-      setText(draftDiffers && draft ? draft.content : res.data.content)
+        draft !== null && contentDiffers(draft.content, res.content, fileKind(path))
+      setText(draftDiffers && draft ? draft.content : res.content)
     },
-    [repo, pendingPaths],
+    [hasWorkspace, pendingPaths, docIdForPath, readSaved],
   )
 
   /** Open a file the user picked from the tree — the start of a new trail. */
@@ -1019,6 +1144,195 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [githubEnabled, repo, openPath, kind, dirty, text],
   )
 
+  /**
+   * One of the agent's document commands, resolved onto an actual document.
+   *
+   * This is what protocol 4's `path` buys, and the shape it takes is dictated by
+   * the fact that there are three places a document can be living, only one of
+   * which is React state:
+   *
+   *   - **The open one.** Held in `text`, edited through the live editor, with
+   *     `baseline` behind it. Reached by omitting the path — or by naming the file
+   *     that happens to be open, which resolves to exactly the same target so the
+   *     human's undo history does not depend on the agent's spelling.
+   *   - **A never-saved file.** Its localStorage draft is the only copy there is;
+   *     the saved store has nothing under the path.
+   *   - **A saved file.** Read through `readSaved`, with a draft layered over it
+   *     when one exists, because the draft is the working copy the human would see
+   *     if they opened it — and answering with saved bytes instead is how an agent
+   *     talks itself into re-doing an edit it made one call earlier.
+   *
+   * Which store "saved" means is `readSaved`'s problem, not this function's.
+   */
+  interface DocTarget {
+    /** Null only for the untitled document, which has no path until it is saved
+     *  somewhere. */
+    path: string | null
+    kind: FileKind
+    /** The working copy: unsaved edits included. */
+    text: string
+    /** The saved content, or null when the path was never saved (and so cannot be
+     *  compared against anything). */
+    committed: string | null
+    /** It is the document on screen, so writes go through the editor. */
+    open: boolean
+    /** This command brought the file into existence. */
+    created: boolean
+  }
+
+  /**
+   * Find the document a command names, fetching it if nobody has opened it.
+   *
+   * `create` is the difference between the mutating tools and the reading ones: a
+   * path that names nothing is a file to be made for `ideate_edit`, and a mistake
+   * worth reporting for `ideate_read`.
+   */
+  const resolveTarget = async (
+    path: string | undefined,
+    create: boolean,
+  ): Promise<DocTarget> => {
+    if (path === undefined || path === openPath) {
+      return {
+        path: openPath,
+        kind,
+        text,
+        // `baseline` is only the *committed* content once there is a commit behind
+        // it. For a never-committed file it is the empty string, and for the
+        // scratch document it is a template nobody committed.
+        committed: loadedSha === null ? null : baseline,
+        open: true,
+        created: false,
+      }
+    }
+    if (!hasWorkspace) {
+      throw new Error(
+        'No repository is connected, so there are no paths — this tab has one ' +
+          'untitled document. Call the tool again with no path.',
+      )
+    }
+    const invalid = validatePath(path)
+    if (invalid) throw new Error(`${path}: ${invalid}`)
+    // Deciding "this file does not exist, I will create it" against a list that has
+    // not arrived yet would create files that already exist, and then hand back a
+    // template as their content.
+    if (!savedPaths) {
+      throw new Error('The file list has not loaded yet. Try again in a moment.')
+    }
+    const targetKind = fileKind(path)
+    const draft = loadDraft(docIdForPath(path))
+    if (savedPaths.has(path)) {
+      const res = await readSaved(path)
+      if (!res.ok) {
+        throw new Error(
+          res.expired ? 'The GitHub session expired. The user has been signed out.' : res.message,
+        )
+      }
+      const committed = res.content
+      const differs = draft !== null && contentDiffers(draft.content, committed, targetKind)
+      return {
+        path,
+        kind: targetKind,
+        text: differs && draft ? draft.content : committed,
+        committed,
+        open: false,
+        created: false,
+      }
+    }
+    // Not in the saved store. A draft under the path still means the file exists —
+    // it was created here and never saved. Read straight from storage rather than
+    // from `pendingPaths`, because a command that creates a file must be visible to
+    // the very next command: `createdPaths` only reaches `pendingPaths` through a
+    // render, and two agent calls can arrive between two of those.
+    if (draft) {
+      return {
+        path,
+        kind: targetKind,
+        text: draft.content,
+        committed: null,
+        open: false,
+        created: false,
+      }
+    }
+    // A never-saved file with no draft: the human emptied it. The autosave gate
+    // clears the slot the moment a document stops being dirty, and for a file with
+    // nothing saved behind it the baseline is the empty string — so no draft, while
+    // the path is still in `pendingPaths`, means the file exists and holds nothing.
+    // The truth is worth more here than a template: an agent handed the starter
+    // text would anchor its next edit on content the file does not have.
+    if (pendingPaths.has(path)) {
+      return { path, kind: targetKind, text: '', committed: null, open: false, created: false }
+    }
+    if (!create) {
+      throw new Error(
+        `No such file in ${workspaceLabel}: ${path}. ` +
+          'Call ideate_list_files to see what is there.',
+      )
+    }
+    return {
+      path,
+      kind: targetKind,
+      text: templateFor(targetKind),
+      committed: null,
+      open: false,
+      created: true,
+    }
+  }
+
+  /**
+   * Store what a command produced, and make the sidebar say so.
+   *
+   * The open document goes through `setText` and the existing machinery takes it
+   * from there. A background file has no machinery: nothing is watching it, so this
+   * is where its draft is written and where its dirty marker is turned on — or off,
+   * when an edit happens to restore the committed content, which has to clear the
+   * draft too or the file stays flagged forever over a difference of nothing.
+   */
+  const writeBack = (target: DocTarget, next: string): void => {
+    if (target.open) {
+      setText(next)
+      return
+    }
+    const path = target.path
+    // Unreachable: a target that is not the open document was resolved from a path
+    // against a workspace. Narrowing rather than asserting.
+    if (path === null) return
+    const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
+    const id = docIdForPath(path)
+    if (isDirty) saveDraft(id, next)
+    else clearDraft(id)
+    if (target.created) setCreatedPaths((prev) => withPath(prev, path))
+    setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
+  }
+
+  /** How to name the saved store in a message to an agent. */
+  const workspaceLabel = repo ? `${repo.owner}/${repo.name}@${repo.branch}` : 'this browser'
+
+  /**
+   * Refuse a mutation that did not say which document it meant.
+   *
+   * The reading tools default to the open document happily. The mutating ones must
+   * not, because the open document is not a stable address: the human browses their
+   * files while the agent works, so "the open document" is whichever one they
+   * clicked last, and an edit that lands on the wrong file is not recoverable by
+   * reading it again.
+   *
+   * The exception is the **untitled** document, which has no path to name — the
+   * scratch surface before anything has been saved. Keying on that rather than on
+   * "is this local mode" is what makes the rule hold in both: local mode has files
+   * now, and a connected repo still has an untitled document. And when the human
+   * opens a file mid-turn, an agent that meant the untitled one is refused here
+   * rather than silently redirected onto theirs.
+   */
+  function requirePath(path: string | undefined, tool: string): void {
+    if (path !== undefined || openPath === null) return
+    throw new Error(
+      `${tool} needs a path. ${openPath} is open, but the open document changes as ` +
+        'the human browses — so an edit with no path can land on a file you never ' +
+        'read. Name the file you mean: ideate_status reports the open path, ' +
+        'ideate_list_files the rest.',
+    )
+  }
+
   // Rebuilt every render on purpose. The hook reads it through a ref, so a fresh
   // object costs nothing and every capability closes over current state — a
   // memoized version would have to list every dependency the closures touch, and
@@ -1028,60 +1342,58 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
     listFiles: () => ({ paths: repoFilePaths }),
 
-    readOpen: () => ({ path: openPath, text, committed: false }),
-
-    readPath: async (path) => {
-      if (!repo) {
-        throw new Error(
-          'No repository is connected, so only the open document can be read. ' +
-            'Call ideate_read with no path.',
-        )
+    read: async (path) => {
+      const target = await resolveTarget(path, false)
+      return {
+        path: target.path,
+        text: target.text,
+        committed:
+          target.path !== null &&
+          target.committed !== null &&
+          !contentDiffers(target.text, target.committed, target.kind),
       }
-      // Listed by `ideate_list_files` but not on the branch: a never-committed
-      // file, whose draft is the only copy. Reading through GitHub would 404.
-      if (pendingPaths.has(path)) {
-        const draft = loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
-        return {
-          path,
-          text: draft?.content ?? templateFor(fileKind(path)),
-          committed: false,
-        }
-      }
-      const res = await readFile(repo.owner, repo.name, path, repo.branch)
-      if (!res.ok) {
-        if (handleExpiredSession(res.error)) {
-          throw new Error('The GitHub session expired. The user has been signed out.')
-        }
-        throw new Error(res.error.message)
-      }
-      return { path, text: res.data.content, committed: true }
     },
 
-    applyEdits: async (edits) => {
-      requireText()
-      const handle = editorRef.current
-      if (handle) return handle.applyEdits(edits)
-      // No editor mounted. Resolve against the very same text with the very same
-      // function and go through `setText`; the editor reconciles it when it comes
-      // back. Refusing here instead would make the tools mysteriously unavailable
-      // whenever the human happened to be reading a diff.
-      const next = applyResolved(text, resolveEdits(text, edits))
-      setText(next)
-      return next
+    applyEdits: async (edits, path) => {
+      requirePath(path, 'ideate_edit')
+      const target = await resolveTarget(path, true)
+      requireText(target.kind)
+      if (target.open) {
+        const handle = editorRef.current
+        // No editor mounted (a canvas is open, or the diff view has taken the
+        // pane). Resolve against the very same text with the very same function and
+        // go through `setText`; the editor reconciles it when it comes back.
+        // Refusing here instead would make the tools mysteriously unavailable
+        // whenever the human happened to be reading a diff.
+        const next = handle
+          ? handle.applyEdits(edits)
+          : applyResolved(target.text, resolveEdits(target.text, edits))
+        if (!handle) setText(next)
+        return { path: target.path, created: false, text: next }
+      }
+      // Resolved before anything is written, so an edit whose anchor is missing
+      // leaves a file it was about to create uncreated. Half a file, named after a
+      // template the agent never asked for, is worse than no file.
+      const next = applyResolved(target.text, resolveEdits(target.text, edits))
+      writeBack(target, next)
+      return { path: target.path, created: target.created, text: next }
     },
 
-    writeText: (next) => {
-      requireText()
-      setText(next)
+    writeText: async (text: string, path) => {
+      requirePath(path, 'ideate_write')
+      const target = await resolveTarget(path, true)
+      requireText(target.kind)
+      writeBack(target, text)
+      return { path: target.path, created: target.created }
     },
 
     openFile: async (path) => {
-      if (!repo) throw new Error('No repository is connected — nothing to open.')
-      // Checked against the tree first so a mistyped path says so, rather than
+      if (!hasWorkspace) throw new Error('No repository is connected — nothing to open.')
+      // Checked against the file list first so a mistyped path says so, rather than
       // surfacing as a toast in the UI and an empty success to the agent.
       if (!repoFilePaths.includes(path)) {
         throw new Error(
-          `No such file on ${repo.owner}/${repo.name}@${repo.branch}: ${path}. ` +
+          `No such file in ${workspaceLabel}: ${path}. ` +
             'Call ideate_list_files to see what is there.',
         )
       }
@@ -1093,66 +1405,90 @@ export default function AppShell({ user, mode }: AppShellProps) {
     },
 
     createFile: (path, content) => {
-      if (!repo) throw new Error('No repository is connected — nothing to create a file in.')
+      if (!hasWorkspace) {
+        throw new Error('No repository is connected — nothing to create a file in.')
+      }
       const invalid = validatePath(path)
       if (invalid) throw new Error(invalid)
       if (repoFilePaths.includes(path)) {
         throw new Error(`${path} already exists. Use ideate_open to edit it.`)
       }
       // Exactly what the create prompt does on submit: the file becomes the open
-      // document with no sha behind it. Nothing is pushed to GitHub — committing
-      // stays a human action, which is what keeps an agent from writing to the
-      // user's repository.
+      // document with nothing saved behind it. Nothing is pushed to GitHub —
+      // committing stays a human action, which is what keeps an agent from writing
+      // to the user's repository.
       const body = content ?? templateFor(fileKind(path))
       setLinkTrail([])
       setCreatedPaths((prev) => withPath(prev, path))
-      // Written here rather than left to the autosave effect: for a file with no
-      // commit behind it the draft is the only copy, and an agent creating two
-      // files in quick succession must not depend on a render landing in between.
-      saveDraft(docIdForFile(repo.owner, repo.name, repo.branch, path), body)
+      // Written here rather than left to the autosave effect: for a file with
+      // nothing saved behind it the draft is the only copy, and an agent creating
+      // two files in quick succession must not depend on a render landing in
+      // between.
+      saveDraft(docIdForPath(path), body)
       setOpenPath(path)
       setLoadedSha(null)
       setBaseline('')
       setText(body)
     },
 
-    // Takes the text to check rather than always reading the open document: after
-    // an edit the caller holds the new text and React has not re-rendered yet, so
-    // checking `text` here would report on the document as it was before.
-    check: (override) => collectDiagnostics(override ?? text, kind, appliedConfig),
-
-    sceneGet: (full) => {
-      requireScene()
-      return summarizeScene(text, full)
+    // Takes the text to check rather than always reading the document: after an
+    // edit the caller holds the new text and React has not re-rendered yet, so
+    // reading state here would report on the document as it was before.
+    check: async ({ text: override, path }) => {
+      if (override !== undefined) {
+        return {
+          path: path ?? openPath,
+          diagnostics: await collectDiagnostics(
+            override,
+            path === undefined ? kind : fileKind(path),
+            appliedConfig,
+          ),
+        }
+      }
+      const target = await resolveTarget(path, false)
+      return {
+        path: target.path,
+        diagnostics: await collectDiagnostics(target.text, target.kind, appliedConfig),
+      }
     },
 
-    sceneEdit: async (ops) => {
-      requireScene()
-      const { text: next, elementCount } = await applySceneOps(text, ops)
-      // Through `setText`, not a canvas ref: `CanvasInner` already ingests an
-      // external `value` via `updateScene`, so dirty tracking (rule 9) and the
-      // file's own stored background (rule 10) keep working untouched.
-      setText(next)
-      return { applied: ops.length, elementCount }
+    sceneGet: async (full, path) => {
+      const target = await resolveTarget(path, false)
+      requireScene(target.kind)
+      return { path: target.path, ...summarizeScene(target.text, full) }
+    },
+
+    sceneEdit: async (ops, path) => {
+      requirePath(path, 'ideate_scene_edit')
+      const target = await resolveTarget(path, true)
+      requireScene(target.kind)
+      const { text: next, elementCount } = await applySceneOps(target.text, ops)
+      // Through `setText` (or a draft), not a canvas ref: `CanvasInner` already
+      // ingests an external `value` via `updateScene`, so dirty tracking (rule 9)
+      // and the file's own stored background (rule 10) keep working untouched.
+      writeBack(target, next)
+      return { path: target.path, created: target.created, applied: ops.length, elementCount }
     },
 
     cursor: () => editorRef.current?.cursor() ?? null,
   }
 
   // The two surfaces hold incompatible content, so a tool aimed at the wrong one
-  // is answered with the name of the tool that would have worked.
-  function requireText(): void {
-    if (kind === 'excalidraw') {
+  // is answered with the name of the tool that would have worked. Takes the
+  // target's kind rather than reading the open document's: since protocol 4 the
+  // document a tool acts on is often not the one on screen.
+  function requireText(target: FileKind): void {
+    if (target === 'excalidraw') {
       throw new Error(
-        'The open document is an Excalidraw scene. Use ideate_scene_get and ' +
+        'That document is an Excalidraw scene. Use ideate_scene_get and ' +
           'ideate_scene_edit — the text tools cannot edit a canvas.',
       )
     }
   }
-  function requireScene(): void {
-    if (kind !== 'excalidraw') {
+  function requireScene(target: FileKind): void {
+    if (target !== 'excalidraw') {
       throw new Error(
-        `The open document is ${kind}, not an Excalidraw scene. Use ideate_read and ` +
+        `That document is ${target}, not an Excalidraw scene. Use ideate_read and ` +
           'ideate_edit instead.',
       )
     }
@@ -1178,7 +1514,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const newDiagram = useCallback(
     (dirPath?: string, newKind: FileKind = 'mermaid') => {
-      if (!repo) {
+      // Signed in with no repo picked: there is nowhere to put a named file, so
+      // this is the untitled scratch document and nothing else.
+      if (!hasWorkspace) {
         setOpenPath(null)
         setLoadedSha(null)
         setBaseline(NEW_TEMPLATE)
@@ -1198,7 +1536,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
             : newKind === 'markdown'
               ? 'New document'
               : 'New diagram',
-        description: `Create a new file in ${dirPath || 'the repository root'} on ${repo.branch}.`,
+        description: localMode
+          ? `Create a new file in ${dirPath || 'this browser'}. Nothing leaves the browser.`
+          : `Create a new file in ${dirPath || 'the repository root'} on ${repo?.branch}.`,
         label: 'File name',
         defaultValue: 'untitled',
         prefix,
@@ -1209,9 +1549,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
           setPromptOpen(false)
           setCreatedPaths((prev) => withPath(prev, path))
           const body = templateFor(fileKind(path))
-          // The draft is this file's only copy until it's committed — see the
-          // agent's `createFile` for why it's written here and not by the effect.
-          saveDraft(docIdForFile(repo.owner, repo.name, repo.branch, path), body)
+          // The draft is this file's only copy until it's saved — see the agent's
+          // `createFile` for why it's written here and not by the effect.
+          saveDraft(docIdForPath(path), body)
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
@@ -1219,12 +1559,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
         },
       })
     },
-    [repo, openPrompt],
+    [hasWorkspace, localMode, repo, docIdForPath, openPrompt],
   )
 
   const requestRename = useCallback(
     (node: TreeNode) => {
-      if (!repo || node.type !== 'file') return
+      if (!hasWorkspace || node.type !== 'file') return
       // A never-committed file exists only in this browser: it is spliced into the
       // sidebar from `pendingPaths` and its content is a localStorage draft, with
       // nothing on GitHub under either name. Renaming it through the API would ask
@@ -1234,9 +1574,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const local = pendingPaths.has(node.path)
       openPrompt({
         title: 'Rename file',
-        description: local
-          ? `Rename this file before its first commit. It only exists in this browser, so nothing on ${repo.branch} changes until you commit.`
-          : `Move or rename this file on ${repo.branch}. Git history is preserved as a rename.`,
+        description: localMode
+          ? 'Move or rename this file. It is stored in this browser.'
+          : local
+            ? `Rename this file before its first commit. It only exists in this browser, so nothing on ${repo?.branch} changes until you commit.`
+            : `Move or rename this file on ${repo?.branch}. Git history is preserved as a rename.`,
         label: 'New path',
         defaultValue: node.path,
         submitLabel: 'Rename',
@@ -1246,35 +1588,43 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
-          // The committed case has to land on GitHub first: everything below moves
-          // local bookkeeping to match, and doing that before the API call would
-          // leave the app pointing at a path the repo never got.
+          // The saved case has to land on the store first: everything below moves
+          // local bookkeeping to match, and doing that before the write would
+          // leave the app pointing at a path the store never got.
           if (!local) {
-            const res = await renameFile(
-              repo.owner,
-              repo.name,
-              node.path,
-              newPath,
-              repo.branch,
-            )
-            if (!res.ok) {
-              if (handleExpiredSession(res.error)) return
-              toast.error(res.error.message)
-              return
+            if (localMode) {
+              if (!renameLocalFile(node.path, newPath)) {
+                toast.error(`Could not rename ${node.path} — this browser's storage is full.`)
+                return
+              }
+              refreshLocalFiles()
+              if (openPath === node.path) setLoadedSha(LOCAL_SAVED)
+            } else if (repo) {
+              const res = await renameFile(
+                repo.owner,
+                repo.name,
+                node.path,
+                newPath,
+                repo.branch,
+              )
+              if (!res.ok) {
+                if (handleExpiredSession(res.error)) return
+                toast.error(res.error.message)
+                return
+              }
+              if (openPath === node.path) setLoadedSha(res.data.sha)
             }
-            if (openPath === node.path) setLoadedSha(res.data.sha)
           }
           setPromptOpen(false)
-          // Carry any uncommitted draft over to the new path. For a local rename
+          // Carry any unsaved draft over to the new path. For a never-saved file
           // this *is* the rename — the draft is the only copy of the file.
-          const oldId = docIdForFile(repo.owner, repo.name, repo.branch, node.path)
-          const newId = docIdForFile(repo.owner, repo.name, repo.branch, newPath)
+          const oldId = docIdForPath(node.path)
+          const newId = docIdForPath(newPath)
           const draft = loadDraft(oldId)
           if (draft) saveDraft(newId, draft.content)
           clearDraft(oldId)
-          // A local rename moves the only copy there is, so the never-committed
-          // set has to follow it or the file drops out of the sidebar under both
-          // names.
+          // A never-saved rename moves the only copy there is, so the pending set
+          // has to follow it or the file drops out of the sidebar under both names.
           if (local) {
             setCreatedPaths((prev) => withPath(withoutPaths(prev, [node.path]), newPath))
           }
@@ -1287,13 +1637,23 @@ export default function AppShell({ user, mode }: AppShellProps) {
           })
           if (openPath === node.path) setOpenPath(newPath)
           toast.success(`Renamed to ${newPath}`)
-          // A local rename changed nothing on the branch, and `pendingPaths`
+          // A never-saved rename changed nothing on the branch, and `pendingPaths`
           // already re-splices the new name into the sidebar.
-          if (!local) void refreshTree(repo)
+          if (!local && repo) void refreshTree(repo)
         },
       })
     },
-    [repo, openPrompt, openPath, pendingPaths, refreshTree],
+    [
+      hasWorkspace,
+      localMode,
+      repo,
+      openPrompt,
+      openPath,
+      pendingPaths,
+      docIdForPath,
+      refreshLocalFiles,
+      refreshTree,
+    ],
   )
 
   // Reset the editor to a fresh scratch doc — used when the file being edited is
@@ -1317,17 +1677,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [])
 
   const confirmDelete = useCallback(async () => {
-    if (!repo || !deleteTarget) return
+    if (!hasWorkspace || !deleteTarget) return
     const paths = collectFilePaths(deleteTarget)
     const affectsOpen = !!openPath && paths.includes(openPath)
-    // A never-committed file (the pending new one) only exists locally — there is
-    // nothing on GitHub to remove, so skip the API for it.
+    // A never-saved file (the pending new one) only exists as a draft — there is
+    // nothing in the saved store to remove, so skip the write for it.
     const committed = paths.filter((p) => !pendingPaths.has(p))
     // Drop every draft under the deleted paths. Left behind, a draft *is* a
-    // never-committed file as far as the recovery effect above is concerned, so a
-    // deleted file would reappear as a new one on the next tree load.
+    // never-saved file as far as the recovery effect above is concerned, so a
+    // deleted file would reappear as a new one on the next load.
     const forget = () => {
-      for (const p of paths) clearDraft(docIdForFile(repo.owner, repo.name, repo.branch, p))
+      for (const p of paths) clearDraft(docIdForPath(p))
       setCreatedPaths((prev) => withoutPaths(prev, paths))
       setDirtyPaths((prev) => withoutPaths(prev, paths))
     }
@@ -1338,6 +1698,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setDeleteTarget(null)
       return
     }
+    if (localMode) {
+      for (const p of committed) deleteLocalFile(p)
+      refreshLocalFiles()
+      forget()
+      setDeleteOpen(false)
+      setDeleteTarget(null)
+      if (affectsOpen) detachEditor()
+      toast.success(
+        committed.length === 1 ? `Deleted ${committed[0]}` : `Deleted ${committed.length} files`,
+      )
+      return
+    }
+    if (!repo) return
     setDeleteBusy(true)
     const res = await deletePaths(repo.owner, repo.name, committed, repo.branch)
     setDeleteBusy(false)
@@ -1356,7 +1729,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setDeleteTarget(null)
     if (affectsOpen) detachEditor()
     void refreshTree(repo)
-  }, [repo, deleteTarget, pendingPaths, openPath, detachEditor, refreshTree])
+  }, [
+    hasWorkspace,
+    localMode,
+    repo,
+    deleteTarget,
+    pendingPaths,
+    openPath,
+    docIdForPath,
+    refreshLocalFiles,
+    detachEditor,
+    refreshTree,
+  ])
 
   const commitCurrent = useCallback(
     async (path: string, sha: string | undefined, content: string) => {
@@ -1389,25 +1773,73 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo, refreshTree, scratchDocId],
   )
 
+  /**
+   * Save to the local store — local mode's whole of `commitCurrent`.
+   *
+   * Same shape and the same bookkeeping, minus everything that only a repo has: no
+   * sha, so no conflict, and nothing to refetch afterwards because this *is* the
+   * store. What it keeps is the part that matters: the saved content becomes the
+   * baseline, so the document reads as clean and the diff has something to diff
+   * against.
+   */
+  const saveLocal = useCallback(
+    (path: string, content: string) => {
+      if (!writeLocalFile(path, content)) {
+        toast.error(
+          `Could not save ${path} — this browser's storage is full. ` +
+            'Export what you need, or delete a file you are done with.',
+        )
+        return
+      }
+      setBaseline(content)
+      setLoadedSha(LOCAL_SAVED)
+      setOpenPath(path)
+      setCreatedPaths((prev) => withoutPaths(prev, [path]))
+      refreshLocalFiles()
+      // The scratch slot is spent: this document has a name now. Clear the slot for
+      // the kind it came from, not just the mermaid one.
+      clearDraft(scratchDocId)
+      toast.success(`Saved ${path}`)
+    },
+    [refreshLocalFiles, scratchDocId],
+  )
+
   const onSave = useCallback(() => {
-    if (!repo || !dirty || saving) return
+    if (!hasWorkspace || !dirty || saving) return
     if (openPath === null) {
       openPrompt({
-        title: 'Save to repository',
-        description: `Choose a path on ${repo.branch} for this document.`,
+        title: localMode ? 'Save file' : 'Save to repository',
+        description: localMode
+          ? 'Choose a path for this document. It is saved in this browser.'
+          : `Choose a path on ${repo?.branch} for this document.`,
         label: 'File path',
         defaultValue: defaultFileName(kind, 'untitled'),
         submitLabel: 'Save',
         validate: validatePathForKind(kind),
         onSubmit: (path) => {
           setPromptOpen(false)
-          void commitCurrent(path, undefined, text)
+          if (localMode) saveLocal(path, text)
+          else void commitCurrent(path, undefined, text)
         },
       })
       return
     }
-    void commitCurrent(openPath, loadedSha ?? undefined, text)
-  }, [repo, dirty, saving, openPath, loadedSha, text, kind, commitCurrent, openPrompt])
+    if (localMode) saveLocal(openPath, text)
+    else void commitCurrent(openPath, loadedSha ?? undefined, text)
+  }, [
+    hasWorkspace,
+    localMode,
+    repo,
+    dirty,
+    saving,
+    openPath,
+    loadedSha,
+    text,
+    kind,
+    commitCurrent,
+    saveLocal,
+    openPrompt,
+  ])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
   // commit. Only meaningful once there is an actual commit to fall back to
@@ -1424,13 +1856,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
   }, [])
 
-  // Keyboard shortcuts (only when GitHub repo features are active): ⌘/Ctrl+S
-  // saves; ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because
-  // browsers reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it.
-  // `e.code` (physical key) is used so macOS Option+N (a dead key) still matches.
-  // ⌘/Ctrl+B toggles the file-tree sidebar (only meaningful once a repo is open).
+  // Keyboard shortcuts, wherever there are files to act on: ⌘/Ctrl+S saves;
+  // ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because browsers
+  // reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it. `e.code`
+  // (physical key) is used so macOS Option+N (a dead key) still matches.
+  // ⌘/Ctrl+B toggles the file-tree sidebar.
   useEffect(() => {
-    if (!githubEnabled) return
+    if (!hasWorkspace) return
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.code === 'KeyS' && !e.altKey) {
@@ -1439,14 +1871,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
-      } else if (e.code === 'KeyB' && !e.altKey && repo) {
+      } else if (e.code === 'KeyB' && !e.altKey) {
         e.preventDefault()
         setSidebarOpen((v) => !v)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [githubEnabled, onSave, newDiagram, repo])
+  }, [hasWorkspace, onSave, newDiagram])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
@@ -1678,11 +2110,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
   }, [versionContent, repo, kind, openPrompt])
 
-  const canSave = !!repo && dirty && text.trim().length > 0 && !saving
-  // A canvas has no text to diff, and a file with no commit behind it has nothing
-  // to diff against.
+  const canSave = hasWorkspace && dirty && text.trim().length > 0 && !saving
+  // A canvas has no text to diff, and a file with nothing saved behind it has
+  // nothing to diff against.
   const canDiff = kind !== 'excalidraw' && loadedSha !== null
-  const showSidebar = githubEnabled && !!repo && sidebarOpen
+  const showSidebar = hasWorkspace && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
   const sidebarHint = isMac ? '⌘ B' : 'Ctrl + B'
@@ -1691,7 +2123,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex flex-none items-center justify-between gap-4 border-b bg-card px-4 py-2">
         <div className="flex items-center gap-2">
-          {githubEnabled && repo ? (
+          {hasWorkspace ? (
             <Button
               size="icon-sm"
               variant="ghost"
@@ -1744,19 +2176,24 @@ export default function AppShell({ user, mode }: AppShellProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          {githubEnabled ? (
+          {hasWorkspace || githubEnabled ? (
             <>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={onRestore}
                 disabled={!canRestore}
-                title="Restore to last commit"
+                title={localMode ? 'Restore to last save' : 'Restore to last commit'}
               >
                 <RotateCcw /> Restore
               </Button>
-              <Button size="sm" onClick={onSave} disabled={!canSave} title={`Commit (${saveHint})`}>
-                {saving ? 'Committing…' : 'Commit'}
+              <Button
+                size="sm"
+                onClick={onSave}
+                disabled={!canSave}
+                title={`${localMode ? 'Save' : 'Commit'} (${saveHint})`}
+              >
+                {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
                 <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
                   {isMac ? (
                     <>
@@ -1810,15 +2247,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 ) : null}
               </span>
               <div className="flex items-center gap-0.5">
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={() => repo && void refreshTree(repo)}
-                  disabled={!repo || treeLoading}
-                  title="Refresh files"
-                >
-                  <RefreshCw className={cn(treeLoading && 'animate-spin')} />
-                </Button>
+                {/* Nothing to refresh in local mode: the sidebar is not a cached
+                    view of a remote list, it is the store. */}
+                {repo ? (
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={() => void refreshTree(repo)}
+                    disabled={treeLoading}
+                    title="Refresh files"
+                  >
+                    <RefreshCw className={cn(treeLoading && 'animate-spin')} />
+                  </Button>
+                ) : null}
                 <NewFileMenu onSelect={(k) => newDiagram(undefined, k)}>
                   <Button
                     size="icon-xs"
@@ -1847,7 +2288,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
               ) : null}
               {treeError && tree === null ? (
                 <p className="p-2 text-sm text-destructive">{treeError}</p>
-              ) : tree === null ? (
+              ) : !localMode && tree === null ? (
                 <FileTreeSkeleton />
               ) : (
                 <FileTree
@@ -1885,7 +2326,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
-            {githubEnabled && repo && linkTrail.length > 0 ? (
+            {hasWorkspace && linkTrail.length > 0 ? (
               <Button
                 size="icon-xs"
                 variant="ghost"
@@ -1896,13 +2337,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <ArrowLeft />
               </Button>
             ) : null}
-            {githubEnabled && repo ? (
-              <span>{openPath ?? 'untitled (unsaved local draft)'}</span>
-            ) : githubEnabled ? (
-              <span>Connect a repository to browse and commit your diagrams.</span>
+            {hasWorkspace ? (
+              <span>
+                {openPath ??
+                  (localMode ? 'untitled (unsaved)' : 'untitled (unsaved local draft)')}
+              </span>
             ) : (
-              <span>Local mode — edits stay in your browser (localStorage).</span>
+              <span>Connect a repository to browse and commit your diagrams.</span>
             )}
+            {localMode ? (
+              <span className="text-muted-foreground/70">
+                · local mode, files stay in this browser
+              </span>
+            ) : null}
             {/* With no file open there's no extension to infer from, so the user
                 picks the surface. Each kind keeps its own draft, so toggling is
                 non-destructive.

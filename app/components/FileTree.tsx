@@ -99,7 +99,15 @@ export default function FileTree({
             <code>{ext}</code>
           </span>
         ))}{' '}
-        files found on <code>{branch}</code>.
+        files{' '}
+        {branch ? (
+          <>
+            found on <code>{branch}</code>
+          </>
+        ) : (
+          'saved in this browser'
+        )}
+        . Use the <strong>+</strong> above to make one.
       </p>
     )
   }

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   PROTOCOL_VERSION,
   type ClientFrame,
+  type EditResult,
   type ServerFrame,
 } from './agentProtocol'
 
@@ -82,11 +83,33 @@ describe('server frames', () => {
       },
     }))
 
+  // Protocol 4: every command that names a document has a with-path and a
+  // without-path shape, and the pair is load-bearing for the same reason `read`'s
+  // was — except worse. A dropped `path` on `read` returns the wrong document,
+  // which is visible; a dropped `path` on `edit` *changes* the wrong document.
+  it('req edit (path)', () =>
+    matches('server-req-edit-path', {
+      t: 'req',
+      id: 12,
+      command: {
+        cmd: 'edit',
+        path: 'docs/architecture.md',
+        edits: [{ oldText: 'A --> B', newText: 'A --> C' }],
+      },
+    }))
+
   it('req write', () =>
     matches('server-req-write', {
       t: 'req',
       id: 6,
       command: { cmd: 'write', text: 'flowchart TD\n  A --> B\n' },
+    }))
+
+  it('req write (path)', () =>
+    matches('server-req-write-path', {
+      t: 'req',
+      id: 13,
+      command: { cmd: 'write', path: 'diagrams/new.mmd', text: 'flowchart TD\n  A --> B\n' },
     }))
 
   it('req open', () =>
@@ -105,6 +128,13 @@ describe('server frames', () => {
 
   it('req check', () => matches('server-req-check', { t: 'req', id: 9, command: { cmd: 'check' } }))
 
+  it('req check (path)', () =>
+    matches('server-req-check-path', {
+      t: 'req',
+      id: 14,
+      command: { cmd: 'check', path: 'docs/architecture.md' },
+    }))
+
   // `full: false` present rather than omitted, for the same reason as `read`: a Go
   // `bool` with `omitempty` drops it, and "summary only" then becomes
   // indistinguishable from "the field was never sent".
@@ -113,6 +143,13 @@ describe('server frames', () => {
       t: 'req',
       id: 10,
       command: { cmd: 'scene_get', full: false },
+    }))
+
+  it('req scene_get (path)', () =>
+    matches('server-req-scene-get-path', {
+      t: 'req',
+      id: 15,
+      command: { cmd: 'scene_get', path: 'canvas/sketch.excalidraw', full: false },
     }))
 
   it('req scene_edit', () =>
@@ -153,18 +190,39 @@ describe('server frames', () => {
         ],
       },
     }))
+
+  it('req scene_edit (path)', () =>
+    matches('server-req-scene-edit-path', {
+      t: 'req',
+      id: 16,
+      command: {
+        cmd: 'scene_edit',
+        path: 'canvas/sketch.excalidraw',
+        ops: [{ op: 'add', type: 'rectangle', x: 40, y: 40, text: 'Start' }],
+      },
+    }))
 })
 
 describe('client frames', () => {
   it('hello', () =>
     matches('client-hello', { t: 'hello', code: 'K7QM4XZP', protocol: PROTOCOL_VERSION }))
 
+  // `data` is an `EditResult`, annotated so the fixture is checked against the
+  // declaration rather than against `unknown` — `ClientFrame` types the field as
+  // `unknown`, so the two fields protocol 4 added to every mutating result would
+  // otherwise be typechecked by nothing at all.
   it('res ok', () =>
     matches('client-res-ok', {
       t: 'res',
       id: 5,
       ok: true,
-      data: { applied: 2, lineCount: 12, diagnostics: [] },
+      data: {
+        path: 'diagrams/flow.mmd',
+        created: false,
+        applied: 2,
+        lineCount: 12,
+        diagnostics: [],
+      } satisfies EditResult,
     }))
 
   it('res error', () =>
