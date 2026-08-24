@@ -317,6 +317,59 @@ that helper depends on: the faces are registered on `document.fonts` by the
 bare `load`), and each face is a per-glyph-range subset (hence passing the text, so
 `load` fetches the subsets those characters need).
 
+**Which is exactly the wrong dependency, because `scene_edit` exists to work on a
+file nobody is looking at.** Waiting for a mounted editor could not serve its main
+use, and `create_canvas` drew before it opened, so the commonest way to reach either
+tool — an agent drawing while the human reads a markdown file — measured every label
+against the substitute face. Verified in the browser: with no canvas mounted,
+`Excalifont` is absent from `document.fonts` after six seconds of polling, and
+`measureText` returns 184px for "Authentication Service" where a mounted editor
+returns 220px.
+
+So **the app registers the faces itself, at page load** (`lib/excalidrawFonts.ts`),
+and the measurement stopped depending on what is on screen. Getting there needed the
+declarations, which live in the bundle rather than in any stylesheet, so
+`scripts/vendor-excalidraw-assets.mjs` — already copying the woff2 files — now also
+lifts out the `@font-face` descriptors beside them. That is a real coupling to
+minified internals, so every assumption it makes is asserted: an unresolvable
+`unicode-range`, or a vendored file no descriptor accounts for, **fails the build**
+with a message naming what it could not find. Shipping an app that measures text
+wrong is the failure mode being designed against, and it is silent.
+
+Three things fell out of the shape of the data:
+
+- **The manifest is split in two, and the split has one family in it.** Xiaolai, the
+  CJK fallback, is subset per CJK block: 209 faces and ~40KB gzipped of range
+  bookkeeping, against 1.3KB for the other six families together. It gets its own
+  manifest, fetched only when the text being measured actually contains CJK. Every
+  visitor paying 40KB for glyphs almost none of them will type is exactly the kind of
+  cost rule 8 exists to refuse.
+- **Excalidraw's UI fonts are exempt, derived rather than named.** Assistant is a
+  plain `@font-face` rule in `index.css`, not an entry in the JS registry — a
+  different mechanism for a font that never holds scene text. The build reads the
+  stylesheet to find out which files those are, so a family moving between the two
+  mechanisms upstream is still noticed.
+- **Duplicate registration is harmless and was verified, not assumed.** When the
+  editor does mount it adds its own copies, because it checks `document.fonts.has`
+  against its own `FontFace` objects. Measured with all 14 Excalifont faces
+  registered: still 220px, and a real scene renders identically.
+
+`awaitTextFonts` is a plain load again as a result — no poll, no timeout — and it
+still **returns whether it succeeded**, which the caller turns into a
+`font_unavailable` warning. Silence was the original defect: the drawing came back
+looking fine to the agent and clipped to the human. The warning now means the app
+failed to fetch its own assets rather than "no canvas was open", which is a bug
+report rather than a workaround. `create_canvas` went back to drawing once. Note that
+`document.fonts.check` cannot stand in for knowing the faces are registered: it
+answers **true** for a family with no faces at all, because an unmatched family falls
+through to a system font and a system font is always ready.
+
+An earlier version of this fix had `create_canvas` draw twice — once to validate,
+then again on the canvas it had just opened. It is worth recording why that was
+abandoned rather than kept as a belt: it only ever helped the one tool that opens
+something, and the mount it waited for took 3.7s in dev against the 3s budget it was
+given, so it was a slow fix that was also flaky.
+
 Which is also why **a text change re-measures the box around it** (`refit`), rather
 than writing the new string in beside the old string's geometry. It runs the same
 skeleton conversion the add path uses, because `measureText`, `wrapText` and
@@ -331,6 +384,62 @@ Schema generated from a Go struct cannot express a discriminated union. That los
 schema's ability to say "id is required for update"; `internal/tools.sceneOps` says it
 instead, in a message naming the op and the missing field. A worse schema and a better
 error — and the error is what the agent actually reads when it gets it wrong.
+
+### A canvas has no renderer to refuse it, so it gets a linter instead
+
+`lib/sceneLint.ts` is `ideate_check` for a drawing, and it exists because of an
+asymmetry that had been sitting in the tool surface from the start. A mermaid diagram
+is *parsed* — the agent writes a graph, dagre lays it out, and a mistake comes back as
+a parse error in the result of the agent's own tool call. A scene has neither: it has
+no parser to fail and no layout engine to appeal to, and `scene_edit` takes absolute
+pixel coordinates. The agent **is** the layout engine, working blind, and every layout
+mistake it makes is a silent success. Overlapping boxes, arrows drawn straight through
+a shape, a label wider than the box holding it, a column of boxes at x = 100, 100, 103
+— all of it committed happily and none of it visible to the caller. That is the whole
+of why agent-drawn canvases read badly, and most of it is not the agent's arithmetic.
+
+So `scene_edit`, `create_canvas` and `scene_get` all answer with `warnings`. Design
+constraints, in the order they mattered:
+
+- **Warnings, never errors.** Most findings are judgements — a shape inside a shape is
+  a mistake or a deliberate group, and only the caller knows which — so full
+  containment is not reported at all and nothing here can refuse an edit. Failing a
+  drawing over a guess would be worse than drawing it.
+- **Every message carries the ids and a number.** "The label is wider than the
+  rectangle holding it (220×25 inside 190×90 of room) … make it at least 230 wide" is
+  actionable in one more call; "layout problem" is not. `ids` is there so the
+  follow-up `update` op needs no second `scene_get`.
+- **The whole scene, not the diff.** A new box overlapping an old one is a finding
+  about both, and the caller is the only party who can move either.
+- **Capped, and ordered by how likely a finding is to be real** — six per kind, 24 in
+  all, checks called worst-first — so a scene with forty overlapping boxes is told
+  once and a truncated list is truncated from the least useful end.
+- **`font_unavailable` sorts first**, because it explains away every `label_overflow`
+  under it: a box measured against the wrong face is too small for reasons that have
+  nothing to do with the number the caller passed.
+- **A check that fires on good input is one an agent learns to ignore.** Hence full
+  containment is not an `overlap`, and `misaligned` skips a direction entirely when the
+  pair is *exactly* aligned on any axis in it — a left-aligned column of boxes
+  auto-sized to their own labels has three different widths and therefore three right
+  edges a couple of pixels apart, and that is the best-laid-out drawing an agent can
+  produce, not a defect.
+- **Pure geometry, no value import** (rule 8). Every check reads fields off elements
+  the converter has already produced, which is what lets it run inside both
+  `applySceneOps` and `summarizeScene` without either becoming a dynamic-import site.
+
+**And no `PROTOCOL_VERSION` bump**, unlike the theme field that forced 5. The tab
+always sends the field, empty when it found nothing, so an older tab omitting it is
+*distinguishable on the wire* from a newer tab reporting a clean scene — which is
+exactly what `theme` could not manage. Nothing here changes what a command does
+either, so a stale tab costs its agent some advice and no correctness. A bump would
+have stranded a user who has no beta label telling them to expect one.
+
+What this deliberately does **not** do is lay the drawing out. The arrows are still
+routed centre to centre with `focus: 0`, so several arrows into one shape still
+converge on the same line, and `route` still emits two points and cannot go round
+anything — `arrow_crosses` and `arrow_duplicate` report exactly the defects our own
+router causes. Telling the caller was the cheap half; a real router, spread bindings,
+grid snapping and relative placement are all still open.
 
 ### The agent is told the theme, because the theme is not in the document
 
@@ -475,3 +584,17 @@ which typechecking can see:
 - **`ideate_create_canvas`** — the canvas opens with the drawing on it, a second call
   on the same path is refused, a `.md` path is refused, a bad op leaves no file behind
   and no blank canvas in the editor, and no ops at all opens an empty one
+- **labels fit their boxes with no canvas ever opened** — the case the page-load font
+  registration exists for. Load the editor on a markdown document, then `scene_edit`
+  a `.excalidraw` path with long labels ("Authentication Service" and longer): no
+  `label_overflow`, no `font_unavailable`, and nothing clips when the file is opened
+  afterwards. The old behaviour is reproducible by blocking
+  `/excalidraw-assets/font-faces.json`, which should produce `font_unavailable` rather
+  than a silently narrow box
+- **`warnings` come back from all three scene tools, and are `[]` rather than absent
+  on a clean scene.** Then earn each kind: two boxes 20px apart (`overlap`), three in
+  a row with an arrow from the first to the last (`arrow_crosses`), two arrows between
+  the same pair (`arrow_duplicate`), a `text` element placed on top of a rectangle
+  instead of as its label (`text_not_bound`), boxes at x = 100 and x = 103
+  (`misaligned`). A well-laid-out drawing must report **nothing** — a linter that
+  fires on good input is one an agent learns to ignore

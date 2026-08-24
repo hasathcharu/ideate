@@ -6,8 +6,11 @@ import type {
   SceneGetResult,
   SceneOp,
   SceneUpdateOp,
+  SceneWarning,
 } from './agentProtocol'
 import { EMPTY_SCENE, parseScene } from './excalidraw'
+import { ensureExcalidrawFonts } from './excalidrawFonts'
+import { lintScene } from './sceneLint'
 
 /**
  * Element-level edits to an Excalidraw scene, for Agent Link.
@@ -42,6 +45,10 @@ interface Styling {
 export interface SceneEditOutcome {
   text: string
   elementCount: number
+  /** What `lib/sceneLint.ts` makes of the result. Returned from here rather than
+   *  recomputed by the caller because this is where the finished element array
+   *  exists — the caller holds only the serialized text. */
+  warnings: SceneWarning[]
 }
 
 /**
@@ -71,7 +78,7 @@ export async function applySceneOps(
   // Before anything is measured. Every box that holds text is sized from a canvas
   // `measureText` against Excalidraw's own font, so an unloaded font is a wrong
   // answer rather than a missing one — see `awaitTextFonts`.
-  await awaitTextFonts(ops.map((op) => ('text' in op ? op.text : undefined)))
+  const fonts = await awaitTextFonts(ops.map((op) => ('text' in op ? op.text : undefined)))
 
   let elements: ExcalidrawElement[] = [...scene.elements]
 
@@ -118,7 +125,33 @@ export async function applySceneOps(
   return {
     text: JSON.stringify({ ...scene, elements }, null, 2),
     elementCount: elements.length,
+    // The whole scene, not just what this call touched: a new box overlapping an old
+    // one is a finding about both, and the caller is the only party that can move
+    // either. `font_unavailable` goes first because it explains away every
+    // `label_overflow` under it — a box measured against the wrong font is too small
+    // for reasons that have nothing to do with the number the caller passed.
+    warnings: [...fontWarning(fonts, ops), ...lintScene(elements)],
   }
+}
+
+/** The `font_unavailable` finding, or nothing when the fonts were there or no op in
+ *  this call carried text for them to matter to. */
+function fontWarning(loaded: boolean, ops: readonly SceneOp[]): SceneWarning[] {
+  if (loaded) return []
+  if (!ops.some((op) => 'text' in op && op.text)) return []
+  return [
+    {
+      kind: 'font_unavailable',
+      ids: [],
+      message:
+        'Excalidraw\'s fonts could not be loaded, so the labels in this call were measured ' +
+        'against a substitute face and every box sized here may be narrower than the text ' +
+        'it holds. Nothing is wrong with the ops — this is the app failing to fetch its own ' +
+        'font assets. Set an explicit `width` on the shapes that hold text if the drawing ' +
+        'has to be right regardless, and tell the human: it will affect their own typing ' +
+        'on the canvas too.',
+    },
+  ]
 }
 
 function toSkeleton(
@@ -345,61 +378,70 @@ const MEASURED_FONT_FAMILIES = ['Excalifont', 'Xiaolai'] as const
  *  ignores it, but `document.fonts.load` wants a complete font shorthand. */
 const MEASURED_FONT_SIZE = 20
 
-/** How long to wait for the mounted editor to have registered its font faces. */
-const FONT_REGISTRATION_TIMEOUT_MS = 1000
-const FONT_REGISTRATION_POLL_MS = 50
-
 /**
- * Load the fonts the sizing pass is about to measure with, and don't measure
- * until they are in.
+ * Load the fonts the sizing pass is about to measure with, and don't measure until
+ * they are in.
  *
  * This is what keeps a generated shape from clipping its own label. Container
  * dimensions are decided at conversion time by Excalidraw's
  * `redrawTextBoundingBox`, which measures through a canvas 2D context set to
- * `20px Excalifont, Xiaolai, "Segoe UI Emoji"` — and a canvas silently falls back
- * to a generic face for a font that has not loaded. Excalifont is a handwriting
- * font and roughly 20% wider than that fallback (measured: "Authentication
- * Service" is 184px unloaded, 220px loaded), so every box came out sized for a
- * narrower font than the one it would be drawn in. Double-clicking the shape fixed
- * it because opening the text editor puts the font on screen, which loads it, and
- * Excalidraw re-measures on blur.
+ * `20px Excalifont, Xiaolai, "Segoe UI Emoji"` — and a canvas silently falls back to
+ * a generic face for a font that has not loaded. Excalifont is a handwriting font and
+ * roughly 20% wider than that fallback (measured: "Authentication Service" is 184px
+ * unloaded, 220px loaded), so every box came out sized for a narrower font than the
+ * one it would be drawn in. Double-clicking the shape fixed it because opening the
+ * text editor puts the font on screen, which loads it, and Excalidraw re-measures on
+ * blur.
  *
- * The faces are registered on `document.fonts` by the *mounted* editor, not by
- * importing the library, so on the first edit after a scene opens they can be a
- * beat behind — hence the bounded wait before the load rather than a bare load.
+ * **The faces come from `lib/excalidrawFonts.ts`, not from a mounted editor.** That
+ * is the point of it: Excalidraw registers its own faces on mount and offers no way
+ * to ask for them otherwise, so anything that waited for an editor could not serve
+ * the case `scene_edit` exists for — a file the human is not looking at. Registering
+ * them ourselves from the build-time manifest makes the measurement independent of
+ * what is on screen, and turns this function back into a plain load.
+ *
  * Everything here is best effort: with no fonts available at all the measurement
- * falls back exactly as it did before, which is a slightly small box, not a
- * refused edit.
+ * falls back to a narrower face, which is a slightly small box, not a refused edit.
+ * **The return value is what makes that visible** — false means every box measured in
+ * this call is suspect, and the caller turns it into a `font_unavailable` warning.
+ * Silence was the original bug: the drawing came back looking fine to the agent and
+ * clipped to the human.
  */
-async function awaitTextFonts(texts: readonly (string | undefined)[]): Promise<void> {
-  if (typeof document === 'undefined' || !document.fonts) return
+async function awaitTextFonts(texts: readonly (string | undefined)[]): Promise<boolean> {
+  if (typeof document === 'undefined' || !document.fonts) return false
   const characters = texts.filter((text): text is string => !!text).join('')
-  if (!characters) return
+  // No text to measure, so nothing to be wrong about.
+  if (!characters) return true
 
-  const registered = () =>
-    MEASURED_FONT_FAMILIES.some((family) =>
-      [...document.fonts].some((face) => face.family.replace(/["']/g, '') === family),
-    )
-  for (
-    let waited = 0;
-    !registered() && waited < FONT_REGISTRATION_TIMEOUT_MS;
-    waited += FONT_REGISTRATION_POLL_MS
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, FONT_REGISTRATION_POLL_MS))
-  }
+  // The characters decide which tiers are needed — the CJK fallback is a separate
+  // fetch, and most labels never ask for it.
+  if (!(await ensureExcalidrawFonts(characters))) return false
 
   await Promise.all(
     MEASURED_FONT_FAMILIES.map(async (family) => {
       try {
-        // Excalidraw ships each face as per-glyph-range subsets, so the text has
-        // to be passed: `load` fetches only the subsets these characters need.
+        // Excalidraw ships each face as per-glyph-range subsets, so the text has to
+        // be passed: `load` fetches only the subsets these characters need.
         await document.fonts.load(`${MEASURED_FONT_SIZE}px ${family}`, characters)
       } catch {
-        // An unregistered family resolves empty; only a malformed shorthand
-        // throws, and a failed load is not a reason to abandon the edit.
+        // An unregistered family resolves empty; only a malformed shorthand throws,
+        // and a failed load is not a reason to abandon the edit.
       }
     }),
   )
+
+  // `check` asks the question the measurement is about to ask — is there a *loaded*
+  // face for these characters — rather than whether the load resolved, which catches
+  // a subset that failed to fetch.
+  //
+  // It cannot stand alone, and must not be moved above the registration: `check`
+  // answers **true** for a family with no faces at all, because an unmatched family
+  // falls through to a system font and a system font is always ready. Verified in the
+  // browser — on a page with nothing registered,
+  // `document.fonts.check('20px Excalifont', …)` is true while Excalifont is nowhere
+  // in `document.fonts`. Only the primary family is asked about: Xiaolai is the CJK
+  // fallback, and a Latin label measures against Excalifont whether or not it came.
+  return document.fonts.check(`${MEASURED_FONT_SIZE}px ${MEASURED_FONT_FAMILIES[0]}`, characters)
 }
 
 async function applyUpdate(
@@ -654,6 +696,10 @@ export function summarizeScene(
   return {
     elementCount: scene.elements.length,
     elements,
+    // Linted on read as well as on write, because "fix the layout of this canvas"
+    // starts here: an agent working on a drawing it did not make needs the same
+    // findings, and a human's own drawing produces them too.
+    warnings: lintScene(scene.elements),
     ...(full ? { json: sceneText } : {}),
   }
 }

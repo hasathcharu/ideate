@@ -321,7 +321,10 @@ func Register(server *mcp.Server, deps *Deps) {
 			"deliberately leaves the editor where it is, which for a brand new drawing means " +
 			"nobody is looking at it. Like ideate_create_file, the canvas exists only in the " +
 			"browser as an uncommitted document until the human saves it — nothing is pushed " +
-			"to GitHub.",
+			"to GitHub. The result carries the same `warnings` ideate_scene_edit returns, and " +
+			"a first drawing is where they matter most: lay shapes out on a 20px grid, leave " +
+			"40 to 80px between neighbours so the arrows between them have room, and give " +
+			"anything holding a long label enough width for it.",
 	}, deps.createCanvas)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -341,7 +344,9 @@ func Register(server *mcp.Server, deps *Deps) {
 			"with its id, type, position, size, text and colors. ideate_scene_edit addresses " +
 			"these ids, and the colors are there so an addition can match what is already " +
 			"drawn. Ask for `full` to get the whole scene JSON. It is large and mostly " +
-			"bookkeeping.",
+			"bookkeeping. The result also carries `warnings`: layout problems found in the " +
+			"drawing as it stands, which is where to start when you have been asked to tidy " +
+			"a canvas up.",
 	}, deps.sceneGet)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -357,7 +362,11 @@ func Register(server *mcp.Server, deps *Deps) {
 			"no theme to apply later, so omitting them keeps the app's defaults and matching " +
 			"the colors ideate_scene_get reported keeps a drawing consistent. Author light " +
 			"colors even when the theme is dark — dark mode is a filter over the whole canvas, " +
-			"so a dark color comes out light.",
+			"so a dark color comes out light. The result carries `warnings`: overlapping " +
+			"shapes, arrows drawn through a box that is not one of their endpoints, labels " +
+			"wider than the shape holding them, edges that nearly line up. Nothing there " +
+			"failed — a canvas has no renderer to refuse it, which is exactly why you cannot " +
+			"see any of it — so read them and fix what they name.",
 	}, deps.sceneEdit)
 }
 

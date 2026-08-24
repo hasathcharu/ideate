@@ -57,6 +57,7 @@ import { useAgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
 import { normalizeMcpOrigin } from '@/lib/mcpOrigin'
 import type { BridgeState } from '@/lib/agentProtocol'
 import { collectDiagnostics } from '@/lib/diagnostics'
+import { ensureExcalidrawFonts } from '@/lib/excalidrawFonts'
 import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
 import { applyResolved, resolveEdits } from '@/lib/textEdit'
 import {
@@ -338,6 +339,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
   useEffect(() => {
     if (isMobile && !mobileWarningDismissed) setMobileWarningOpen(true)
   }, [isMobile, mobileWarningDismissed])
+
+  // Excalidraw's scene fonts, registered on page load rather than when a canvas
+  // mounts.
+  //
+  // Deliberately unconditional — not gated on the open document being a canvas, and
+  // not deferred to the first scene edit. An agent's `scene_edit` can arrive at any
+  // moment for a file nobody is looking at, and the whole point of registering these
+  // ourselves is that the measurement no longer depends on what is on screen. Costs a
+  // 1.3KB manifest and 21 `FontFace` objects; the woff2 files stay unfetched until
+  // something is actually measured against them, so this is not the ~1MB editor
+  // bundle by another route (rule 8). Fire and forget: `applySceneOps` awaits the same
+  // promise, so an edit that beats the warm-up waits for it rather than racing it.
+  useEffect(() => {
+    void ensureExcalidrawFonts()
+  }, [])
 
   // Live editor/preview split ratio (persisted to config on drag end).
   const [editorRatio, setEditorRatio] = useState(0.5)
@@ -1426,7 +1442,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const invalid = validatePath(path)
       if (invalid) throw new Error(invalid)
       if (repoFilePaths.includes(path)) {
-        throw new Error(`${path} already exists. Use ideate_open to edit it.`)
+        // `edit`/`write`, not `open`: the path is all either of them needs, and
+        // sending the agent through `open` would drag the human's editor to this file
+        // as a side effect of a collision they never asked about. Same shape as
+        // `createCanvas`'s refusal below, which points at `scene_edit` for the same
+        // reason.
+        throw new Error(
+          `${path} already exists. Use ideate_edit (or ideate_write) with that path to ` +
+            'change it — neither needs the file open.',
+        )
       }
       // Exactly what the create prompt does on submit: the file becomes the open
       // document with nothing saved behind it. Nothing is pushed to GitHub —
@@ -1471,11 +1495,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (repoFilePaths.includes(path)) {
         throw new Error(`${path} already exists. Use ideate_scene_edit to draw on it.`)
       }
-      // Drawn before anything is written, so a bad op leaves no half-made file
+      // Drawn once before anything is written, so a bad op leaves no half-made file
       // behind — the same all-or-nothing rule `applyEdits` follows.
+      // Drawn before anything is written, so a bad op leaves no half-made file behind
+      // — the same all-or-nothing rule `applyEdits` follows. This measures labels
+      // correctly with no canvas on screen, because `lib/excalidrawFonts.ts` registered
+      // Excalidraw's faces at page load rather than leaving it to a mounted editor.
       const drawn = ops.length
         ? await applySceneOps(EMPTY_SCENE, ops)
-        : { text: EMPTY_SCENE, elementCount: 0 }
+        : { text: EMPTY_SCENE, elementCount: 0, warnings: [] }
       setLinkTrail([])
       setCreatedPaths((prev) => withPath(prev, path))
       // Written straight away rather than left to the autosave effect: nothing is
@@ -1485,7 +1513,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setLoadedSha(null)
       setBaseline('')
       setText(drawn.text)
-      return { path, created: true, applied: ops.length, elementCount: drawn.elementCount }
+
+      return {
+        path,
+        created: true,
+        applied: ops.length,
+        elementCount: drawn.elementCount,
+        warnings: drawn.warnings,
+      }
     },
 
     // Takes the text to check rather than always reading the document: after an
@@ -1519,12 +1554,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
       requirePath(path, 'ideate_scene_edit')
       const target = await resolveTarget(path, true)
       requireScene(target.kind)
-      const { text: next, elementCount } = await applySceneOps(target.text, ops)
+      const { text: next, elementCount, warnings } = await applySceneOps(target.text, ops)
       // Through `setText` (or a draft), not a canvas ref: `CanvasInner` already
       // ingests an external `value` via `updateScene`, so dirty tracking (rule 9)
       // and the file's own stored background (rule 10) keep working untouched.
       writeBack(target, next)
-      return { path: target.path, created: target.created, applied: ops.length, elementCount }
+      return {
+        path: target.path,
+        created: target.created,
+        applied: ops.length,
+        elementCount,
+        warnings,
+      }
     },
 
     cursor: () => editorRef.current?.cursor() ?? null,
