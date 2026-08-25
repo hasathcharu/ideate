@@ -1,0 +1,9 @@
+{
+  "t": "req",
+  "id": 22,
+  "command": {
+    "cmd": "scene_render",
+    "path": "canvas/sketch.excalidraw",
+    "ids": ["box-a", "box-c"]
+  }
+}

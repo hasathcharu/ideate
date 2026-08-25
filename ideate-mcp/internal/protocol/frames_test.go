@@ -99,8 +99,18 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		"server-req-scene-edit",
 		"server-req-scene-edit-layout",
 		"server-req-scene-render",
+		"server-req-scene-render-ids",
 	} {
 		roundTrip[Request](t, name)
+	}
+
+	// scene_render's crop. Absent is the whole canvas, so the two cases have to stay
+	// distinguishable on the wire for the same reason create_canvas's ops do.
+	if got := roundTrip[Request](t, "server-req-scene-render"); got.Command.IDs != nil {
+		t.Errorf("uncropped scene_render decoded %d ids", len(got.Command.IDs))
+	}
+	if got := roundTrip[Request](t, "server-req-scene-render-ids"); len(got.Command.IDs) != 2 {
+		t.Errorf("scene_render ids = %d, want 2", len(got.Command.IDs))
 	}
 
 	// The layout ops, and `gap` in particular: it is the field this file's whole

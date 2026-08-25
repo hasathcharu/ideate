@@ -296,6 +296,11 @@ export interface SceneThumbnail {
   mimeType: string
   width: number
   height: number
+  /** What the drawing was multiplied by to fit the cap. Never above 1. */
+  scale: number
+  /** Elements the picture contains, after a crop pulled in whatever the named ones
+   *  needed to make sense. */
+  rendered: number
   /** The encoded image, base64. The frame carrying it is JSON, so there is nothing
    *  else it could be; the service decodes it back to bytes on the way out. */
   base64: string
@@ -318,6 +323,7 @@ export interface SceneThumbnail {
 export async function renderSceneThumbnail(
   sceneText: string,
   mode: 'light' | 'dark',
+  ids?: readonly string[],
 ): Promise<SceneThumbnail> {
   // Black and white rather than the theme's own surface colour. The agent is being
   // shown this to check a layout, and a literal background is one less thing that
@@ -325,7 +331,7 @@ export async function renderSceneThumbnail(
   // should be themed as — the two are derived from the same value.
   const background: ExportBackground = mode === 'dark' ? 'black' : 'white'
 
-  const first = await encodeThumbnail(sceneText, background, SCENE_RENDER_LONG_EDGE, 0.7)
+  const first = await encodeThumbnail(sceneText, background, SCENE_RENDER_LONG_EDGE, 0.85, ids)
   if (first.base64.length <= SCENE_RENDER_MAX_BYTES) return first
 
   // A canvas dense enough to blow the budget at the normal size gets one smaller,
@@ -335,7 +341,8 @@ export async function renderSceneThumbnail(
     sceneText,
     background,
     SCENE_RENDER_FALLBACK_LONG_EDGE,
-    0.5,
+    0.6,
+    ids,
   )
   if (second.base64.length <= SCENE_RENDER_MAX_BYTES) return second
 
@@ -350,18 +357,26 @@ async function encodeThumbnail(
   background: ExportBackground,
   longEdge: number,
   quality: number,
+  ids: readonly string[] | undefined,
 ): Promise<SceneThumbnail> {
   const { exportToCanvas } = await import('@excalidraw/excalidraw')
-  const { background: resolved, ...input } = sceneExportInput(sceneText, background, null)
+  const { background: resolved, ...whole } = sceneExportInput(sceneText, background, null)
+  const elements = ids ? cropToElements(whole.elements, ids) : whole.elements
+  const input = { ...whole, elements }
+
+  // Captured out of the callback, which is the only place the drawing's natural size
+  // is available, and reported because it is the answer to "why can I not read this".
+  let scale = 1
 
   const drawing = await exportToCanvas({
     ...input,
     exportPadding: 8,
     getDimensions: (width: number, height: number) => {
-      // Never above 1. A drawing smaller than the cap is already legible, and
-      // upscaling it would spend bytes on nothing — the opposite of what
-      // `rasterScale` is for on the download path.
-      const scale = Math.min(1, longEdge / Math.max(width, height))
+      // Never above 1. Upscaling adds pixels and no information — 20px label text is
+      // 20px of detail however large it is drawn — and spends the budget doing it.
+      // This is the opposite of `rasterScale` on the download path, which pushes a
+      // small diagram *up* to a usable print size.
+      scale = Math.min(1, longEdge / Math.max(width, height))
       return {
         width: Math.round(width * scale),
         height: Math.round(height * scale),
@@ -387,8 +402,69 @@ async function encodeThumbnail(
     mimeType: encoded.type,
     width: composed.width,
     height: composed.height,
+    scale,
+    rendered: elements.length,
     base64: await blobToBase64(encoded),
   }
+}
+
+/**
+ * Narrow a scene to the elements an agent named, plus whatever they need to read as
+ * a drawing rather than as debris.
+ *
+ * Two things come along uninvited, and both would otherwise make the crop look
+ * broken rather than cropped:
+ *
+ * - **A shape's bound label**, because it is a separate element and a box rendered
+ *   without its caption is a box the agent cannot identify.
+ * - **An arrow joining two named shapes**, because the relationship is usually the
+ *   thing being looked at. An arrow with only one end in the set is deliberately left
+ *   out: its far end is somewhere off in the scene, and including it would stretch
+ *   the frame back over everything the crop was asked to remove.
+ *
+ * A named label resolves to its container. That is forgiveness rather than
+ * principle — `scene_get` does not report labels, so an id that turns out to be one
+ * came from `full` output — but this reads a canvas and refusing would only cost a
+ * round trip to learn the obvious.
+ */
+function cropToElements<T extends { id: string; type: string }>(
+  elements: readonly T[],
+  ids: readonly string[],
+): T[] {
+  const byId = new Map(elements.map((element) => [element.id, element]))
+  const wanted = new Set<string>()
+
+  for (const id of ids) {
+    const element = byId.get(id)
+    if (!element) {
+      throw new Error(`No element with id "${id}". Call ideate_scene_get to list what is there.`)
+    }
+    const containerId = (element as { containerId?: string | null }).containerId
+    wanted.add(containerId && byId.has(containerId) ? containerId : id)
+  }
+
+  const keep = elements.filter((element) => {
+    if (wanted.has(element.id)) return true
+
+    const containerId = (element as { containerId?: string | null }).containerId
+    if (containerId && wanted.has(containerId)) return true
+
+    if (element.type !== 'arrow' && element.type !== 'line') return false
+    const bindings = element as {
+      startBinding?: { elementId?: unknown } | null
+      endBinding?: { elementId?: unknown } | null
+    }
+    const start = bindings.startBinding?.elementId
+    const end = bindings.endBinding?.elementId
+    return (
+      typeof start === 'string' && typeof end === 'string' && wanted.has(start) && wanted.has(end)
+    )
+  })
+
+  if (keep.length === 0) {
+    throw new Error('Those ids match nothing that can be drawn.')
+  }
+  return keep
 }
 
 /** WebP where the browser has it, PNG where it does not. Line art is what PNG is

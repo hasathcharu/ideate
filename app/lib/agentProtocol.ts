@@ -96,17 +96,24 @@ export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 /** Longest edge of a `scene_render` image, in pixels.
  *
- *  Low on purpose, and low for two reasons that happen to agree. Every rendered
- *  byte crosses the relay, which is one process serving every paired tab — and then
- *  lands in the agent's context window, where an image is charged by its area. A
- *  render this size costs a few hundred tokens, which is cheap enough to call after
- *  every edit; that it is *called* is what makes it worth having at all. Layout is
- *  legible at this size. Label text is not always, and that is what `scene_get` is
- *  for. */
-export const SCENE_RENDER_LONG_EDGE = 768
+ *  Two costs push this down — every rendered byte crosses the relay, which is one
+ *  process serving every paired tab, and then lands in a context window that charges
+ *  an image by its area. One thing pushes it up: an unreadable picture is not cheap,
+ *  it is wasted. At this size the image runs about a thousand tokens, roughly what a
+ *  medium `scene_get` costs, and 20px label text survives the encode. Below it the
+ *  labels turn to mush first and the layout goes soon after, which is the whole
+ *  subject of the tool.
+ *
+ *  It is a *cap*, not a target: the scale never exceeds 1, so a drawing smaller than
+ *  this renders at its natural size and a drawing larger than it is downscaled to
+ *  fit. **That downscale is what `ids` exists to escape** — see `SceneRenderResult`. */
+export const SCENE_RENDER_LONG_EDGE = 1024
 
-/** The same, for a canvas dense enough that the first encode came out too big. */
-export const SCENE_RENDER_FALLBACK_LONG_EDGE = 512
+/** The same, for a canvas dense enough that the first encode came out too big.
+ *  Deliberately far below the cap rather than a notch under it: a scene that
+ *  overflows at 1024 is dense, and shaving 10% off would only spend a second encode
+ *  to fail again. */
+export const SCENE_RENDER_FALLBACK_LONG_EDGE = 640
 
 /** Ceiling on the encoded image the tab will put on the socket, well under
  *  `MAX_FRAME_BYTES` so that a huge drawing is answered by a smaller picture rather
@@ -281,8 +288,10 @@ export type Command =
    *  Read-only, so it may omit `path` like `read` and `scene_get`, and it does not
    *  move the editor. It exists because `lib/sceneLint.ts` is a text approximation
    *  of looking at the drawing, and an approximation is all it can be: the findings
-   *  are the defects somebody thought to write a rule for. */
-  | { cmd: 'scene_render'; path?: string }
+   *  are the defects somebody thought to write a rule for.
+   *
+   *  `ids` renders only part of the canvas — see `SceneRenderResult`. */
+  | { cmd: 'scene_render'; path?: string; ids?: string[] }
 
 export type CommandName = Command['cmd']
 
@@ -477,17 +486,34 @@ export interface SceneGetResult {
 }
 
 /**
- * A rendered canvas, deliberately small.
+ * A rendered canvas.
  *
- * The image is sized for judging *layout* — is that arrow crossing a box, is that
- * column ragged — and not for reading labels, because every byte here crosses the
- * relay and then the agent's own context window. `dataBase64` is the encoded image
- * itself: the frame is JSON, so there is nothing else it could be, and the service
- * decodes it back to bytes before handing it on.
+ * The image is bounded rather than sized: `SCENE_RENDER_LONG_EDGE` is a ceiling the
+ * drawing is scaled *down* to when it exceeds it, never up. So fidelity is not a
+ * setting, it is a consequence of how much canvas is in frame — a six-box diagram
+ * arrives at full size and reads perfectly, and the same six boxes in the corner of a
+ * 4000px sprawl arrive at a quarter scale with their labels gone to mush.
+ *
+ * **That is what `ids` is for, and why the region selector is a list of elements
+ * rather than a rectangle.** Cropping to the elements in question removes the
+ * downscale instead of fighting it, and it addresses the drawing the way everything
+ * else here does — `scene_get` hands out ids, every warning carries ids, so "the
+ * warning names box-a and box-c, show me those" needs no arithmetic. A rectangle
+ * would put the agent back to computing coordinates from a scene_get several edits
+ * old, which is the thing `align` and `distribute` exist to stop.
+ *
+ * `dataBase64` is the encoded image itself: the frame is JSON, so there is nothing
+ * else it could be, and the service decodes it back to bytes before handing it on.
  */
 export interface SceneRenderResult {
   path: string | null
+  /** Elements in the whole scene, as `scene_get` counts them, whether or not the
+   *  render was cropped to some of them. */
   elementCount: number
+  /** How many elements the picture actually contains. Larger than the `ids` asked
+   *  for when a crop pulled in labels and connecting arrows, and equal to
+   *  `elementCount` for a whole-canvas render. */
+  rendered: number
   /** `image/webp`, or `image/png` where the browser cannot encode webp. */
   mimeType: string
   /** Pixel size of the image, which is *not* the size of the drawing — see
@@ -495,6 +521,10 @@ export interface SceneRenderResult {
    *  cap from one that did not. */
   width: number
   height: number
+  /** What the drawing was multiplied by to fit. Below 1 means the picture was
+   *  downscaled, and **anything the agent cannot make out is explained by this
+   *  number** — the fix is a cropped render, not a complaint about the encoder. */
+  scale: number
   dataBase64: string
   /** The same findings `scene_get` returns, on the same always-present rule. A
    *  picture and a list of what is wrong with it answer different questions, and an

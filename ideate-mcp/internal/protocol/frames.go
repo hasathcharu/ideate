@@ -41,7 +41,8 @@ import (
 // would also refuse create_canvas as an unknown command, which reads as a broken
 // tool rather than as two ends of different vintages.
 //
-// 6 added scene_render, and the align and distribute scene ops. The command is the
+// 6 added scene_render (with its optional ids, which crop it), and the align and
+// distribute scene ops. The command is the
 // same story as create_canvas. The ops are worse, and are the reason this could not
 // be additive: an unknown *command* is refused, but an unknown op arrives inside a
 // well-formed scene_edit that an older tab answers with a successful-looking result
@@ -173,6 +174,8 @@ type Command struct {
 	Content *string    `json:"content,omitempty"`
 	Full    *bool      `json:"full,omitempty"`
 	Ops     []SceneOp  `json:"ops,omitempty"`
+	// IDs belongs to scene_render, where absent means the whole canvas.
+	IDs []string `json:"ids,omitempty"`
 }
 
 /* ------------------------------------------------------------------ */

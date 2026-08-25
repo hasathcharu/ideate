@@ -183,6 +183,7 @@ type sceneGetArgs struct {
 type sceneRenderArgs struct {
 	codeArgs
 	docPathArgs
+	IDs []string `json:"ids,omitempty" jsonschema:"Render only these elements, by id, instead of the whole canvas. A shape's label comes with it, and so does an arrow whose two ends are both in the list. Use this when the whole canvas came back too small to read: cropping raises the detail, because the picture is scaled down only as far as the drawing in it needs."`
 }
 
 type sceneEditArgs struct {
@@ -410,7 +411,11 @@ func Register(server *mcp.Server, deps *Deps) {
 			"and the ids. Dark mode is a filter over the whole canvas, so a canvas the " +
 			"human has in dark mode comes back with its colors inverted. That is what they " +
 			"see. Keep authoring light colors. The result also carries the same `warnings` " +
-			"as ideate_scene_edit.",
+			"as ideate_scene_edit. The image has a maximum size, thus a big canvas is " +
+			"scaled down to fit it and `scale` in the result says by how much. When a " +
+			"drawing comes back too small to read, that number is the reason: render it " +
+			"again with `ids` to crop to the part you care about. Cropping is how you get " +
+			"detail, and the ids in a warning are the ones to pass.",
 	}, deps.sceneRender)
 
 	// What ideate_status reports as this build's tool surface. Collected while
@@ -737,7 +742,9 @@ func (d *Deps) sceneRender(ctx context.Context, _ *mcp.CallToolRequest, in scene
 		return nil, nil, err
 	}
 
-	data, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdSceneRender, Path: in.Path})
+	data, err := s.Call(ctx, protocol.Command{
+		Cmd: protocol.CmdSceneRender, Path: in.Path, IDs: in.IDs,
+	})
 	if err != nil {
 		return nil, nil, translate(err)
 	}

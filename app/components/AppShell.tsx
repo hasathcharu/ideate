@@ -1584,20 +1584,23 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // `renderSceneThumbnail` rasterizes through Excalidraw's own exporter, which
     // needs no mounted canvas — only the fonts, and `lib/excalidrawFonts.ts`
     // registered those at page load.
-    sceneRender: async (path) => {
+    sceneRender: async (path, ids) => {
       const target = await resolveTarget(path, false)
       requireScene(target.kind)
-      const image = await renderSceneThumbnail(target.text, canvasTheme)
-      // The same findings `sceneGet` returns. A picture shows an agent that two
-      // boxes overlap; the warnings tell it which two and by how much, and the call
-      // that has just spent tokens on the picture is the one that wants both.
+      const image = await renderSceneThumbnail(target.text, canvasTheme, ids)
+      // The same findings `sceneGet` returns, and the whole scene's rather than the
+      // crop's: a picture shows an agent that two boxes overlap, the warnings name
+      // which two and by how much, and an agent that has just cropped to one corner
+      // still wants to be told about the corner it stopped looking at.
       const { elementCount, warnings } = summarizeScene(target.text)
       return {
         path: target.path,
         elementCount,
+        rendered: image.rendered,
         mimeType: image.mimeType,
         width: image.width,
         height: image.height,
+        scale: image.scale,
         dataBase64: image.base64,
         warnings,
       }
