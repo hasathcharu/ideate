@@ -17,6 +17,7 @@ import {
   type SceneEditResult,
   type SceneGetResult,
   type SceneOp,
+  type SceneRenderResult,
   type ServerFrame,
   type StatusResult,
   type TextEdit,
@@ -118,6 +119,9 @@ export interface AgentLinkCapabilities {
   check: (target: { text?: string; path?: string }) => Promise<CheckResult>
   sceneGet: (full: boolean, path?: string) => Promise<SceneGetResult>
   sceneEdit: (ops: readonly SceneOp[], path?: string) => Promise<SceneEditResult>
+  /** A small picture of a canvas. Read-only, so it takes the same optional `path`
+   *  as `sceneGet` and leaves the editor where it is. */
+  sceneRender: (path?: string) => Promise<SceneRenderResult>
   cursor: () => { line: number; column: number } | null
 }
 
@@ -497,6 +501,8 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
       return await caps.sceneGet(command.full === true, command.path)
     case 'scene_edit':
       return await caps.sceneEdit(command.ops, command.path)
+    case 'scene_render':
+      return await caps.sceneRender(command.path)
   }
 }
 

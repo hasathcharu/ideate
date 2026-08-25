@@ -46,8 +46,15 @@
  *  and an agent that reads no theme is an agent that hardcodes colors into a
  *  document the app was going to theme at render time. Same for the command — an
  *  older tab would refuse `create_canvas` as unknown, which reads as the tool
- *  being broken rather than as the two ends being different vintages. */
-export const PROTOCOL_VERSION = 5
+ *  being broken rather than as the two ends being different vintages.
+ *
+ *  6: `scene_render` was added, along with the `align` and `distribute` scene ops.
+ *  Same reasoning as 5 on both counts — an older tab answers an unknown command
+ *  with a refusal that reads as a broken tool, and an unknown *op* is worse than
+ *  that: `applySceneOps` would fall through its switch and report a successful
+ *  edit that moved nothing. A version the two ends agree on is the only thing that
+ *  can catch the second case, because the frame carrying it is well-formed. */
+export const PROTOCOL_VERSION = 6
 
 /** Where the tab opens its WebSocket, under the configured service origin. */
 export const TAB_PATH = '/v1/tab'
@@ -82,8 +89,31 @@ export const HELLO_DEADLINE_MS = 2_000
 export const REQUEST_TIMEOUT_MS = 15_000
 
 /** Frames larger than this are dropped and the socket closed. A scene JSON is
- *  the biggest legitimate payload and is nowhere near this. */
+ *  the biggest legitimate payload and is nowhere near this — and a `scene_render`
+ *  answer, the only *binary* one, is held below `SCENE_RENDER_MAX_BYTES` by the tab
+ *  precisely so this limit never becomes the thing that catches it. */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
+
+/** Longest edge of a `scene_render` image, in pixels.
+ *
+ *  Low on purpose, and low for two reasons that happen to agree. Every rendered
+ *  byte crosses the relay, which is one process serving every paired tab — and then
+ *  lands in the agent's context window, where an image is charged by its area. A
+ *  render this size costs a few hundred tokens, which is cheap enough to call after
+ *  every edit; that it is *called* is what makes it worth having at all. Layout is
+ *  legible at this size. Label text is not always, and that is what `scene_get` is
+ *  for. */
+export const SCENE_RENDER_LONG_EDGE = 768
+
+/** The same, for a canvas dense enough that the first encode came out too big. */
+export const SCENE_RENDER_FALLBACK_LONG_EDGE = 512
+
+/** Ceiling on the encoded image the tab will put on the socket, well under
+ *  `MAX_FRAME_BYTES` so that a huge drawing is answered by a smaller picture rather
+ *  than by a closed socket. A drawing that cannot be encoded under this even at the
+ *  fallback size is refused with a message, because the alternative is spending the
+ *  relay's memory and the agent's context on an image neither can use. */
+export const SCENE_RENDER_MAX_BYTES = 512 * 1024
 
 /* ------------------------------------------------------------------ */
 /* Commands (MCP → tab)                                                */
@@ -150,7 +180,42 @@ export interface SceneDeleteOp {
   id: string
 }
 
-export type SceneOp = SceneAddOp | SceneUpdateOp | SceneDeleteOp
+/**
+ * Line several elements up on one edge, or on a centre line.
+ *
+ * Derivable from `update` ops, and derived wrongly often enough that `misaligned`
+ * is one of the lint findings: the caller has to do the arithmetic against numbers
+ * `scene_get` reported a call ago, on boxes whose widths were decided by a text
+ * measurement it never saw. Naming the intent instead lets the app compute it from
+ * the geometry it holds, which is the only copy that is current.
+ */
+export interface SceneAlignOp {
+  op: 'align'
+  /** Two or more element ids. Anything bound to them — labels, arrows — follows. */
+  ids: string[]
+  axis: 'left' | 'right' | 'top' | 'bottom' | 'centerX' | 'centerY'
+}
+
+/** Space several elements evenly along one axis. */
+export interface SceneDistributeOp {
+  op: 'distribute'
+  /** Two or more element ids, spaced in the order their current coordinates put
+   *  them in rather than the order they are written here — the caller is describing
+   *  a row, not re-ordering one. */
+  ids: string[]
+  axis: 'x' | 'y'
+  /** Fixed spacing between neighbours, in pixels. Omitted, the existing gaps are
+   *  equalized within the span the elements already cover and the outermost two do
+   *  not move — which needs at least three of them to mean anything. */
+  gap?: number
+}
+
+export type SceneOp =
+  | SceneAddOp
+  | SceneUpdateOp
+  | SceneDeleteOp
+  | SceneAlignOp
+  | SceneDistributeOp
 
 /**
  * The union of everything the tab can be asked to do.
@@ -211,6 +276,13 @@ export type Command =
   | { cmd: 'check'; path?: string }
   | { cmd: 'scene_get'; path?: string; full?: boolean }
   | { cmd: 'scene_edit'; path?: string; ops: SceneOp[] }
+  /** A picture of a canvas, for the agent that drew it.
+   *
+   *  Read-only, so it may omit `path` like `read` and `scene_get`, and it does not
+   *  move the editor. It exists because `lib/sceneLint.ts` is a text approximation
+   *  of looking at the drawing, and an approximation is all it can be: the findings
+   *  are the defects somebody thought to write a rule for. */
+  | { cmd: 'scene_render'; path?: string }
 
 export type CommandName = Command['cmd']
 
@@ -402,6 +474,32 @@ export interface SceneGetResult {
   warnings: SceneWarning[]
   /** Only when `full` was requested — the entire scene file. Large. */
   json?: string
+}
+
+/**
+ * A rendered canvas, deliberately small.
+ *
+ * The image is sized for judging *layout* — is that arrow crossing a box, is that
+ * column ragged — and not for reading labels, because every byte here crosses the
+ * relay and then the agent's own context window. `dataBase64` is the encoded image
+ * itself: the frame is JSON, so there is nothing else it could be, and the service
+ * decodes it back to bytes before handing it on.
+ */
+export interface SceneRenderResult {
+  path: string | null
+  elementCount: number
+  /** `image/webp`, or `image/png` where the browser cannot encode webp. */
+  mimeType: string
+  /** Pixel size of the image, which is *not* the size of the drawing — see
+   *  `SCENE_RENDER_LONG_EDGE`. Reported so the agent can tell a render that hit the
+   *  cap from one that did not. */
+  width: number
+  height: number
+  dataBase64: string
+  /** The same findings `scene_get` returns, on the same always-present rule. A
+   *  picture and a list of what is wrong with it answer different questions, and an
+   *  agent that has just been handed the picture is exactly who wants both. */
+  warnings: SceneWarning[]
 }
 
 export interface SceneEditResult extends Touched {

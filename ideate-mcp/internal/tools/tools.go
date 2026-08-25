@@ -1,4 +1,4 @@
-// Package tools registers the thirteen MCP tools an agent drives the editor with.
+// Package tools registers the fourteen MCP tools an agent drives the editor with.
 //
 // The whole point of these, and the reason the feature exists at all, is that they
 // act on a document **in a browser right now** rather than on a file on disk. An
@@ -27,6 +27,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,12 @@ type sceneGetArgs struct {
 	Full *bool `json:"full,omitempty" jsonschema:"Also return the entire scene file. Large; rarely needed."`
 }
 
+// sceneRenderArgs reads, so its path is optional like sceneGetArgs'.
+type sceneRenderArgs struct {
+	codeArgs
+	docPathArgs
+}
+
 type sceneEditArgs struct {
 	codeArgs
 	targetPathArgs
@@ -193,7 +200,7 @@ type sceneEditArgs struct {
 // better error, and the error is what the agent actually reads when it gets it
 // wrong.
 type sceneOpArg struct {
-	Op              string     `json:"op" jsonschema:"One of \"add\", \"update\" or \"delete\"."`
+	Op              string     `json:"op" jsonschema:"One of \"add\", \"update\", \"delete\", \"align\" or \"distribute\"."`
 	ID              *string    `json:"id,omitempty" jsonschema:"For add: your own id for this element, so arrows in the same call can bind to it and a later call can update it; generated when omitted. For update and delete: the element id, from ideate_scene_get."`
 	Type            *string    `json:"type,omitempty" jsonschema:"For add: one of \"rectangle\", \"ellipse\", \"diamond\", \"text\", \"arrow\", \"line\"."`
 	X               *float64   `json:"x,omitempty"`
@@ -209,6 +216,9 @@ type sceneOpArg struct {
 	Start           *string    `json:"start,omitempty" jsonschema:"For an arrow or line: the id of the element it starts at — either something already on the canvas or something created in this same call. The arrow is routed between the two shapes for you; x and y are ignored when both ends bind."`
 	End             *string    `json:"end,omitempty" jsonschema:"The id of the element the arrow or line ends at."`
 	Points          []pointArg `json:"points,omitempty" jsonschema:"Explicit geometry for an unbound arrow or line, relative to x/y."`
+	IDs             []string   `json:"ids,omitempty" jsonschema:"For align and distribute: two or more element ids, from ideate_scene_get. Whatever is bound to them — labels, arrows — moves with them. Do not list a shape's label; pass the shape."`
+	Axis            *string    `json:"axis,omitempty" jsonschema:"For align: one of \"left\", \"right\", \"top\", \"bottom\", \"centerX\", \"centerY\", measured against the bounding box of the elements you listed. For distribute: \"x\" or \"y\"."`
+	Gap             *float64   `json:"gap,omitempty" jsonschema:"For distribute: the spacing to leave between neighbours. Omit to equalize the gaps the elements already have without moving the outermost two, which needs at least three ids. 40 to 80 is a good range on a canvas that has arrows between the shapes."`
 }
 
 type pointArg struct {
@@ -381,8 +391,27 @@ func Register(server *mcp.Server, deps *Deps) {
 			"shapes, arrows drawn through a box that is not one of their endpoints, labels " +
 			"wider than the shape holding them, edges that nearly line up. Nothing there " +
 			"failed — a canvas has no renderer to refuse it, which is exactly why you cannot " +
-			"see any of it — so read them and fix what they name.",
+			"see any of it — so read them and fix what they name. To tidy a drawing up, " +
+			"reach for the align and distribute ops before you compute coordinates: they " +
+			"work from the geometry the app holds, and the numbers you hold came from a " +
+			"scene_get that is now several edits old.",
 	}, deps.sceneEdit)
+
+	add(server, &surface, &mcp.Tool{
+		Name:  "ideate_scene_render",
+		Title: "Ideate: see canvas",
+		Description: "Get a picture of an Excalidraw canvas. Omit `path` for the open " +
+			"canvas. A path renders that file and does not open it. This tool changes " +
+			"nothing. Call it after you draw: a canvas has no renderer to refuse a bad " +
+			"drawing and no layout engine to place anything, thus you are the layout " +
+			"engine and this is the only way to see what you made. The image is small and " +
+			"lossy on purpose. Judge the layout with it — crossings, spacing, ragged rows, " +
+			"labels that run outside their shapes — and read ideate_scene_get for the text " +
+			"and the ids. Dark mode is a filter over the whole canvas, so a canvas the " +
+			"human has in dark mode comes back with its colors inverted. That is what they " +
+			"see. Keep authoring light colors. The result also carries the same `warnings` " +
+			"as ideate_scene_edit.",
+	}, deps.sceneRender)
 
 	// What ideate_status reports as this build's tool surface. Collected while
 	// registering rather than written out a second time, because a hand-kept list
@@ -664,12 +693,23 @@ func (d *Deps) resolve(ctx context.Context, code string) (*session.Session, erro
 
 // attached resolves, insists on an attachment, and forwards.
 func (d *Deps) attached(ctx context.Context, code string, cmd protocol.Command) (*mcp.CallToolResult, any, error) {
-	s, err := d.resolve(ctx, code)
+	s, err := d.claim(ctx, code)
 	if err != nil {
 		return nil, nil, err
 	}
+	return d.forward(ctx, s, cmd)
+}
+
+// claim is everything attached does except the forwarding: resolve the code, refuse
+// an unattached tab, and count the call as activity. Split out for sceneRender,
+// which forwards a command like the rest but cannot hand the answer straight back.
+func (d *Deps) claim(ctx context.Context, code string) (*session.Session, error) {
+	s, err := d.resolve(ctx, code)
+	if err != nil {
+		return nil, err
+	}
 	if ok, _ := s.Attached(); !ok {
-		return nil, nil, errors.New(
+		return nil, errors.New(
 			"Not attached to that tab. Call ideate_connect with the same code first — " +
 				"reading or editing someone's open document is a deliberate step, not " +
 				"something that happens because a pairing code exists.")
@@ -678,7 +718,60 @@ func (d *Deps) attached(ctx context.Context, code string, cmd protocol.Command) 
 	// calling tools is an agent that has not gone away, which is the only thing the
 	// idle clock is trying to find out.
 	s.Touch()
-	return d.forward(ctx, s, cmd)
+	return s, nil
+}
+
+// sceneRender is the one tool whose answer is not text.
+//
+// The picture arrives base64 in a JSON frame, because the frame is JSON. It is
+// decoded back to bytes here and handed over as an ImageContent, which the SDK
+// encodes again for its own wire — and dropped from the JSON before that is
+// rendered as the text block beside it. Leaving it in would spend the agent's
+// context twice on one image, once in a form it cannot look at.
+func (d *Deps) sceneRender(ctx context.Context, _ *mcp.CallToolRequest, in sceneRenderArgs) (*mcp.CallToolResult, any, error) {
+	if err := checkDocPath(in.Path); err != nil {
+		return nil, nil, err
+	}
+	s, err := d.claim(ctx, in.Code)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdSceneRender, Path: in.Path})
+	if err != nil {
+		return nil, nil, translate(err)
+	}
+
+	var answer map[string]any
+	if err := json.Unmarshal(data, &answer); err != nil {
+		return nil, nil, fmt.Errorf("the tab's render could not be read: %w", err)
+	}
+	encoded, _ := answer["dataBase64"].(string)
+	if encoded == "" {
+		return nil, nil, errors.New(
+			"The tab answered with no image in it. This is a bug in the app rather than " +
+				"anything about your call; ideate_scene_get reads the same canvas as text.")
+	}
+	image, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the tab's render was not valid base64: %w", err)
+	}
+	mime, _ := answer["mimeType"].(string)
+	if mime == "" {
+		// Only reachable if the tab drops the field, and a wrong guess renders as a
+		// broken image rather than as an error worth failing the whole call over.
+		mime = "image/png"
+	}
+	delete(answer, "dataBase64")
+
+	described, err := json.MarshalIndent(answer, "", "  ")
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not encode the result: %w", err)
+	}
+	return &mcp.CallToolResult{Content: []mcp.Content{
+		&mcp.ImageContent{Data: image, MIMEType: mime},
+		&mcp.TextContent{Text: string(described)},
+	}}, nil, nil
 }
 
 func (d *Deps) forward(ctx context.Context, s *session.Session, cmd protocol.Command) (*mcp.CallToolResult, any, error) {
@@ -731,7 +824,8 @@ func textResult(text string) *mcp.CallToolResult {
 // checks below are the ones the JSON Schema cannot state; see sceneOpArg.
 func sceneOps(in []sceneOpArg) ([]protocol.SceneOp, error) {
 	if len(in) == 0 {
-		return nil, errors.New("ops is empty — pass at least one add, update or delete.")
+		return nil, errors.New(
+			"ops is empty — pass at least one add, update, delete, align or distribute.")
 	}
 	out := make([]protocol.SceneOp, 0, len(in))
 	for i, op := range in {
@@ -761,8 +855,36 @@ func sceneOps(in []sceneOpArg) ([]protocol.SceneOp, error) {
 				return nil, fmt.Errorf(
 					"ops[%d] is a %s with no id. Ids come from ideate_scene_get", i, op.Op)
 			}
+		case "align", "distribute":
+			// Two is the floor rather than one because aligning a single element is
+			// not a smaller version of this op, it is a no-op that reports success.
+			if len(op.IDs) < 2 {
+				return nil, fmt.Errorf(
+					"ops[%d] (%s) has %d ids. Give it at least two — ids come from "+
+						"ideate_scene_get", i, op.Op, len(op.IDs))
+			}
+			if op.Axis == nil || *op.Axis == "" {
+				return nil, fmt.Errorf("ops[%d] (%s) has no axis", i, op.Op)
+			}
+			if !validAxis(op.Op, *op.Axis) {
+				if op.Op == "align" {
+					return nil, fmt.Errorf(
+						"ops[%d].axis is %q. Use one of: left, right, top, bottom, "+
+							"centerX, centerY", i, *op.Axis)
+				}
+				return nil, fmt.Errorf(
+					"ops[%d].axis is %q. Use \"x\" to space them across, \"y\" to space "+
+						"them down", i, *op.Axis)
+			}
+			if op.Op == "align" && op.Gap != nil {
+				return nil, fmt.Errorf(
+					"ops[%d] is an align with a gap. Aligning puts elements on one line; "+
+						"spacing them along it is what distribute does", i)
+			}
 		default:
-			return nil, fmt.Errorf("ops[%d].op is %q. Use \"add\", \"update\" or \"delete\"", i, op.Op)
+			return nil, fmt.Errorf(
+				"ops[%d].op is %q. Use \"add\", \"update\", \"delete\", \"align\" or "+
+					"\"distribute\"", i, op.Op)
 		}
 
 		converted := protocol.SceneOp{
@@ -771,6 +893,7 @@ func sceneOps(in []sceneOpArg) ([]protocol.SceneOp, error) {
 			StrokeColor: op.StrokeColor, BackgroundColor: op.BackgroundColor,
 			FillStyle: op.FillStyle, StrokeWidth: op.StrokeWidth,
 			Roughness: op.Roughness, Start: op.Start, End: op.End,
+			IDs: op.IDs, Axis: op.Axis, Gap: op.Gap,
 		}
 		if len(op.Points) > 0 {
 			converted.Points = make([]protocol.ScenePoint, len(op.Points))
@@ -781,6 +904,17 @@ func sceneOps(in []sceneOpArg) ([]protocol.SceneOp, error) {
 		out = append(out, converted)
 	}
 	return out, nil
+}
+
+func validAxis(op, axis string) bool {
+	if op == "distribute" {
+		return axis == "x" || axis == "y"
+	}
+	switch axis {
+	case "left", "right", "top", "bottom", "centerX", "centerY":
+		return true
+	}
+	return false
 }
 
 func validElementType(t string) bool {

@@ -1,0 +1,13 @@
+{
+  "t": "req",
+  "id": 21,
+  "command": {
+    "cmd": "scene_edit",
+    "path": "canvas/sketch.excalidraw",
+    "ops": [
+      { "op": "align", "ids": ["box-a", "box-b", "box-c"], "axis": "left" },
+      { "op": "distribute", "ids": ["box-a", "box-b", "box-c"], "axis": "y" },
+      { "op": "distribute", "ids": ["box-a", "box-b"], "axis": "x", "gap": 0 }
+    ]
+  }
+}

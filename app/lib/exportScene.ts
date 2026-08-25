@@ -1,3 +1,8 @@
+import {
+  SCENE_RENDER_FALLBACK_LONG_EDGE,
+  SCENE_RENDER_LONG_EDGE,
+  SCENE_RENDER_MAX_BYTES,
+} from './agentProtocol'
 import { parseScene } from './excalidraw'
 import { isDarkColor, resolveThemeMode, themeBackgroundColor } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
@@ -281,6 +286,135 @@ export async function copyScenePNG(
 ): Promise<void> {
   const blob = await renderScenePngBlob(sceneText, background, config)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+}
+
+/* ------------------------------------------------------------------ */
+/* Thumbnails (Agent Link)                                             */
+/* ------------------------------------------------------------------ */
+
+export interface SceneThumbnail {
+  mimeType: string
+  width: number
+  height: number
+  /** The encoded image, base64. The frame carrying it is JSON, so there is nothing
+   *  else it could be; the service decodes it back to bytes on the way out. */
+  base64: string
+}
+
+/**
+ * A small picture of a scene, for the agent that drew it.
+ *
+ * Everything about this is the export pipeline with the priorities reversed. A
+ * download wants the drawing at its best — `rasterScale` pushes a small diagram
+ * *up* to a usable print size — whereas this wants the smallest image somebody can
+ * still judge a layout from, because it crosses a shared relay and then lands in a
+ * context window that charges by the pixel. So the scale only ever shrinks, the
+ * padding is tighter, and the format is lossy.
+ *
+ * It shares `sceneExportInput` with the download path, which is what keeps rule 11
+ * honoured here for free: the drawing is exported transparent and the background
+ * composited underneath, so dark mode's filter lands on the drawing alone.
+ */
+export async function renderSceneThumbnail(
+  sceneText: string,
+  mode: 'light' | 'dark',
+): Promise<SceneThumbnail> {
+  // Black and white rather than the theme's own surface colour. The agent is being
+  // shown this to check a layout, and a literal background is one less thing that
+  // can differ between what it sees and what `sceneExportInput` decided the drawing
+  // should be themed as — the two are derived from the same value.
+  const background: ExportBackground = mode === 'dark' ? 'black' : 'white'
+
+  const first = await encodeThumbnail(sceneText, background, SCENE_RENDER_LONG_EDGE, 0.7)
+  if (first.base64.length <= SCENE_RENDER_MAX_BYTES) return first
+
+  // A canvas dense enough to blow the budget at the normal size gets one smaller,
+  // rougher attempt. Refusing outright would fail exactly the drawing most likely to
+  // have a layout problem worth looking at.
+  const second = await encodeThumbnail(
+    sceneText,
+    background,
+    SCENE_RENDER_FALLBACK_LONG_EDGE,
+    0.5,
+  )
+  if (second.base64.length <= SCENE_RENDER_MAX_BYTES) return second
+
+  throw new Error(
+    'This canvas will not encode small enough to send — it is probably carrying ' +
+      'embedded images. Use ideate_scene_get to read the elements instead.',
+  )
+}
+
+async function encodeThumbnail(
+  sceneText: string,
+  background: ExportBackground,
+  longEdge: number,
+  quality: number,
+): Promise<SceneThumbnail> {
+  const { exportToCanvas } = await import('@excalidraw/excalidraw')
+  const { background: resolved, ...input } = sceneExportInput(sceneText, background, null)
+
+  const drawing = await exportToCanvas({
+    ...input,
+    exportPadding: 8,
+    getDimensions: (width: number, height: number) => {
+      // Never above 1. A drawing smaller than the cap is already legible, and
+      // upscaling it would spend bytes on nothing — the opposite of what
+      // `rasterScale` is for on the download path.
+      const scale = Math.min(1, longEdge / Math.max(width, height))
+      return {
+        width: Math.round(width * scale),
+        height: Math.round(height * scale),
+        scale,
+      }
+    },
+  })
+
+  // Always opaque, unlike every other export here. A transparent PNG handed to a
+  // model is composited against whatever its client happens to use, and a drawing
+  // in light-mode colours on a dark surface is the one result nobody can read.
+  const composed = document.createElement('canvas')
+  composed.width = drawing.width
+  composed.height = drawing.height
+  const ctx = composed.getContext('2d')
+  if (!ctx) throw new Error('Could not acquire a 2D canvas context.')
+  ctx.fillStyle = resolved.color ?? '#ffffff'
+  ctx.fillRect(0, 0, composed.width, composed.height)
+  ctx.drawImage(drawing, 0, 0)
+
+  const encoded = await encodeLossy(composed, quality)
+  return {
+    mimeType: encoded.type,
+    width: composed.width,
+    height: composed.height,
+    base64: await blobToBase64(encoded),
+  }
+}
+
+/** WebP where the browser has it, PNG where it does not. Line art is what PNG is
+ *  good at, so the fallback costs size rather than fidelity — but at these
+ *  dimensions it stays well inside the budget either way. */
+async function encodeLossy(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
+  const webp = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, 'image/webp', quality),
+  )
+  // Safari before 14 answers null; some engines answer a PNG under the requested
+  // type, which is why the blob's own `type` is what gets reported rather than the
+  // one that was asked for.
+  if (webp && webp.type === 'image/webp') return webp
+  return canvasToPngBlob(canvas)
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  // Chunked: `String.fromCharCode(...bytes)` on a few hundred kilobytes spreads an
+  // argument per byte and overflows the call stack.
+  const CHUNK = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK))
+  }
+  return btoa(binary)
 }
 
 /* ------------------------------------------------------------------ */
