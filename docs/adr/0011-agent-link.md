@@ -532,20 +532,43 @@ So `ideate_scene_render` hands back a picture, and every decision about it follo
 the two costs it carries — a shared relay serving every paired tab, and a context
 window charged by the pixel:
 
-- **768px on the longest edge, WebP at q0.7, opaque.** Roughly 30–80KB base64 and a
-  few hundred image tokens, which is what makes it cheap enough to call after every
-  edit. That it *gets* called is the only thing that makes it worth having. Layout is
-  legible at that size; label text is not always, and `scene_get` is what that is for.
-- **No knobs.** No scale, format or background arguments. The background is forced
-  opaque and derived from the theme mode, because a transparent render is composited
-  against whatever the client uses and a light-mode drawing on a dark surface is the
-  one result nobody can read.
+- **1024px on the longest edge, WebP at q0.85, opaque.** About a thousand image
+  tokens, near enough what a medium `scene_get` costs, which keeps it cheap enough to
+  call after every edit — and that it *gets* called is the only thing that makes it
+  worth having. It started at 768/q0.7 on the theory that layout was the whole job and
+  labels could be read elsewhere. That was the wrong trade: an agent looking at a
+  picture it cannot read the labels in cannot tell which box is which, so it goes and
+  calls `scene_get` anyway and the render was pure cost. Legible is the floor, and
+  1024 is where 20px label text survives the encode.
+- **The cap is a ceiling, not a target.** The scale never exceeds 1. Upscaling adds
+  pixels and no information — 20px of text is 20px of detail however large it is
+  drawn — so a small drawing arrives at its natural size and only a large one is
+  reduced. `scale` is reported for exactly one reason: when the agent cannot make
+  something out, that number is the answer, and cropping is the fix.
+- **No fidelity knobs.** No scale, format or quality arguments; a caller asked to pick
+  a quality picks one badly and pays for it in the shared relay. The background is
+  forced opaque and derived from the theme mode, because a transparent render is
+  composited against whatever the client uses and a light-mode drawing on a dark
+  surface is the one result nobody can read. `ids` is not an exception to this — it is
+  not a dial on the picture's quality, it is the one thing about the framing the app
+  cannot work out for itself.
 - **A ceiling the tab enforces, not the frame limit.** Over `SCENE_RENDER_MAX_BYTES`
   it re-encodes smaller and rougher, and refuses past that. `MAX_FRAME_BYTES` closing
   the socket is a failure the human sees and the agent cannot explain.
 - **It renders with nothing on screen**, like every other scene tool, through
   Excalidraw's own exporter and the fonts `lib/excalidrawFonts.ts` registered at page
   load. The files most worth looking at are the ones nobody is looking at.
+- **`ids` crops, and a crop is how detail is bought.** Fidelity here is a consequence
+  of how much canvas is in frame rather than a setting: six boxes arrive at full size
+  and read perfectly, and the same six in the corner of a 4000px sprawl arrive at a
+  quarter scale with their labels gone. Naming the elements removes the downscale
+  instead of fighting it. It is a **list of ids rather than a rectangle** on purpose —
+  `scene_get` hands out ids and every warning carries ids, so "the warning names box-a
+  and box-c, show me those" needs no arithmetic, whereas a rectangle would put the
+  agent back to computing coordinates from a `scene_get` several edits old, which is
+  the thing `align` and `distribute` exist to stop. A crop takes each shape's label
+  with it, and any arrow with **both** ends in the set: an arrow with one end outside
+  would stretch the frame back over everything the crop was asked to remove.
 - **The image and the warnings ship together.** A picture shows an agent that two
   boxes overlap; the warnings name which two and by how much. The call that has just
   spent tokens on the picture is the one that wants both.
@@ -754,3 +777,9 @@ which typechecking can see:
   comes back inverted because that is what the human is looking at. Check the image
   actually renders in the client rather than arriving as an unreadable blob, and that
   the text block beside it does **not** carry the base64
+- **the labels are readable at the default size** — this is the whole reason the cap
+  is 1024 rather than 768, and it is a judgement no test can make. Draw a dozen boxes
+  with real labels and read them off the picture
+- **`ids` on a canvas big enough to be downscaled** — `scale` below 1 for the whole
+  canvas, back to 1 for the crop, the named shapes keep their captions, an arrow
+  between two named shapes is in frame, and an arrow to a shape outside it is not

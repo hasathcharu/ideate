@@ -259,10 +259,15 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
   derived, so a box moved by writing the file leaves both behind. Re-route **once, at
   the end of the call**, and **never a multi-point arrow** — that route was somebody's
   choice and `routeBetween` only draws straight lines.
-- **`scene_render` is deliberately a bad picture.** 768px, WebP, opaque, no knobs —
-  every byte crosses the shared relay and then the agent's context, and a render that
-  is too expensive to call after every edit is one that does not get called. Layout is
-  what it is for; `scene_get` is for the text. The tab caps the payload itself
+- **`scene_render` is bounded, not sized, and `ids` is the only knob.** 1024px, WebP,
+  opaque; the scale never exceeds 1, so fidelity follows how much canvas is in frame
+  rather than any setting, and `scale` is reported because it is the answer whenever
+  the agent cannot read something. **Cropping is how detail is bought** — hence a list
+  of element ids rather than a rectangle, which would put the agent back to computing
+  coordinates from a stale `scene_get`. A crop takes each shape's label and any arrow
+  with *both* ends inside it. No fidelity knobs: every byte crosses the shared relay
+  and then the agent's context, and a render too expensive to call after every edit is
+  one that does not get called. The tab caps the payload itself
   (`SCENE_RENDER_MAX_BYTES`) rather than letting `MAX_FRAME_BYTES` close the socket,
   and the service strips the base64 out of the text block beside the image.
 - **`create_canvas` opens what it makes; `scene_edit` deliberately does not.** That is the

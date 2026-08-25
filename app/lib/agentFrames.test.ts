@@ -255,6 +255,13 @@ describe('server frames', () => {
       id: 20,
       command: { cmd: 'scene_render', path: 'canvas/sketch.excalidraw' },
     }))
+
+  it('req scene_render (cropped)', () =>
+    matches('server-req-scene-render-ids', {
+      t: 'req',
+      id: 22,
+      command: { cmd: 'scene_render', path: 'canvas/sketch.excalidraw', ids: ['box-a', 'box-c'] },
+    }))
 })
 
 describe('client frames', () => {
