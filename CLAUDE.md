@@ -45,10 +45,13 @@ pipeline differ. `.md` is markdown, **not** mermaid. → [ADR 0001](docs/adr/000
 7. **Diagrams render with the official `mermaid` library** (`lib/mermaid.ts`) on the `base`
    theme, `htmlLabels: false`, `curve: 'basis'`. Rendering is async and browser-only —
    render in an effect, never during SSR.
-8. **Excalidraw must stay code-split.** Exactly two doors: `Canvas.tsx`'s
-   `dynamic(..., { ssr: false })` and `lib/exportScene.ts`'s per-function `await import`.
-   **`lib/excalidraw.ts` must never *value*-import `@excalidraw/excalidraw`** (type-only
-   imports are fine). `ExportMenu` may only reach the library via `lib/exportScene.ts`.
+8. **Excalidraw must stay code-split.** `@excalidraw/excalidraw` is reached **only**
+   through `Canvas.tsx`'s `dynamic(..., { ssr: false })` or a per-function `await
+   import` — today `lib/exportScene.ts` and `lib/sceneEdit.ts`. **Never a module-scope
+   value import**, or every mermaid-only user pays for the ~1MB editor. (The rule is
+   the import form, not the number of sites: the count was "exactly two doors" and has
+   since grown twice.) **`lib/excalidraw.ts` must never *value*-import the library**
+   (type-only imports are fine). `ExportMenu` may only reach it via `lib/exportScene.ts`.
 9. **Scene dirty-tracking is semantic, never byte-for-byte.** Compare with
    `scenesEqual`/`sceneSignature`, never `text !== baseline`.
 10. **The canvas background is chrome, not document content.** Never persist the displayed
@@ -247,6 +250,21 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
   has no theme layer, so `scene_get` reports them for matching, and both ends tell the
   agent to author *light* values whatever the mode is, because dark mode is a filter
   (rule 11) that inverts a dark color into a light one.
+- **`scene_edit` also aligns and distributes, and moving anything re-routes what is
+  bound to it.** `align`/`distribute` exist because their absence is what `misaligned`
+  was reporting — the agent's coordinates are stale and its widths were decided by a
+  text measurement it never saw. They route through `translate`/`rerouteBoundArrows`
+  in `lib/sceneEdit.ts`, and **so does a plain `update` with an x/y**: a bound label
+  carries absolute coordinates and a bound arrow's geometry is recorded rather than
+  derived, so a box moved by writing the file leaves both behind. Re-route **once, at
+  the end of the call**, and **never a multi-point arrow** — that route was somebody's
+  choice and `routeBetween` only draws straight lines.
+- **`scene_render` is deliberately a bad picture.** 768px, WebP, opaque, no knobs —
+  every byte crosses the shared relay and then the agent's context, and a render that
+  is too expensive to call after every edit is one that does not get called. Layout is
+  what it is for; `scene_get` is for the text. The tab caps the payload itself
+  (`SCENE_RENDER_MAX_BYTES`) rather than letting `MAX_FRAME_BYTES` close the socket,
+  and the service strips the base64 out of the text block beside the image.
 - **`create_canvas` opens what it makes; `scene_edit` deliberately does not.** That is the
   only reason it is a separate tool — `scene_edit` creates a missing path too, but it
   exists to leave the human's editor alone. Both validate ops before writing anything.
@@ -263,7 +281,8 @@ browser right now**. Rules 12 and 13 above are the non-negotiable part.
   it imports nothing from the library. The extractor asserts everything it assumes and
   **fails the build** on an upstream shape change; do not silence it, and keep Xiaolai
   (209 CJK faces, ~40KB gz) in its own on-demand manifest.
-- **Every scene tool answers with `warnings`** (`lib/sceneLint.ts`) — a canvas has no
+- **Every scene tool answers with `warnings`** — `scene_get`, `scene_edit`,
+  `create_canvas` and `scene_render` alike (`lib/sceneLint.ts`) — a canvas has no
   parser to refuse it and no layout engine, so `scene_edit` makes the agent the layout
   engine and this is the only feedback it gets. **Findings are never errors**, they carry
   ids and numbers, they cover the whole scene rather than the diff, and they are capped.

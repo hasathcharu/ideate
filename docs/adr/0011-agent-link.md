@@ -482,6 +482,92 @@ anything — `arrow_crosses` and `arrow_duplicate` report exactly the defects ou
 router causes. Telling the caller was the cheap half; a real router, spread bindings,
 grid snapping and relative placement are all still open.
 
+### `align` and `distribute`, and the binding bug they uncovered
+
+Protocol 6. The two ops are the answer to a finding the linter was already making:
+`misaligned` reports edges that nearly line up, which is the tell of coordinates
+worked out by hand, and the only way an agent could act on it was to work out more
+coordinates by hand. Worse ones, in fact — every number it holds came from a
+`scene_get` several edits ago, and the *widths* in it were never chosen by anyone,
+since a shape holding a label is sized by a text measurement against a font the agent
+has never seen. `align` and `distribute` move the arithmetic to the side holding
+current geometry. That is the whole justification, and it is why the list stops there:
+`duplicate` is another `add`, and `group`/`ungroup`/`lock` change nothing an agent can
+observe, since `scene_get` reports neither `groupIds` nor `locked`.
+
+Building them turned up something older and worse. **A bound arrow's geometry is
+recorded, not derived.** `startBinding`/`endBinding` say which shapes an arrow joins,
+and Excalidraw re-derives the attachment point from them *while a human drags the
+shape* — an interaction nothing performs when new coordinates are written into a file.
+So `{ op: 'update', id, x, y }` moved a box and left its arrows behind, pointing at
+canvas where it used to be. A bound **label** was the same story from the other end: it
+is a separate element carrying absolute coordinates, so the caption stayed put too.
+Both were invisible to the caller, which is the part that matters — `scene_get`
+reports the binding it asked for either way, so the drawing read as correct and looked
+wrong.
+
+Hence `translate` and `rerouteBoundArrows` in `lib/sceneEdit.ts`, and hence the ops
+route through them rather than writing coordinates:
+
+- **Bound arrows are re-routed once, at the end of the call**, from a set of ids the
+  op loop collects. Per-op would route against a half-moved element list, and an
+  `align` of six boxes joined by five arrows touches both ends of most of them.
+- **Two-point arrows only.** A multi-point arrow carries a route somebody chose;
+  `routeBetween` draws a straight line, so "fixing" one would throw that away because
+  a shape at one end moved twenty pixels.
+- **A label moves by its container's delta**, never re-centred. Where it sits inside
+  the shape was settled by the last text measurement, and re-deriving it here would
+  put this and `refit` in disagreement, with whichever ran second winning.
+- **A resize counts as a move**, and so does a text rewrite — `refit` grows the box,
+  which moves the edges an arrow was aimed at just as surely as a drag would.
+
+### `scene_render`, because the linter was always an approximation of looking
+
+Protocol 6. `lib/sceneLint.ts` is a list of the defects somebody thought to write a
+rule for; the section above says as much when it admits the router causes two of the
+findings it reports. The agent still cannot *see* the drawing, and no number of rules
+turns into looking at it.
+
+So `ideate_scene_render` hands back a picture, and every decision about it follows from
+the two costs it carries — a shared relay serving every paired tab, and a context
+window charged by the pixel:
+
+- **768px on the longest edge, WebP at q0.7, opaque.** Roughly 30–80KB base64 and a
+  few hundred image tokens, which is what makes it cheap enough to call after every
+  edit. That it *gets* called is the only thing that makes it worth having. Layout is
+  legible at that size; label text is not always, and `scene_get` is what that is for.
+- **No knobs.** No scale, format or background arguments. The background is forced
+  opaque and derived from the theme mode, because a transparent render is composited
+  against whatever the client uses and a light-mode drawing on a dark surface is the
+  one result nobody can read.
+- **A ceiling the tab enforces, not the frame limit.** Over `SCENE_RENDER_MAX_BYTES`
+  it re-encodes smaller and rougher, and refuses past that. `MAX_FRAME_BYTES` closing
+  the socket is a failure the human sees and the agent cannot explain.
+- **It renders with nothing on screen**, like every other scene tool, through
+  Excalidraw's own exporter and the fonts `lib/excalidrawFonts.ts` registered at page
+  load. The files most worth looking at are the ones nobody is looking at.
+- **The image and the warnings ship together.** A picture shows an agent that two
+  boxes overlap; the warnings name which two and by how much. The call that has just
+  spent tokens on the picture is the one that wants both.
+
+The base64 is **removed** from the JSON before it is rendered as the text block beside
+the image. Left in, one picture would cost the agent its context twice, once in a form
+it cannot look at.
+
+### Prior art
+
+The idea of handing the agent a rendered view of its own canvas is taken from
+[yctimlin/mcp_excalidraw](https://github.com/yctimlin/mcp_excalidraw) (MIT), which pairs
+an element store with a live canvas and a screenshot tool. None of its code is used
+here, and the reason is the one `lib/sceneEdit.ts` gives at the top of the file: that
+server owns its own element store and its own canvas, and this app already holds the
+document — relaying would mean a hydrate → forward → read-back round trip against state
+that has no business existing. Its `align`/`distribute` surface prompted ours. Its
+mermaid-to-canvas conversion was looked at and left alone: `@excalidraw/mermaid-to-excalidraw`
+converts flowcharts natively and falls back to pasting a **raster image** of anything
+else, and a canvas holding a picture of a sequence diagram cannot be edited, which is
+the only reason to convert one.
+
 ### The agent is told the theme, because the theme is not in the document
 
 Protocol 5. An agent asked to color a node used to have exactly one way to do it —
@@ -654,3 +740,17 @@ which typechecking can see:
   instead of as its label (`text_not_bound`), boxes at x = 100 and x = 103
   (`misaligned`). A well-laid-out drawing must report **nothing** — a linter that
   fires on good input is one an agent learns to ignore
+- **move a labelled box that has arrows on it** — `{ op: 'update', id, x, y }`, then
+  open the file. The caption goes with the shape and the arrows still touch it at both
+  ends. Same again through `align` and `distribute`. This is the bug the layout ops
+  uncovered, it is invisible in `scene_get`, and only opening the canvas shows it
+- **`align` on three boxes of different widths** reports no `misaligned` afterwards —
+  including `centerX`, where the left edges legitimately end up a few pixels apart and
+  the linter has to not care
+- **`distribute` with `gap: 0`** butts the row together rather than equalizing it,
+  which is the wire trap the frame fixtures exist for
+- **`ideate_scene_render`** — on the open canvas, on a path nobody has opened, on an
+  empty canvas (refused, readably), and with the app in dark mode, where the picture
+  comes back inverted because that is what the human is looking at. Check the image
+  actually renders in the client rather than arriving as an unreadable blob, and that
+  the text block beside it does **not** carry the base64

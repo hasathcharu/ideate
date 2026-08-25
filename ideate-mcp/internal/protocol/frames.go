@@ -40,7 +40,14 @@ import (
 // colors into a document the app was going to theme at render time. An older tab
 // would also refuse create_canvas as an unknown command, which reads as a broken
 // tool rather than as two ends of different vintages.
-const Version = 5
+//
+// 6 added scene_render, and the align and distribute scene ops. The command is the
+// same story as create_canvas. The ops are worse, and are the reason this could not
+// be additive: an unknown *command* is refused, but an unknown op arrives inside a
+// well-formed scene_edit that an older tab answers with a successful-looking result
+// having moved nothing at all. Nothing in these structs can catch that; the version
+// is the only thing that can.
+const Version = 6
 
 // Close codes, in the WebSocket private-use range (4000–4999), so they cannot
 // collide with the protocol's own and the tab can tell a refusal from the service
@@ -103,7 +110,7 @@ type ScenePoint struct {
 	Y float64 `json:"y"`
 }
 
-// SceneOp is the add/update/delete union flattened into one struct.
+// SceneOp is the add/update/delete/align/distribute union flattened into one struct.
 //
 // The service never interprets a scene op — it validates the shape the agent sent
 // and forwards it — so splitting this into three types would buy nothing and cost
@@ -128,9 +135,15 @@ type SceneOp struct {
 	Start           *string      `json:"start,omitempty"`
 	End             *string      `json:"end,omitempty"`
 	Points          []ScenePoint `json:"points,omitempty"`
+	// IDs, Axis and Gap belong to the layout ops. Gap is a pointer for the usual
+	// reason and then some: absent means "equalize what is there", which is a
+	// different request from any number, 0 included.
+	IDs  []string `json:"ids,omitempty"`
+	Axis *string  `json:"axis,omitempty"`
+	Gap  *float64 `json:"gap,omitempty"`
 }
 
-// Command names of the eleven commands a tab can be asked to run.
+// Command names of the twelve commands a tab can be asked to run.
 const (
 	CmdStatus       = "status"
 	CmdListFiles    = "list_files"
@@ -143,6 +156,7 @@ const (
 	CmdCheck        = "check"
 	CmdSceneGet     = "scene_get"
 	CmdSceneEdit    = "scene_edit"
+	CmdSceneRender  = "scene_render"
 )
 
 // Command is the union of everything the tab can be asked to do, again flattened.
@@ -150,8 +164,8 @@ const (
 type Command struct {
 	Cmd string `json:"cmd"`
 	// Path is required for open, create_file and create_canvas, and optional for
-	// read, edit, write, check, scene_get and scene_edit — where absent means "the
-	// document the human has open". Absent and empty are therefore different
+	// read, edit, write, check, scene_get, scene_edit and scene_render — where
+	// absent means "the document the human has open". Absent and empty are therefore different
 	// commands, and the pointer is what keeps them apart; see the package comment.
 	Path    *string    `json:"path,omitempty"`
 	Edits   []TextEdit `json:"edits,omitempty"`

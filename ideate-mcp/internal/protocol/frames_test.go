@@ -97,8 +97,27 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		"server-req-create-canvas-blank",
 		"server-req-check",
 		"server-req-scene-edit",
+		"server-req-scene-edit-layout",
+		"server-req-scene-render",
 	} {
 		roundTrip[Request](t, name)
+	}
+
+	// The layout ops, and `gap` in particular: it is the field this file's whole
+	// method exists for. A bare float64 with omitempty drops a gap of 0, and the tab
+	// then equalizes the spacing of a row somebody asked to have butted together.
+	if got := roundTrip[Request](t, "server-req-scene-edit-layout"); len(got.Command.Ops) != 3 {
+		t.Errorf("layout ops = %d, want 3", len(got.Command.Ops))
+	} else {
+		if len(got.Command.Ops[0].IDs) != 3 {
+			t.Errorf("align ids = %d, want 3", len(got.Command.Ops[0].IDs))
+		}
+		if got.Command.Ops[1].Gap != nil {
+			t.Errorf("distribute with no gap decoded one: %v", *got.Command.Ops[1].Gap)
+		}
+		if got.Command.Ops[2].Gap == nil || *got.Command.Ops[2].Gap != 0 {
+			t.Errorf("distribute gap = %v, want a present 0", got.Command.Ops[2].Gap)
+		}
 	}
 
 	// create_canvas with no ops is the one command where an absent slice is a
@@ -119,6 +138,7 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		"server-req-write",
 		"server-req-check",
 		"server-req-scene-edit",
+		"server-req-scene-render",
 		"server-req-read-open",
 	} {
 		if got := roundTrip[Request](t, name); got.Command.Path != nil {
@@ -133,11 +153,12 @@ func TestServerFramesRoundTrip(t *testing.T) {
 	// of them, so each has a pair of fixtures — a dropped path here would not fail
 	// loudly, it would quietly act on whatever the human has open.
 	for name, want := range map[string]string{
-		"server-req-edit-path":       "docs/architecture.md",
-		"server-req-write-path":      "diagrams/new.mmd",
-		"server-req-check-path":      "docs/architecture.md",
-		"server-req-scene-get-path":  "canvas/sketch.excalidraw",
-		"server-req-scene-edit-path": "canvas/sketch.excalidraw",
+		"server-req-edit-path":         "docs/architecture.md",
+		"server-req-write-path":        "diagrams/new.mmd",
+		"server-req-check-path":        "docs/architecture.md",
+		"server-req-scene-get-path":    "canvas/sketch.excalidraw",
+		"server-req-scene-edit-path":   "canvas/sketch.excalidraw",
+		"server-req-scene-render-path": "canvas/sketch.excalidraw",
 	} {
 		got := roundTrip[Request](t, name)
 		if got.Command.Path == nil {

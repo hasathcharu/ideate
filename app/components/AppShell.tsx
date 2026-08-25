@@ -58,6 +58,7 @@ import { normalizeMcpOrigin } from '@/lib/mcpOrigin'
 import type { BridgeState } from '@/lib/agentProtocol'
 import { collectDiagnostics } from '@/lib/diagnostics'
 import { ensureExcalidrawFonts } from '@/lib/excalidrawFonts'
+import { renderSceneThumbnail } from '@/lib/exportScene'
 import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
 import { applyResolved, resolveEdits } from '@/lib/textEdit'
 import {
@@ -1574,6 +1575,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
         created: target.created,
         applied: ops.length,
         elementCount,
+        warnings,
+      }
+    },
+
+    // Read-only, so it takes the same optional `path` as `sceneGet` and never moves
+    // the editor. Like every other scene tool it works on a file nobody has open:
+    // `renderSceneThumbnail` rasterizes through Excalidraw's own exporter, which
+    // needs no mounted canvas — only the fonts, and `lib/excalidrawFonts.ts`
+    // registered those at page load.
+    sceneRender: async (path) => {
+      const target = await resolveTarget(path, false)
+      requireScene(target.kind)
+      const image = await renderSceneThumbnail(target.text, canvasTheme)
+      // The same findings `sceneGet` returns. A picture shows an agent that two
+      // boxes overlap; the warnings tell it which two and by how much, and the call
+      // that has just spent tokens on the picture is the one that wants both.
+      const { elementCount, warnings } = summarizeScene(target.text)
+      return {
+        path: target.path,
+        elementCount,
+        mimeType: image.mimeType,
+        width: image.width,
+        height: image.height,
+        dataBase64: image.base64,
         warnings,
       }
     },

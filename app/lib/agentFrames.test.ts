@@ -226,6 +226,35 @@ describe('server frames', () => {
         ops: [{ op: 'add', type: 'rectangle', x: 40, y: 40, text: 'Start' }],
       },
     }))
+
+  // The layout ops, and one `gap: 0` among them on purpose. It is the shape this
+  // whole file exists to catch: a Go `float64` with `omitempty` drops a zero, and
+  // "butt these two together" arrives at the tab as "equalize what is already
+  // there" — a different drawing, from a frame that parsed cleanly.
+  it('req scene_edit (layout ops)', () =>
+    matches('server-req-scene-edit-layout', {
+      t: 'req',
+      id: 21,
+      command: {
+        cmd: 'scene_edit',
+        path: 'canvas/sketch.excalidraw',
+        ops: [
+          { op: 'align', ids: ['box-a', 'box-b', 'box-c'], axis: 'left' },
+          { op: 'distribute', ids: ['box-a', 'box-b', 'box-c'], axis: 'y' },
+          { op: 'distribute', ids: ['box-a', 'box-b'], axis: 'x', gap: 0 },
+        ],
+      },
+    }))
+
+  it('req scene_render', () =>
+    matches('server-req-scene-render', { t: 'req', id: 19, command: { cmd: 'scene_render' } }))
+
+  it('req scene_render (path)', () =>
+    matches('server-req-scene-render-path', {
+      t: 'req',
+      id: 20,
+      command: { cmd: 'scene_render', path: 'canvas/sketch.excalidraw' },
+    }))
 })
 
 describe('client frames', () => {
