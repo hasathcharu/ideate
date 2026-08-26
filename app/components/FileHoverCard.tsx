@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { readFile } from '@/app/actions/github'
 import { renderToSvg } from '@/lib/mermaid'
 import { renderMarkdown, type MarkdownPart, type MarkdownRepoLocator } from '@/lib/markdown'
@@ -9,6 +9,7 @@ import { fileKind } from '@/lib/tree'
 import { sceneSummary } from '@/lib/excalidraw'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
 import { docIdForFile, loadDraft } from '@/lib/storage'
+import { useInnerHtml } from '@/lib/hooks'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 
@@ -178,6 +179,14 @@ function PreviewBody({
   const kind = fileKind(path)
   const [parts, setParts] = useState<MarkdownPart[] | null>(null)
   const [svg, setSvg] = useState<string | null>(null)
+  // Stable wrappers, so the card re-rendering — which it does on every scroll
+  // frame, to follow the link it describes — doesn't rebuild the preview it
+  // already rendered. See `useInnerHtml`.
+  const svgHtml = useInnerHtml(svg ?? '')
+  const partHtml = useMemo(
+    () => (parts ?? []).map((part) => ({ __html: part.type === 'html' ? part.html : part.svg })),
+    [parts],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -212,7 +221,7 @@ function PreviewBody({
       <div
         className="preview-svg [&_svg]:max-h-[220px] [&_svg]:w-full"
         // eslint-disable-next-line react/no-danger
-        dangerouslySetInnerHTML={{ __html: svg }}
+        dangerouslySetInnerHTML={svgHtml}
       />
     ) : (
       <pre className="text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -234,14 +243,14 @@ function PreviewBody({
             key={i}
             className="md-mermaid preview-svg"
             // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: part.svg }}
+            dangerouslySetInnerHTML={partHtml[i]}
           />
         ) : (
           <div
             key={i}
             className="md-prose-run"
             // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: part.html }}
+            dangerouslySetInnerHTML={partHtml[i]}
           />
         ),
       )}

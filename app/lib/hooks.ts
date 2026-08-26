@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 /**
  * Debounce a rapidly-changing value (e.g. editor text → preview render).
@@ -62,4 +62,24 @@ export function useIsMobile(): boolean {
     return () => mql.removeEventListener('change', onChange)
   }, [])
   return isMobile
+}
+
+/**
+ * A stable `dangerouslySetInnerHTML` value for `html`.
+ *
+ * Written inline — `dangerouslySetInnerHTML={{ __html: html }}` — that object is
+ * a fresh literal on every render, and React compares the *wrapper* by identity
+ * rather than the string inside it. So every re-render of the component, for any
+ * reason at all, rewrites `innerHTML` with a byte-identical string: the whole
+ * subtree is destroyed and rebuilt.
+ *
+ * That is not merely wasteful. It replaces every node the markup created, which
+ * takes the user's text selection with it, and it makes any DOM node the app is
+ * holding a reference to go stale mid-interaction. The markdown reading pane hit
+ * exactly that: the hovered link became a new element on each render, so the
+ * hover preview read it as a *different* link and hid, re-fetched and re-showed
+ * itself on a 350ms loop for as long as the pointer rested on it.
+ */
+export function useInnerHtml(html: string): { __html: string } {
+  return useMemo(() => ({ __html: html }), [html])
 }

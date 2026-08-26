@@ -182,6 +182,18 @@ export default function MarkdownPreview({
     }
   }, [text, options, mounted])
 
+  /**
+   * One stable `dangerouslySetInnerHTML` wrapper per prose run, rebuilt only when
+   * `parts` is. Inline object literals here made React rewrite every run's
+   * `innerHTML` on every render of this component — see `useInnerHtml`, and note
+   * that the hover preview below holds a reference to a link *inside* one of these
+   * runs, which a rebuild would replace under it.
+   */
+  const runHtml = useMemo(
+    () => parts.map((part) => ({ __html: part.type === 'html' ? part.html : '' })),
+    [parts],
+  )
+
   const [isMaximized, setIsMaximized] = useState(false)
   useEffect(() => {
     if (!isMaximized) return
@@ -305,6 +317,19 @@ export default function MarkdownPreview({
 
   const [hover, setHover] = useState<HoverTarget | null>(null)
   const hoveredLinkRef = useRef<HTMLElement | null>(null)
+  /**
+   * The path the pointer is resting on, tracked beside the node itself.
+   *
+   * The node alone is not a reliable identity: anything that re-renders the
+   * document replaces every element the markup created (editing the source,
+   * switching theme), so the `<a>` under a motionless pointer can become a
+   * different object without the pointer having gone anywhere. Identified by node
+   * only, that read as *a different link* — hide the preview, fetch it again, show
+   * it 350ms later, and re-render, which replaced the node again: a flicker loop
+   * that ran for as long as the pointer rested there. The path is what the preview
+   * is actually keyed on, so it survives the node.
+   */
+  const hoveredPathRef = useRef<string | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
   const closeTimerRef = useRef<number | null>(null)
 
@@ -330,6 +355,7 @@ export default function MarkdownPreview({
     clearHoverTimer()
     cancelClose()
     hoveredLinkRef.current = null
+    hoveredPathRef.current = null
     hide()
   }, [clearHoverTimer, cancelClose, hide])
 
@@ -398,14 +424,24 @@ export default function MarkdownPreview({
         scheduleClose()
         return
       }
-      // A different link. Its preview is a fetch and a delay away, so drop the
-      // one on screen now rather than leaving the wrong file under the pointer.
+      const linkPath = link.dataset.mdRepoLink
+      if (!linkPath) return
+      // The same link, re-rendered into a new element under a pointer that never
+      // moved (see `hoveredPathRef`). Adopt the node and leave everything else —
+      // whatever is on screen or already on its way is still the right preview.
+      if (linkPath === hoveredPathRef.current) {
+        hoveredLinkRef.current = link
+        cancelClose()
+        return
+      }
+      // A genuinely different link. Its preview is a fetch and a delay away, so
+      // drop the one on screen now rather than leaving the wrong file under the
+      // pointer.
       clearHoverTimer()
       cancelClose()
       hide()
       hoveredLinkRef.current = link
-      const linkPath = link.dataset.mdRepoLink
-      if (!linkPath) return
+      hoveredPathRef.current = linkPath
       hoverTimerRef.current = window.setTimeout(() => {
         hoverTimerRef.current = null
         setHover({ path: linkPath, rect: link.getBoundingClientRect() })
@@ -535,7 +571,7 @@ export default function MarkdownPreview({
                       key={i}
                       className="md-prose-run"
                       // eslint-disable-next-line react/no-danger
-                      dangerouslySetInnerHTML={{ __html: part.html }}
+                      dangerouslySetInnerHTML={runHtml[i]}
                     />
                   ),
                 )}
