@@ -1,6 +1,6 @@
 import mermaid from 'mermaid'
 import elkLayouts from '@mermaid-js/layout-elk'
-import type { MermaidUserConfig } from './mermaidConfig'
+import { packetThemeVariables, type MermaidUserConfig } from './mermaidConfig'
 
 /**
  * Diagram rendering via the official `mermaid` library.
@@ -90,6 +90,23 @@ function applyConfig(userConfig: MermaidUserConfig | null): void {
 
   const merged = userConfig ? deepMerge(BASE_CONFIG, userConfig) : { ...BASE_CONFIG }
   if (typeof merged.layout !== 'string') merged.layout = DEFAULT_LAYOUT
+
+  // The one palette mermaid won't derive for us. Injected here rather than into
+  // the YAML for the usual reason: the config is applied at render time and never
+  // written into the document. A hand-authored `packet` block still wins, key by
+  // key, so this fills the gap without taking the knob away.
+  const vars = merged.themeVariables
+  if (isPlainObject(vars)) {
+    const derived = packetThemeVariables(vars)
+    if (derived) {
+      const authored = isPlainObject(vars.packet) ? vars.packet : null
+      merged.themeVariables = {
+        ...vars,
+        packet: authored ? { ...derived, ...authored } : derived,
+      }
+    }
+  }
+
   mermaid.initialize(merged)
 }
 

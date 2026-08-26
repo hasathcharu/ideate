@@ -579,3 +579,59 @@ export function resolveThemeMode(config: MermaidUserConfig | null): ThemeMode {
 
   return 'light'
 }
+
+/* ------------------------------------------------------------------ */
+/* Packet diagrams                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A `packet` block for mermaid's theme, derived from the palette's own tokens.
+ *
+ * Every other diagram takes its colors from the flat `themeVariables` map, but
+ * the packet renderer reads a nested `packet` object off the theme — and
+ * `theme-base`, the only theme that honors our overrides at all, is one of the
+ * themes that never defines one (`theme-dark` and `theme-forest` do). So the
+ * packet styles fall back to the hard-coded defaults in mermaid's own
+ * `diagrams/packet/styles.ts`: a black title, black bytes and a `#efefef` block,
+ * whatever background the palette chose. The byte numbers are the visible half of
+ * that — they are painted *outside* the block, on the diagram background, so on
+ * every dark palette they are black on black.
+ *
+ * Mapped the way mermaid's own dark theme maps it, through the contrast floor,
+ * because these tokens hold words: the bytes and the title sit on `background`,
+ * the block's label on the block's own fill. The stroke is a stroke and is left
+ * alone, same as `--border` in {@link applyThemeToSite}.
+ */
+export function packetThemeVariables(
+  vars: Record<string, unknown>,
+): Record<string, string> | null {
+  const first = (...keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const raw = vars[key]
+      if (typeof raw === 'string' && raw.trim()) return raw.trim()
+    }
+    return undefined
+  }
+
+  const text = first('primaryTextColor', 'textColor', 'nodeTextColor')
+  const bg = first('background', 'mainBkg', 'primaryColor')
+  const block = first('mainBkg', 'primaryColor', 'secondaryColor', 'background')
+  const stroke = first('nodeBorder', 'primaryBorderColor', 'clusterBorder', 'lineColor')
+
+  // Nothing to derive from: leave mermaid's own defaults in place rather than
+  // inventing half a palette. A config with no colors in it is the untinted
+  // default theme, whose light background those defaults were written for.
+  if (!text && !block && !stroke) return null
+
+  const packet: Record<string, string> = {}
+  if (text) {
+    const onBackground = ensureContrast(text, [bg], TEXT_CONTRAST)
+    packet.startByteColor = onBackground
+    packet.endByteColor = onBackground
+    packet.titleColor = onBackground
+    packet.labelColor = ensureContrast(text, [block], TEXT_CONTRAST)
+  }
+  if (stroke) packet.blockStrokeColor = stroke
+  if (block) packet.blockFillColor = block
+  return packet
+}

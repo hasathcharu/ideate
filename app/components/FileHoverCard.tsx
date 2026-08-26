@@ -17,12 +17,24 @@ import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
  * is hovered — enough of the linked file to tell whether it's the one you meant,
  * without leaving the document.
  *
- * Three things keep it cheap. Fetches are **cached per repo+branch+path** for the
+ * Two things keep it cheap. Fetches are **cached per repo+branch+path** for the
  * lifetime of the page, since a document usually links the same handful of files
- * repeatedly. The rendered preview is built from a **truncated** copy of the
- * source, so a 3000-line document doesn't get laid out to fill a 300px card. And
- * the card is **`pointer-events: none`** — it is a preview, not a menu, so it
- * never has to negotiate hover with the link that opened it.
+ * repeatedly. And the rendered preview is built from a **truncated** copy of the
+ * source, so a 3000-line document doesn't get laid out to fill a 300px card.
+ *
+ * **The card survives the pointer landing on it.** It used to be
+ * `pointer-events: none`, on the theory that a preview never has to negotiate
+ * hover with the link that opened it — but the card is placed *under* the link,
+ * which is the direction a pointer drifts while reading, and it vanished the
+ * moment it was reached. So it takes hover itself: entering it cancels the close
+ * the reading pane scheduled when the pointer left the link (`HOVER_CLOSE_MS` in
+ * `MarkdownPreview`), and leaving it schedules that close again.
+ *
+ * Its **contents** stay inert, though. The preview is rendered without a repo
+ * locator, so the links inside it are still the raw relative paths the source
+ * wrote — clicking one would navigate away from the editor to a path that isn't a
+ * route. It is a preview, not a menu; the file itself is one click away on the
+ * link that opened this.
  */
 
 /** Longest prefix of a document that gets rendered into the card. Past this the
@@ -56,9 +68,20 @@ export interface FileHoverCardProps {
   /** Screen rect of the link, so the card can sit under it. */
   anchor: DOMRect
   config: MermaidUserConfig | null
+  /** The pointer reached the card — cancel the pending close. */
+  onPointerEnter: () => void
+  /** The pointer left the card — start the close again. */
+  onPointerLeave: () => void
 }
 
-export default function FileHoverCard({ repo, path, anchor, config }: FileHoverCardProps) {
+export default function FileHoverCard({
+  repo,
+  path,
+  anchor,
+  config,
+  onPointerEnter,
+  onPointerLeave,
+}: FileHoverCardProps) {
   const key = cacheKey(repo, path)
   const [loaded, setLoaded] = useState<Loaded | null>(() => cache.get(key) ?? null)
 
@@ -110,15 +133,19 @@ export default function FileHoverCard({ repo, path, anchor, config }: FileHoverC
 
   return (
     <div
-      className="pointer-events-none fixed z-50 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
+      className="fixed z-50 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
       style={{ left, top, width, maxHeight }}
       role="tooltip"
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
     >
       <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs">
         <Icon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate font-mono">{path}</span>
       </div>
-      <div className="relative max-h-[252px] overflow-hidden px-3 py-2.5">
+      {/* `[&_a]:pointer-events-none`: see the note above — the card takes hover,
+          its contents do not. */}
+      <div className="relative max-h-[252px] overflow-hidden px-3 py-2.5 [&_a]:pointer-events-none">
         {loaded === null ? (
           <div className="space-y-2" aria-hidden>
             <Skeleton className="h-3 w-3/4" />

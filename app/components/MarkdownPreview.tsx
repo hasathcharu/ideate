@@ -105,6 +105,13 @@ function blockForLine(container: HTMLElement, line: number): HTMLElement | null 
  *  doesn't fetch every one of them. */
 const HOVER_DELAY_MS = 350
 
+/** How long the preview outlives the pointer leaving the link — or leaving the
+ *  card. The card sits 8px below the link it describes, which is a gap the
+ *  pointer has to cross to reach it, so closing the instant the link is left made
+ *  the card unreachable. Long enough to cross the gap, short enough that it still
+ *  reads as dismissed when you look away. */
+const HOVER_CLOSE_MS = 160
+
 /** Distance from the top of the reading pane at which a heading counts as "the
  *  one you're reading" for the outline's active marker. */
 const ACTIVE_HEADING_OFFSET = 72
@@ -299,6 +306,7 @@ export default function MarkdownPreview({
   const [hover, setHover] = useState<HoverTarget | null>(null)
   const hoveredLinkRef = useRef<HTMLElement | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
+  const closeTimerRef = useRef<number | null>(null)
 
   const clearHoverTimer = useCallback(() => {
     if (hoverTimerRef.current !== null) {
@@ -307,15 +315,48 @@ export default function MarkdownPreview({
     }
   }, [])
 
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }, [])
+
+  // Identity-stable: setting null when it is already null lets React bail out
+  // instead of re-rendering the whole document on every stray mouse event.
+  const hide = useCallback(() => setHover((prev) => (prev === null ? prev : null)), [])
+
   const closeHover = useCallback(() => {
     clearHoverTimer()
+    cancelClose()
     hoveredLinkRef.current = null
-    // Identity-stable: setting null when it is already null lets React bail out
-    // instead of re-rendering the whole document on every stray mouse event.
-    setHover((prev) => (prev === null ? prev : null))
-  }, [clearHoverTimer])
+    hide()
+  }, [clearHoverTimer, cancelClose, hide])
 
-  useEffect(() => clearHoverTimer, [clearHoverTimer])
+  /**
+   * Close after the grace window rather than now.
+   *
+   * Every "the pointer left" path goes through this — leaving the link, leaving
+   * the reading pane, leaving the card — because none of them can tell on its own
+   * whether the pointer is on its way to the card, back to the link, or gone.
+   * Whichever it turns out to be cancels this or lets it run. Re-entrant on
+   * purpose: an already-pending close is not restarted, so drifting across the
+   * gap doesn't extend the window indefinitely.
+   */
+  const scheduleClose = useCallback(() => {
+    if (closeTimerRef.current !== null) return
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null
+      closeHover()
+    }, HOVER_CLOSE_MS)
+  }, [closeHover])
+
+  useEffect(() => {
+    return () => {
+      clearHoverTimer()
+      cancelClose()
+    }
+  }, [clearHoverTimer, cancelClose])
 
   // The card is placed from the link's screen rect, so scrolling has to move it.
   // Re-measuring rather than dismissing matters for more than smoothness: closing
@@ -347,12 +388,21 @@ export default function MarkdownPreview({
       const target = e.target as HTMLElement | null
       const found = target?.closest?.('a[data-md-repo-link]') ?? null
       const link = found instanceof HTMLElement ? found : null
-      if (link === hoveredLinkRef.current) return
-      if (!link) {
-        closeHover()
+      // Still on (or back on) the link this card belongs to: keep it, and call off
+      // any close the trip away scheduled.
+      if (link === hoveredLinkRef.current) {
+        cancelClose()
         return
       }
+      if (!link) {
+        scheduleClose()
+        return
+      }
+      // A different link. Its preview is a fetch and a delay away, so drop the
+      // one on screen now rather than leaving the wrong file under the pointer.
       clearHoverTimer()
+      cancelClose()
+      hide()
       hoveredLinkRef.current = link
       const linkPath = link.dataset.mdRepoLink
       if (!linkPath) return
@@ -361,7 +411,7 @@ export default function MarkdownPreview({
         setHover({ path: linkPath, rect: link.getBoundingClientRect() })
       }, HOVER_DELAY_MS)
     },
-    [repo, closeHover, clearHoverTimer],
+    [repo, scheduleClose, cancelClose, clearHoverTimer, hide],
   )
 
   const onClick = useCallback(
@@ -463,7 +513,7 @@ export default function MarkdownPreview({
               onClick={onClick}
               onDoubleClick={onDoubleClick}
               onMouseOver={onPointerOver}
-              onMouseLeave={closeHover}
+              onMouseLeave={scheduleClose}
             >
               {/* Prose runs and diagrams are siblings, so React owns every diagram
                   outright — no portal into markup it doesn't control. The HTML runs
@@ -529,7 +579,14 @@ export default function MarkdownPreview({
       </div>
 
       {hover && repo ? (
-        <FileHoverCard repo={repo} path={hover.path} anchor={hover.rect} config={config} />
+        <FileHoverCard
+          repo={repo}
+          path={hover.path}
+          anchor={hover.rect}
+          config={config}
+          onPointerEnter={cancelClose}
+          onPointerLeave={scheduleClose}
+        />
       ) : null}
     </div>
   )
