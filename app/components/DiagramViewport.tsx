@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useInnerHtml } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 
 /**
@@ -81,6 +82,10 @@ export default function DiagramViewport({
   // and mirrored into state so the host box is sized in React-controlled px —
   // this must not depend on mutating the mermaid <svg> node, whose attributes are
   // wiped whenever React re-inserts the dangerouslySetInnerHTML subtree.
+  // Stable, so a zoom or a pan does not rewrite the SVG subtree — see
+  // `useInnerHtml`. This is what makes the note above a belt rather than a fix:
+  // the subtree is now re-inserted only when the diagram itself changes.
+  const svgHtml = useInnerHtml(svg)
   const naturalRef = useRef({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   // Once the user zooms/pans, stop auto-refitting on resize so we don't fight them.
@@ -280,7 +285,7 @@ export default function DiagramViewport({
             height: natural.h || undefined,
           }}
           // eslint-disable-next-line react/no-danger
-          dangerouslySetInnerHTML={{ __html: svg }}
+          dangerouslySetInnerHTML={svgHtml}
         />
       </div>
 
