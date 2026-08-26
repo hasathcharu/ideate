@@ -430,14 +430,14 @@ export default function MarkdownPreview({
           // active one.
           className="absolute top-14 right-4 z-10 hidden max-h-[calc(100%-4.5rem)] w-64 space-y-px overflow-auto rounded-lg border bg-card/90 p-2 shadow-lg backdrop-blur sm:block supports-backdrop-filter:bg-card/75"
         >
-          <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">Contents</p>
+          <p className="px-2 pb-2 text-sm font-medium text-muted-foreground">Contents</p>
           {headings.map((heading) => (
             <button
               key={heading.id}
               type="button"
               onClick={() => scrollToHeading(heading.id)}
               className={cn(
-                'block w-full truncate rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground',
+                'block w-full truncate rounded-md px-2 py-1 text-left text-sm hover:bg-accent hover:text-accent-foreground',
                 activeHeading === heading.id
                   ? 'bg-accent font-medium text-accent-foreground'
                   : 'text-muted-foreground',
