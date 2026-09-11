@@ -104,6 +104,35 @@ function decodeBase64(b64: string): string {
   return Buffer.from(b64.replace(/\n/g, ''), 'base64').toString('utf8')
 }
 
+/**
+ * Is the GitHub session still usable? Called once when the editor mounts.
+ *
+ * A session cookie outliving the credentials inside it is the normal shape of
+ * this failure, not an edge case: the App's access token lasts 8 hours and the
+ * refresh token is spent on every renewal, so a tab opened against a stale one
+ * renders a complete, signed-in-looking app whose every button is already broken.
+ * The user then finds out at the first thing they try — usually a commit, which
+ * is the worst possible moment to be told to sign in again.
+ *
+ * **No GitHub request.** The answer is already in the session cookie:
+ * `getGitHubToken` returns null for a missing token, for one whose refresh failed
+ * (`token.error`, stamped by `auth.ts`), and for one whose `expiresAt` has passed
+ * — which is every failure a page load can act on. A token GitHub has revoked
+ * out from under us still looks valid here and would need a real call to catch,
+ * but that call would then be on the critical path of every page load to cover a
+ * case the next action reports anyway, through the same
+ * `handleExpiredSession` guard.
+ *
+ * The client's only job is to feed the error to `handleExpiredSession`, which
+ * signs out and lands on the page where signing back in is the first thing on
+ * screen.
+ */
+export async function checkSession(): Promise<ActionResult<{ valid: true }>> {
+  const token = await getGitHubToken()
+  if (!token) return err(UNAUTHENTICATED)
+  return ok({ valid: true })
+}
+
 export interface ReposResult {
   /** The repositories this app can actually read/write, newest activity first. */
   repos: Repo[]
@@ -548,6 +577,133 @@ export async function commitFile(
       return err({ kind: 'unknown', message: 'Commit succeeded but returned no sha.' })
     }
     return ok({ path, content, sha: newSha })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** One file in a multi-file commit. `sha` is the blob sha the client loaded, or
+ *  undefined for a file that has never been committed. */
+export interface FileWrite {
+  path: string
+  content: string
+  sha?: string
+}
+
+/**
+ * Save everything at once — one commit containing every changed file.
+ *
+ * Looping `commitFile` would produce one commit per file, which is not the same
+ * thing and is worse in the way that matters: a set of edits that belong together
+ * arrives on the branch as N unrelated commits, half of which describe a state the
+ * user never had on screen. So this builds a single tree and a single commit, the
+ * same way `renameFile` does, and fast-forwards the ref with `force: false` — a
+ * normal ref advance, not the ref rewrite rule 6 forbids.
+ *
+ * Conflict detection is done up front and for the whole set, before anything is
+ * written: every path whose current blob sha differs from the one the client
+ * loaded is collected, and a non-empty list aborts the commit. An all-or-nothing
+ * answer is the only honest one here — the commit is atomic, so "these three
+ * landed and that one didn't" is not a state this can produce, and reporting it
+ * would be a lie the user then has to untangle. The conflicting paths come back in
+ * the error so the client can name them.
+ */
+export async function commitFiles(
+  owner: string,
+  repo: string,
+  files: FileWrite[],
+  branch: string,
+  message: string,
+): Promise<ActionResult<{ commitSha: string; files: FileContent[] }>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  if (files.length === 0) return err({ kind: 'unknown', message: 'Nothing to commit.' })
+  try {
+    // Whoever else has been pushing to this branch, a stale sha means the file
+    // changed underneath this tab — the same 409 `commitFile` would have raised,
+    // raised here before any of the set is written rather than partway through.
+    const conflicts: string[] = []
+    for (const file of files) {
+      // A 404 here is "no such path on the branch", which is a legitimate answer
+      // for a file being created. Every other failure is the caller's problem and
+      // has to keep its own meaning — swallowing a 401 would read as "absent" and
+      // let the commit proceed to fail confusingly further down.
+      const current = await getFileSha(octokit, owner, repo, file.path, branch).catch(
+        (error: unknown) => {
+          if (mapError(error).kind === 'not_found') return null
+          throw error
+        },
+      )
+      // Absent on the branch and never loaded by the client: a new file, which is
+      // exactly what an undefined `sha` means. Any other mismatch is a conflict,
+      // including a file that appeared on the branch under a path this tab thinks
+      // it is creating.
+      if ((current ?? undefined) !== file.sha) conflicts.push(file.path)
+    }
+    if (conflicts.length > 0) {
+      return err({
+        kind: 'conflict',
+        message:
+          conflicts.length === 1
+            ? `${conflicts[0]} changed on GitHub since you loaded it.`
+            : `${conflicts.length} files changed on GitHub since you loaded them: ${conflicts.join(', ')}.`,
+        status: 409,
+      })
+    }
+
+    const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` })
+    const parentSha = ref.data.object.sha
+    const parentCommit = await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })
+
+    // `content` on a tree entry has GitHub create the blob, so this is one request
+    // rather than one `createBlob` per file. Text only, which every kind here is.
+    const tree = await octokit.git.createTree({
+      owner,
+      repo,
+      base_tree: parentCommit.data.tree.sha,
+      tree: files.map((file) => ({
+        path: file.path,
+        mode: '100644' as const,
+        type: 'blob' as const,
+        content: file.content,
+      })),
+    })
+
+    const commit = await octokit.git.createCommit({
+      owner,
+      repo,
+      message,
+      tree: tree.data.sha,
+      parents: [parentSha],
+    })
+
+    await octokit.git.updateRef({
+      owner,
+      repo,
+      ref: `heads/${branch}`,
+      sha: commit.data.sha,
+      force: false,
+    })
+
+    // The new blob shas, so the client can update each file's baseline without a
+    // round trip per file. Read back off the created tree, which already lists
+    // every entry it holds.
+    const written = new Map(
+      tree.data.tree
+        .filter((entry) => typeof entry.path === 'string' && typeof entry.sha === 'string')
+        .map((entry) => [entry.path as string, entry.sha as string]),
+    )
+    return ok({
+      commitSha: commit.data.sha,
+      files: files.map((file) => ({
+        path: file.path,
+        content: file.content,
+        // A tree built with `base_tree` lists the entries it *changed*, which is
+        // every file here — but falling back to the loaded sha keeps a missing
+        // entry from writing `undefined` into a baseline.
+        sha: written.get(file.path) ?? file.sha ?? '',
+      })),
+    })
   } catch (error) {
     return err(mapError(error))
   }

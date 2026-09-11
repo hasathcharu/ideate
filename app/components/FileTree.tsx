@@ -70,6 +70,10 @@ export interface FileTreeProps {
   onToggleDir: (path: string) => void
   /** The branch being browsed, for the empty-state copy. */
   branch: string
+  /** The sidebar search term, when one is being applied. Only affects the empty
+   *  state: "no files in this repo" and "nothing matched what you typed" are
+   *  different situations and only one of them is fixed by making a file. */
+  searchQuery?: string
   onOpenFile: (path: string) => void
   onDelete: (node: TreeNode) => void
   /** Create a new file of `kind` inside this directory (path prefilled). */
@@ -84,11 +88,19 @@ export default function FileTree({
   expandedPaths,
   onToggleDir,
   branch,
+  searchQuery,
   onOpenFile,
   onDelete,
   onNewFile,
   onRename,
 }: FileTreeProps) {
+  if (nodes.length === 0 && searchQuery) {
+    return (
+      <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">
+        No file matches <code className="break-all">{searchQuery}</code>.
+      </p>
+    )
+  }
   if (nodes.length === 0) {
     return (
       <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">

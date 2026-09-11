@@ -42,6 +42,10 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
 - `lib/highlight.ts` — the only module that touches shiki, always through
   `await import`. Type-only imports are erased, so those are fine.
 - `lib/diff.ts` — the diff algorithm and nothing else; no React, no I/O.
+- `lib/findInDocument.ts` — find-in-page over the rendered markdown: text-node
+  flattening, `Range` construction, and the `CSS.highlights` painting. It exists
+  as its own module because the one rule that shapes it — never mutate the
+  document to decorate it — is easy to lose inside a component.
 - `lib/color.ts` — static color arithmetic (parse / luminance / contrast / mix /
   `ensureContrast`). No DOM: it must work on a color *before* it becomes a CSS
   string, which is why `applyThemeToSite` blends numerically instead of emitting

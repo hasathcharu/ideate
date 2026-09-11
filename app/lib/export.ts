@@ -1,7 +1,7 @@
 import { renderToSvg } from './mermaid'
 import { buildExportSource } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
-import type { ExportBackground } from './types'
+import type { ExportBackground, PngScale } from './types'
 
 /**
  * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
@@ -149,6 +149,57 @@ export function rasterScale(width: number, height: number): number {
   return Math.min(MAX_RASTER_SCALE, dimensionCap, Math.max(MIN_RASTER_SCALE, toTarget))
 }
 
+/** The reference density a CSS pixel is defined against, so a requested DPI can
+ *  be expressed as a multiplier of the drawing's natural size. */
+export const CSS_DPI = 96
+
+/** The default PNG density — the size-aware one, not a fixed multiplier. */
+export const DEFAULT_PNG_SCALE: PngScale = { mode: 'auto' }
+
+/**
+ * The pixel multiplier `spec` asks for, given a drawing of `width` × `height`.
+ *
+ * Every mode lands here rather than at the call site because only `auto` can be
+ * answered without the drawing: a DPI, a target width and a target height are all
+ * ratios against a natural size that exists only once the diagram has rendered.
+ *
+ * The `MAX_RASTER_DIMENSION` cap is applied to every mode, `auto` included.
+ * Browsers refuse to allocate a canvas past a few thousand pixels a side and fail
+ * outright rather than degrade, so an over-large request has to come back as a
+ * smaller image instead of as a failed export — which is the difference between a
+ * user typing 40000 and getting a big PNG, and typing it and getting an error
+ * toast. The floor is one device pixel, for the same reason in the other
+ * direction.
+ */
+export function resolvePngScale(
+  spec: PngScale | undefined,
+  width: number,
+  height: number,
+): number {
+  const longest = Math.max(width, height)
+  const cap = longest > 0 && Number.isFinite(longest) ? MAX_RASTER_DIMENSION / longest : MAX_RASTER_SCALE
+  const floor = longest > 0 && Number.isFinite(longest) ? 1 / longest : 0.01
+
+  const raw = (() => {
+    switch (spec?.mode) {
+      case 'multiplier':
+        return spec.value
+      case 'dpi':
+        return spec.value / CSS_DPI
+      case 'width':
+        return width > 0 ? spec.value / width : 1
+      case 'height':
+        return height > 0 ? spec.value / height : 1
+      case 'auto':
+      case undefined:
+        return rasterScale(width, height)
+    }
+  })()
+
+  if (!Number.isFinite(raw) || raw <= 0) return rasterScale(width, height)
+  return Math.min(cap, Math.max(floor, raw))
+}
+
 /* ------------------------------------------------------------------ */
 /* Downloads                                                          */
 /* ------------------------------------------------------------------ */
@@ -190,13 +241,14 @@ async function renderPngBlob(
   text: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<Blob> {
   const { markup, width, height } = await resolveStandaloneSvg(text, { background, config })
 
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
 
-  const scale = rasterScale(width, height)
+  const scale = resolvePngScale(pngScale, width, height)
   const img = new Image()
   const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
 
@@ -229,8 +281,9 @@ export async function exportPNG(
   filename: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<void> {
-  triggerDownload(await renderPngBlob(text, background, config), filename)
+  triggerDownload(await renderPngBlob(text, background, config, pngScale), filename)
 }
 
 /** Copy the rendered PNG to the clipboard as an image. */
@@ -238,8 +291,9 @@ export async function copyPNG(
   text: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<void> {
-  const blob = await renderPngBlob(text, background, config)
+  const blob = await renderPngBlob(text, background, config, pngScale)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
 

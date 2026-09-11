@@ -35,11 +35,38 @@ export interface Branch {
  *  fill at all (transparent), or the current theme's own `background` color. */
 export type ExportBackground = 'white' | 'black' | 'none' | 'theme'
 
+/**
+ * How dense a PNG export is rasterized.
+ *
+ * Every mode resolves to a single pixel multiplier at export time, once the
+ * drawing's natural size is known — which is the reason this is a *spec* rather
+ * than a number. `width`/`height` cannot be turned into a multiplier before the
+ * diagram has been rendered, and that is also why only one of the two is ever
+ * carried: the aspect ratio fixes the other, so offering both would be offering
+ * a way to state a contradiction.
+ *
+ *  - `auto` — the size-aware default (`rasterScale`), which pushes a small
+ *    diagram up toward a target long edge and keeps a large one dense.
+ *  - `multiplier` — a flat 1× / 2× / 3× of the diagram's natural size.
+ *  - `dpi` — a print density, against CSS's 96px-per-inch reference.
+ *  - `width` / `height` — an exact pixel size on that one axis.
+ */
+export type PngScale =
+  | { mode: 'auto' }
+  | { mode: 'multiplier'; value: number }
+  | { mode: 'dpi'; value: number }
+  | { mode: 'width'; value: number }
+  | { mode: 'height'; value: number }
+
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
   repo: RepoRef | null
   /** Background painted behind exported diagrams. */
   exportBackground: ExportBackground
+  /** How dense a PNG export is rasterized — see {@link PngScale}. Remembered
+   *  like the background choice beside it: someone exporting for print wants the
+   *  next export at the same density, not back at the default. */
+  pngScale: PngScale
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
   /** File-tree sidebar width in pixels. */

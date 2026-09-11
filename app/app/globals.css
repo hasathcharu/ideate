@@ -501,6 +501,66 @@
   background: none;
 }
 
+/* A copyable block: a code fence, or a mermaid fence nested too deep to become
+   its own `DiagramViewport`. The wrapper exists only to position the button, so
+   it takes over the block's bottom margin and the `<pre>` inside it gives its
+   own up — otherwise the two stack and every code block gains a second gap. */
+.md-prose .md-copyable {
+  position: relative;
+  margin: 0 0 1em;
+}
+.md-prose .md-copyable > pre,
+.md-prose .md-copyable > .md-mermaid {
+  margin-bottom: 0;
+}
+.md-prose .md-copy-button {
+  position: absolute;
+  top: 0.5em;
+  right: 0.5em;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75em;
+  height: 1.75em;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  /* Hidden until the block is hovered or the button is tabbed to: a document of
+     code samples should not read as a column of buttons. Opacity rather than
+     `display`, so the button stays in the tab order and keyboard focus can
+     reveal it. */
+  opacity: 0;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.md-prose .md-copyable:hover .md-copy-button,
+.md-prose .md-copy-button:focus-visible {
+  opacity: 1;
+}
+.md-prose .md-copy-button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+/* The tick has to stay legible after the pointer leaves, or copying from a block
+   and looking away gives no confirmation at all. */
+.md-prose .md-copyable.md-copied .md-copy-button {
+  opacity: 1;
+  color: var(--color-emerald-500, #10b981);
+}
+.md-prose .md-copy-button .md-copy-done,
+.md-prose .md-copyable.md-copied .md-copy-button .md-copy-idle {
+  display: none;
+}
+.md-prose .md-copyable.md-copied .md-copy-button .md-copy-done {
+  display: block;
+}
+
 /* `display: block` + `width: max-content` lets a wide table scroll inside itself
    instead of forcing the whole document into a horizontal scroll. */
 .md-prose table {
@@ -553,6 +613,22 @@
   margin: 0.5em 0 0;
   border: 0;
   font-size: 0.9em;
+}
+
+/* Find-in-document (the reading view's search).
+   Painted through the CSS Custom Highlight API, which colors `Range`s without
+   putting a single node into the document — see lib/findInDocument.ts for why
+   that is the only workable way to highlight this particular DOM. Only `color`,
+   `background-color` and a few decorations are honoured inside `::highlight()`;
+   anything box-like (padding, border, radius) is ignored by the spec, so there
+   is deliberately none here. */
+::highlight(md-find) {
+  background-color: color-mix(in srgb, var(--color-amber-400, #fbbf24) 55%, transparent);
+  color: var(--foreground);
+}
+::highlight(md-find-active) {
+  background-color: var(--color-amber-400, #fbbf24);
+  color: #000;
 }
 
 /* Heading permalinks, like GitHub's: revealed on hover so they don't compete
@@ -728,6 +804,16 @@
 /* The permalinks are noise at this size, and there is nothing to link to. */
 .md-prose-compact .md-heading-anchor {
   display: none;
+}
+/* Same for the copy buttons. The hover card is a glance at a file, not a surface
+   you act on — it is already dismissing itself as the pointer travels — and
+   nothing here wires the click up. A control that cannot work should not be
+   drawn. */
+.md-prose-compact .md-copy-button {
+  display: none;
+}
+.md-prose-compact .md-copyable {
+  margin-bottom: 0.6em;
 }
 
 /* Hide Excalidraw's hamburger (main) menu: every item in it is either redundant

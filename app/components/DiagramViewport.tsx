@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
-import { Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
+import { Check, Copy, Maximize2, Minimize2, Scan, ZoomIn, ZoomOut } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useInnerHtml } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
@@ -43,6 +44,9 @@ const EMBEDDED_MAX_HEIGHT = 460
  *  dark surface — the same resolution `Preview` and `MarkdownPreview` apply. */
 const OPAQUE_FALLBACK = '#ffffff'
 
+/** How long the copy button shows a tick before going back to the copy glyph. */
+const COPIED_FEEDBACK_MS = 1400
+
 function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s))
 }
@@ -65,6 +69,12 @@ export interface DiagramViewportProps {
    *  any other; being a React component rather than a run of HTML shouldn't make
    *  it invisible to the sync. */
   sourceLine?: number | null
+  /** The mermaid text that produced `svg`. Given one, the toolbar offers to copy
+   *  it — the source is the half of the pair that can be pasted back into a
+   *  document, and it is what a reader who wants "this diagram" actually wants.
+   *  Omitted by the standalone preview pane, where the source is already the
+   *  other half of the screen. */
+  source?: string | null
 }
 
 export default function DiagramViewport({
@@ -73,8 +83,32 @@ export default function DiagramViewport({
   variant = 'pane',
   className,
   sourceLine = null,
+  source = null,
 }: DiagramViewportProps) {
   const isEmbedded = variant === 'embedded'
+  // Acknowledgement for the copy button, since a clipboard write has no other
+  // visible effect. Cleared on a timer, and the timer is cleared on unmount.
+  const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    },
+    [],
+  )
+
+  const copySource = useCallback(async () => {
+    if (!source) return
+    try {
+      await navigator.clipboard.writeText(source)
+    } catch {
+      toast.error('Could not write to the clipboard.')
+      return
+    }
+    setCopied(true)
+    if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    copiedTimerRef.current = window.setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS)
+  }, [source])
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
@@ -330,6 +364,17 @@ export default function DiagramViewport({
         <Button size="icon-xs" variant="ghost" onClick={fit} title="Fit to screen">
           <Scan />
         </Button>
+        {source ? (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => void copySource()}
+            title={copied ? 'Copied' : 'Copy the mermaid source'}
+            aria-label={copied ? 'Copied' : 'Copy the mermaid source'}
+          >
+            {copied ? <Check className="text-emerald-500" /> : <Copy />}
+          </Button>
+        ) : null}
         <Button
           size="icon-xs"
           variant="ghost"
