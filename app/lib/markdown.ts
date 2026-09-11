@@ -627,6 +627,52 @@ function withSourceLine(markup: string, line: number | null): string {
   return markup.replace(/^(\s*<[a-zA-Z][^\s/>]*)/, `$1 ${SOURCE_LINE_ATTR}="${line}"`)
 }
 
+/* ------------------------------------------------------------------ */
+/* Copy buttons                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Attribute carrying the exact source text a copy button puts on the clipboard.
+ *
+ * The source travels in the markup rather than in a side table keyed by index,
+ * because the thing that has to find it is a click on a button inside a run of
+ * `dangerouslySetInnerHTML` — the React tree above it knows nothing about which
+ * block that is. An attribute on the block's own wrapper is what a delegated
+ * handler can reach with one `closest`, and the HTML parser un-escapes it on the
+ * way in, so what comes back out is byte-for-byte what the author wrote.
+ */
+export const COPY_SOURCE_ATTR = 'data-md-copy'
+
+/** Marks the button itself, so the handler can tell a copy click from a click on
+ *  the code it sits over (selecting text in a block must still work). */
+export const COPY_BUTTON_ATTR = 'data-md-copy-button'
+
+/** Two glyphs, swapped by a class on the wrapper rather than by re-rendering:
+ *  this markup is inside a `dangerouslySetInnerHTML` run, and rebuilding that run
+ *  to acknowledge a click would replace every node in it — see `useInnerHtml`. */
+const COPY_ICON =
+  '<svg class="md-copy-idle" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+const CHECK_ICON =
+  '<svg class="md-copy-done" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>'
+
+/**
+ * Wrap a rendered block so it can be copied, carrying its source line too.
+ *
+ * The line moves onto the wrapper rather than staying on the `<pre>`: the wrapper
+ * is the outermost element of the block now, and `blockForLine` wants the element
+ * whose position on screen is the block's own.
+ */
+function copyWrapper(markup: string, source: string, line: number | null): string {
+  const lineAttr = line === null ? '' : ` ${SOURCE_LINE_ATTR}="${line}"`
+  return (
+    `<div class="md-copyable"${lineAttr} ${COPY_SOURCE_ATTR}="${escapeHtml(source)}">` +
+    `<button type="button" class="md-copy-button" ${COPY_BUTTON_ATTR} ` +
+    `aria-label="Copy to clipboard" title="Copy">${COPY_ICON}${CHECK_ICON}</button>` +
+    markup +
+    `</div>`
+  )
+}
+
 /** The markup a fence becomes when its mermaid source doesn't parse. The source
  *  is kept visible so the error points at something actionable. */
 function errorBlock(message: string, source: string): string {
@@ -645,7 +691,11 @@ function errorBlock(message: string, source: string): string {
  */
 export type MarkdownPart =
   | { type: 'html'; html: string }
-  | { type: 'diagram'; svg: string; line: number | null }
+  /** `source` is the fence's own mermaid text, carried alongside the rendered SVG
+   *  so the figure can offer to copy it. The rendered diagram is not the thing
+   *  anyone wants on their clipboard — the source that produced it is, and it is
+   *  the only half of the pair that can be pasted back into a document. */
+  | { type: 'diagram'; svg: string; source: string; line: number | null }
 
 /** A rendered document: its content, plus the outline the reading view offers. */
 export interface MarkdownRender {
@@ -700,7 +750,13 @@ export async function renderMarkdown(
     html = html.replace(placeholderPattern('data-md-code', 'g'), (match, index: string) => {
       const fence = codeFences[Number(index)]
       if (!fence) return match
-      return withSourceLine(highlighted[Number(index)] ?? fence.fallback, fence.line)
+      // markdown-it hands the fence content over with its closing newline; what
+      // goes on the clipboard should be what was written between the fences.
+      return copyWrapper(
+        highlighted[Number(index)] ?? fence.fallback,
+        fence.source.replace(/\n$/, ''),
+        fence.line,
+      )
     })
   }
 
@@ -727,8 +783,10 @@ export async function renderMarkdown(
     }
     if (topLevel) standalone.set(i, svg)
     else {
-      const attr = line === null ? '' : ` ${SOURCE_LINE_ATTR}="${line}"`
-      inline.set(i, `<div class="md-mermaid"${attr}>${svg}</div>`)
+      // A nested diagram has no `DiagramViewport` to hang controls off, so it
+      // gets the same wrapper a code block does — the source of a diagram is
+      // worth copying wherever it happens to sit in the document.
+      inline.set(i, copyWrapper(`<div class="md-mermaid">${svg}</div>`, source.replace(/\n$/, ''), line))
     }
   }
 
@@ -759,7 +817,15 @@ export async function renderMarkdown(
       const svg = standalone.get(index)
       // A standalone diagram becomes its own React element, so its line travels
       // as a field rather than as an attribute in a string.
-      if (svg) parts.push({ type: 'diagram', svg, line: fences[index]?.line ?? null })
+      const fence = fences[index]
+      if (svg) {
+        parts.push({
+          type: 'diagram',
+          svg,
+          source: (fence?.source ?? '').replace(/\n$/, ''),
+          line: fence?.line ?? null,
+        })
+      }
     }
   }
   return { parts, headings }

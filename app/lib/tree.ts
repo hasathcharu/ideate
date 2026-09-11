@@ -46,6 +46,21 @@ export function isMarkdownFile(path: string): boolean {
 }
 
 /**
+ * The recognized extension `path` ends with, as it is actually spelled there
+ * (case preserved), or `''` for a path with none.
+ *
+ * Matched against {@link DIAGRAM_EXTENSIONS} rather than cut at the last `.`,
+ * because the extension is what decides a file's *kind* — and only a recognized
+ * one does. `notes.v2.md` ends in `.md`; `notes.v2` ends in nothing this app can
+ * open, and answering `.v2` for it would invite a caller to treat it as one.
+ */
+export function fileExtension(path: string): string {
+  const lower = path.toLowerCase()
+  const match = DIAGRAM_EXTENSIONS.find((ext) => lower.endsWith(ext))
+  return match ? path.slice(path.length - match.length) : ''
+}
+
+/**
  * Which editor `path` opens in. Mermaid is the fallback: an unknown (or absent)
  * extension lands in the plain text editor, which degrades to "edit the raw
  * text" rather than to a canvas that can't parse the file.
@@ -98,6 +113,28 @@ export function buildTree(filePaths: string[]): TreeNode[] {
 export function collectFilePaths(node: TreeNode): string[] {
   if (node.type === 'file') return [node.path]
   return (node.children ?? []).flatMap(collectFilePaths)
+}
+
+/** Every directory path at or under a node. The counterpart of
+ *  {@link collectFilePaths}, used to expand a whole tree at once. */
+export function collectDirPaths(node: TreeNode): string[] {
+  if (node.type === 'file') return []
+  return [node.path, ...(node.children ?? []).flatMap(collectDirPaths)]
+}
+
+/**
+ * Whether `path` matches a sidebar search `query`.
+ *
+ * Every whitespace-separated term has to appear somewhere in the path, in any
+ * order — so `arch md` finds `docs/architecture/overview.md`. Matching the whole
+ * path rather than the file name is what makes a folder name a usable search
+ * term, which is most of why anyone searches a file tree at all.
+ */
+export function pathMatchesQuery(path: string, query: string): boolean {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return true
+  const lower = path.toLowerCase()
+  return terms.every((term) => lower.includes(term))
 }
 
 function sortTree(node: TreeNode): void {

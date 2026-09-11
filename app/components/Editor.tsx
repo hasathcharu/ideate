@@ -451,6 +451,11 @@ const CLOSE_X =
  * options with icon toggles (Aa / ab̲ / .*), uses up/down arrows for previous /
  * next, drops the "all" (select-all-matches) button, and capitalizes the
  * Replace / Replace All actions.
+ *
+ * It is a CodeMirror *panel* that is styled to float (see `.cm-panels-top` in
+ * `editorTheme`) rather than a widget of our own: a real panel is what the
+ * `searchKeymap` commands, the query state and `closeSearchPanel` already talk
+ * to, so floating it is a matter of where it is painted and nothing else.
  */
 function createSearchPanel(view: EditorView): Panel {
   const query = () => getSearchQuery(view.state)
@@ -598,6 +603,19 @@ function createSearchPanel(view: EditorView): Panel {
   return {
     dom,
     top: true,
+    /**
+     * Focus and select the find field as the panel appears.
+     *
+     * `openSearchPanel` only focuses a panel that is *already* open — on the
+     * first ⌘F it dispatches the effect that creates one and returns, leaving
+     * focus in the document. CodeMirror's own panel covers that in its `mount`,
+     * and a custom `createPanel` has to do the same or ⌘F opens a search box
+     * nobody is typing into.
+     */
+    mount() {
+      searchField.focus()
+      searchField.select()
+    },
     update(update) {
       const q = getSearchQuery(update.state)
       if (document.activeElement !== searchField && searchField.value !== q.search) {
@@ -746,21 +764,55 @@ function editorTheme(dark: boolean) {
       },
       // Search / replace panel (⌘F): custom VSCode-styled panel themed with the
       // app's design tokens instead of CodeMirror's default light chrome.
+      //
+      // It **floats over the top-right of the document** rather than taking a
+      // full-width strip above it, which is where VS Code puts it and where it
+      // costs the fewest lines of visible text. Taken out of flow it also stops
+      // shifting the document down by its own height when it opens — which moved
+      // whatever the user was looking at, on the one action whose entire point is
+      // to find something.
       '.cm-panels': {
         backgroundColor: 'var(--popover)',
         color: 'var(--popover-foreground)',
       },
-      '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border)' },
+      '.cm-panels.cm-panels-top': {
+        position: 'absolute',
+        // Offset by margin, not by `top`. CodeMirror's panel manager writes
+        // `style.top = "0"` **inline** on this element when it creates the group,
+        // and an inline declaration beats any rule here — a `top` of our own was
+        // simply ignored (`right` is untouched by it, which is why that one
+        // works). A margin moves an absolutely positioned box off its anchor just
+        // the same, without an `!important` arms race over one number.
+        marginTop: '10px',
+        right: '10px',
+        left: 'auto',
+        zIndex: '15',
+        width: 'auto',
+        maxWidth: 'calc(100% - 20px)',
+        border: '1px solid var(--border)',
+        borderRadius: '8px',
+        boxShadow: '0 8px 24px -8px rgb(0 0 0 / 0.35)',
+        overflow: 'hidden',
+      },
       '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--border)' },
       '.cm-panel.cm-search': {
         display: 'flex',
         flexDirection: 'column',
         gap: '6px',
+        // Wide enough that the find field still reads as a field once its three
+        // toggles and three buttons have taken their share of the row — and
+        // fixed, or the box jitters as the query is typed.
+        width: '380px',
+        maxWidth: '100%',
         padding: '8px 10px',
         fontSize: '12px',
       },
       '.cm-search-row': { display: 'flex', alignItems: 'center', gap: '4px' },
-      '.cm-search-row .cm-textfield': { flex: '1 1 auto', minWidth: '0' },
+      // A floor rather than `min-width: 0`: the panel shrinks with a narrow
+      // editor pane, and with the fields free to collapse they were the first
+      // thing to go — leaving a row of toggles around a find box too small to
+      // show a single character. Overflowing the panel is the better failure.
+      '.cm-search-row .cm-textfield': { flex: '1 1 auto', minWidth: '7rem' },
       '.cm-textfield': {
         backgroundColor: 'var(--input)',
         color: 'var(--foreground)',

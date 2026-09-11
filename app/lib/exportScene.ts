@@ -6,9 +6,9 @@ import {
 import { parseScene } from './excalidraw'
 import { isDarkColor, resolveThemeMode, themeBackgroundColor } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
-import { rasterScale } from './export'
+import { resolvePngScale } from './export'
 import type { StandaloneSvg } from './export'
-import type { ExportBackground } from './types'
+import type { ExportBackground, PngScale } from './types'
 
 /**
  * Export pipeline for Excalidraw scenes — the counterpart to `lib/export.ts`,
@@ -217,13 +217,14 @@ export async function copySceneSVG(
   await navigator.clipboard.writeText(markup)
 }
 
-/** Rasterize a scene to a high-DPI PNG blob (shared by download/copy), using the
- *  same size-aware scale as the mermaid path so the two formats don't differ in
- *  output density. */
+/** Rasterize a scene to a PNG blob (shared by download/copy), resolving the
+ *  requested density through the same `resolvePngScale` the mermaid path uses so
+ *  the two kinds never differ in what "2×" or "300 DPI" means. */
 async function renderScenePngBlob(
   sceneText: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<Blob> {
   const { exportToCanvas } = await import('@excalidraw/excalidraw')
   const { background: resolved, ...input } = sceneExportInput(sceneText, background, config)
@@ -240,7 +241,7 @@ async function renderScenePngBlob(
     // The scale is computed here rather than outside because it depends on the
     // scene's natural dimensions, which only this callback receives.
     getDimensions: (width: number, height: number) => {
-      const scale = rasterScale(width, height)
+      const scale = resolvePngScale(pngScale, width, height)
       return {
         width: Math.round(width * scale),
         height: Math.round(height * scale),
@@ -275,16 +276,18 @@ export async function exportScenePNG(
   filename: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<void> {
-  triggerDownload(await renderScenePngBlob(sceneText, background, config), filename)
+  triggerDownload(await renderScenePngBlob(sceneText, background, config, pngScale), filename)
 }
 
 export async function copyScenePNG(
   sceneText: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  pngScale?: PngScale,
 ): Promise<void> {
-  const blob = await renderScenePngBlob(sceneText, background, config)
+  const blob = await renderScenePngBlob(sceneText, background, config, pngScale)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
 

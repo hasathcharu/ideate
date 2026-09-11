@@ -145,3 +145,55 @@ the button that opens it are in the same place.
 Filling the window covers the toolbar, so the reading view carries its own **Back**
 button (`onBack`/`backLabel`) for the link trail described above. Anything else the
 toolbar owns and a reader needs has to be repeated there for the same reason.
+
+### Find-in-document, and why nothing may decorate the DOM
+
+Search is offered in the reading view only, for the same reason the outline is:
+beside the editor there is the source and CodeMirror's own ⌘F, which searches the
+thing you would then edit. Filling the window is the moment the document stops
+being something you are writing, and reading a long one is when you need to find a
+word in it.
+
+The implementation is decided by one constraint: **the document must not be
+mutated**. It is a mix of `dangerouslySetInnerHTML` runs and real React
+components, so the usual find-in-page trick — wrapping each hit in a `<mark>` —
+rewrites markup React owns. Every node in a rewritten run is replaced, which takes
+the reader's selection with it and invalidates the `<a>` the hover card is
+anchored to (see `useInnerHtml`), and React puts the original back on its next
+render and silently undoes the highlighting. So matches are `Range`s and nothing
+else, painted through the CSS Custom Highlight API (`CSS.highlights` +
+`::highlight()`), which colors them without touching a node. Where that API is
+missing the ranges are still produced and still scrolled to — navigation works,
+only the paint is absent, which is a far better degradation than a highlighter
+that fights the renderer.
+
+`lib/findInDocument.ts` flattens the document's text nodes and inserts a newline
+wherever the walk crosses into a different block. A query never contains one, so a
+match can never run from the end of `<p>foo</p>` into the start of `<p>bar</p>` —
+the DOM has no whitespace between them and a naive concatenation reads "foobar".
+SVG text is skipped: a diagram's labels sit inside a transformed, zoomable SVG, so
+a highlight rectangle over one lands wherever the current pan and zoom put it.
+
+Search is scoped to the document column, not the scroll container, or the outline
+panel inside it would double every heading hit. Escape peels one layer at a time —
+the search first, the reading view only once there is no search left — because
+dismissing a full-window document on the keystroke the reader meant as "stop
+searching" is not a recoverable mistake.
+
+### Copy buttons are emitted by the renderer
+
+Same constraint, same answer. `renderMarkdown` wraps each code fence (and each
+mermaid fence too nested to become its own `DiagramViewport`) in a `.md-copyable`
+div carrying the exact source in `COPY_SOURCE_ATTR`, with the button already in
+it; `MarkdownPreview` handles the click by delegation and reads the attribute back
+out, un-escaped by the HTML parser. The acknowledgement is a **class** on that
+wrapper rather than React state, because re-rendering the run to show a tick is
+precisely the node replacement the whole design avoids.
+
+A **top-level** diagram is a real component, so it takes the source as a prop
+(`MarkdownPart.source`) and `DiagramViewport` puts Copy in its own toolbar. What
+is copied is the **mermaid source, not the SVG**: the source is the half of the
+pair that can be pasted back into a document, and the rendering is reproducible
+from it. The hover card hides the buttons entirely — it is a glance at a file that
+is already dismissing itself as the pointer travels, and nothing there wires the
+click up; a control that cannot work should not be drawn.

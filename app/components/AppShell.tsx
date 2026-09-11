@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft,
+  ChevronDown,
   Command,
   FileDiff,
   FolderGit2,
@@ -17,8 +18,11 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings2,
+  SquareArrowOutUpRight,
   WrapText,
+  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import Editor, { type EditorHandle } from './Editor'
@@ -41,6 +45,15 @@ import ConfigModal from './ConfigModal'
 import AgentLinkModal from './AgentLinkModal'
 import MobileWarningModal from './MobileWarningModal'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import {
   Select,
@@ -97,9 +110,12 @@ import {
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
   buildTree,
+  collectDirPaths,
   collectFilePaths,
+  fileExtension,
   fileKind,
   isDiagramFile,
+  pathMatchesQuery,
   DIAGRAM_EXTENSIONS_LABEL,
   EXCALIDRAW_EXTENSION,
   type FileKind,
@@ -107,6 +123,8 @@ import {
 import { EMPTY_SCENE, scenesEqual } from '@/lib/excalidraw'
 import { cn } from '@/lib/utils'
 import {
+  checkSession,
+  commitFiles,
   listTree,
   readFile,
   readFileAtRef,
@@ -115,6 +133,7 @@ import {
   deletePaths,
   renameFile,
   createBranch,
+  type FileWrite,
   type TreeResult,
 } from '@/app/actions/github'
 import type { AppConfig, FileCommit, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
@@ -222,6 +241,11 @@ const NONE_THEME = '__none__'
 const CUSTOM_THEME = '__custom__'
 const HISTORY_PAGE_SIZE = 30
 
+/** How many unsaved paths the save menu names before it starts counting. Enough
+ *  to recognize the set at a glance; a list long enough to scroll would be a file
+ *  tree, and there is one of those on the left. */
+const MAX_LISTED_UNSAVED = 6
+
 /**
  * Whether two versions of the same document differ.
  *
@@ -251,6 +275,10 @@ function contentDiffers(a: string, b: string, kind: FileKind): boolean {
  * is a 40-character hex string.
  */
 const LOCAL_SAVED = 'local'
+
+/** Shared empty path set, so resetting one to "nothing" is not a new object (and
+ *  so not a render) every time. */
+const EMPTY_PATHS: ReadonlySet<string> = new Set()
 
 /** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
 function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
@@ -297,6 +325,7 @@ type PromptSpec = Pick<
   | 'defaultValue'
   | 'prefix'
   | 'suffix'
+  | 'selection'
   | 'submitLabel'
   | 'validate'
   | 'onSubmit'
@@ -308,6 +337,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
     exportBackground: 'white',
+    pngScale: { mode: 'auto' },
     splitRatio: 0.5,
     sidebarWidth: 256,
     wrapLines: false,
@@ -623,6 +653,62 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return buildTree(paths)
   }, [localMode, localPaths, tree, pendingPaths])
 
+  /**
+   * The sidebar's search box.
+   *
+   * Filters the tree that is already in memory — there is no call behind it, in
+   * either mode. `displayNodes` is rebuilt from the matching paths rather than
+   * pruned in the tree component, so a folder whose name matched keeps every file
+   * under it and a folder that only *contains* a match still appears as the path
+   * to it. In memory rather than persisted: a filter left on across a reload is a
+   * sidebar that looks like a repo with three files in it.
+   */
+  const [fileFilter, setFileFilter] = useState('')
+  const searching = fileFilter.trim().length > 0
+
+  const visibleNodes = useMemo(() => {
+    if (!searching) return displayNodes
+    const matched = displayNodes
+      .flatMap(collectFilePaths)
+      .filter((path) => pathMatchesQuery(path, fileFilter))
+    return buildTree(matched)
+  }, [displayNodes, searching, fileFilter])
+
+  /**
+   * Folders the user collapsed *while a search is running*, which is its own
+   * short-lived state rather than an edit to `expandedPaths`.
+   *
+   * A search starts with everything open — a result buried in a collapsed folder
+   * is a result the search did not deliver — so the browsing expand/collapse set
+   * cannot also drive the filtered tree. Keeping the two apart is what lets the
+   * chevrons still work during a search without a search then silently rewriting
+   * the layout the user comes back to when they clear the box.
+   */
+  const [searchCollapsed, setSearchCollapsed] = useState<ReadonlySet<string>>(new Set())
+
+  const visibleExpanded = useMemo<ReadonlySet<string>>(() => {
+    if (!searching) return expandedPaths
+    return new Set(
+      visibleNodes.flatMap(collectDirPaths).filter((path) => !searchCollapsed.has(path)),
+    )
+  }, [searching, visibleNodes, expandedPaths, searchCollapsed])
+
+  const toggleVisibleDir = useCallback(
+    (path: string) => {
+      if (!searching) {
+        onToggleDir(path)
+        return
+      }
+      setSearchCollapsed((prev) => {
+        const next = new Set(prev)
+        if (next.has(path)) next.delete(path)
+        else next.add(path)
+        return next
+      })
+    },
+    [searching, onToggleDir],
+  )
+
   // Flat list of every file in the repo, for completing markdown link targets in
   // the editor. Derived from the same tree the sidebar shows, so a file created or
   // deleted this session is offered (or stops being offered) without a new fetch.
@@ -811,6 +897,24 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return next
     })
   }, [hasWorkspace, savedPaths, repo])
+
+  /**
+   * Verify the GitHub session before the user relies on it.
+   *
+   * Once per mount, and only in GitHub mode — local mode has no session to check.
+   * Costs no GitHub request: `checkSession` reads the session cookie and nothing
+   * else. `handleExpiredSession` does the whole of the response — it signs out
+   * and navigates — so there is nothing to render here and nothing to hold in
+   * state.
+   */
+  const sessionChecked = useRef(false)
+  useEffect(() => {
+    if (!githubEnabled || sessionChecked.current) return
+    sessionChecked.current = true
+    void checkSession().then((res) => {
+      if (!res.ok) handleExpiredSession(res.error)
+    })
+  }, [githubEnabled])
 
   // Signed in with no repository selected, the app can't read, commit or browse
   // anything — so lead with the picker instead of an inert editor and a hint in
@@ -1708,6 +1812,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // is a local move of the draft slot, exactly like creating it under the new
       // name would have been.
       const local = pendingPaths.has(node.path)
+      // The extension is shown as an uneditable suffix, exactly as it is when
+      // creating a file. Changing it would change the file's *kind* — the editor
+      // it opens in, the exporters it uses, whether its content parses at all —
+      // which a rename has no business doing silently to content that already
+      // exists. Save-as (`onFork`) is the deliberate way to write a document to a
+      // different kind, and it validates the pairing.
+      //
+      // The path itself stays one free-text field, which is the whole difference
+      // between this prompt and the create one: moving a file between folders is
+      // half of what "rename" means here.
+      const extension = fileExtension(node.path)
+      const stem = extension ? node.path.slice(0, node.path.length - extension.length) : node.path
       openPrompt({
         title: 'Rename file',
         description: localMode
@@ -1716,9 +1832,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
             ? `Rename this file before its first commit. It only exists in this browser, so nothing on ${repo?.branch} changes until you commit.`
             : `Move or rename this file on ${repo?.branch}. Git history is preserved as a rename.`,
         label: 'New path',
-        defaultValue: node.path,
+        defaultValue: stem,
+        suffix: extension,
+        // Only the name is preselected: the folder is still editable, but it is
+        // rarely the part being changed, and selecting the whole path meant the
+        // first keystroke threw the folder away too.
+        selection: 'name',
         submitLabel: 'Rename',
-        validate: validatePath,
+        validate: extension ? validateNewFilePath(extension) : validatePath,
         onSubmit: async (newPath) => {
           if (newPath === node.path) {
             setPromptOpen(false)
@@ -1878,16 +1999,52 @@ export default function AppShell({ user, mode }: AppShellProps) {
     refreshTree,
   ])
 
+  /**
+   * Bookkeeping for a path that was committed while the user was looking at
+   * something else.
+   *
+   * A commit is a round trip, and nothing stops the user from picking another
+   * file during it — which is exactly what they do, because the point of the
+   * button is that they are done with this one. The result then arrives for a
+   * document that is no longer on screen, and the editor-facing half of it
+   * (`baseline`, `loadedSha`, `openPath`) belongs to a *different* document now;
+   * applying it dragged the editor back to the file that had just been saved.
+   * So the two halves are separated, and this is the half that is always right.
+   *
+   * The draft is only dropped when it still matches what was committed. A user
+   * who kept typing between the click and the switch has newer text in there than
+   * the commit carried, and that text is the only copy of those keystrokes — so
+   * the file stays dirty and keeps its marker, which is the honest answer.
+   */
+  const settleCommitted = useCallback(
+    (path: string, content: string) => {
+      const draft = loadDraft(docIdForPath(path))
+      const outstanding = draft !== null && contentDiffers(draft.content, content, fileKind(path))
+      if (outstanding) return
+      clearDraft(docIdForPath(path))
+      setDirtyPaths((prev) => withoutPaths(prev, [path]))
+    },
+    [docIdForPath],
+  )
+
+  /** The open document, readable after an await. `openPath` in a closure is the
+   *  value at the moment the request went out, which is the one question a commit
+   *  landing later must not ask. */
+  const openPathRef = useRef<string | null>(openPath)
+  openPathRef.current = openPath
+
   const commitCurrent = useCallback(
     async (path: string, sha: string | undefined, content: string) => {
       if (!repo) return
+      // Which document this commit came from, so the result can tell whether it is
+      // still the one on screen. Compared rather than `path`: committing an
+      // untitled document *gives* it a path, so `origin` is null there and the
+      // adoption below is exactly what promotes it.
+      const origin = openPathRef.current
       setSaving(true)
       const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
       setSaving(false)
       if (res.ok) {
-        setBaseline(content)
-        setLoadedSha(res.data.sha)
-        setOpenPath(path)
         // The path is on the branch now — the next tree fetch will carry it, so it
         // must stop being spliced in as a never-committed file. Hand it to the
         // tree in the same batch, or the sidebar drops the file for the length of
@@ -1898,15 +2055,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
         clearDraft(scratchDocId)
+        if (openPathRef.current === origin) {
+          setBaseline(content)
+          setLoadedSha(res.data.sha)
+          setOpenPath(path)
+          // The dirty effect and the draft effect both key on the open document,
+          // so a clean baseline is all it takes to clear the marker and the slot.
+        } else {
+          settleCommitted(path, content)
+        }
         toast.success(`Committed ${path}`)
         void refreshTree(repo)
         return
       }
       if (handleExpiredSession(res.error)) return
-      if (res.error.kind === 'conflict') setConflictOpen(true)
+      // The conflict modal acts on the *open* file — refetch its sha, commit on
+      // top — so it can only be offered while that is still the file in question.
+      if (res.error.kind === 'conflict' && openPathRef.current === origin) setConflictOpen(true)
       else toast.error(res.error.message)
     },
-    [repo, refreshTree, scratchDocId],
+    [repo, refreshTree, scratchDocId, settleCommitted],
   )
 
   /**
@@ -1975,6 +2143,178 @@ export default function AppShell({ user, mode }: AppShellProps) {
     commitCurrent,
     saveLocal,
     openPrompt,
+  ])
+
+  /* ---------------------------------------------------------------- */
+  /* Save all                                                          */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Every path Save All would write — each file with unsaved changes.
+   *
+   * The untitled document is deliberately absent: it has no path, so it cannot be
+   * written without asking for one, and a batch action that stops to open a modal
+   * is not a batch action. Save handles that document, which is the one thing it
+   * is always able to do.
+   */
+  const saveAllPaths = useMemo(() => [...dirtyPaths].sort(), [dirtyPaths])
+
+  /**
+   * The working copy of `path`, wherever it is living.
+   *
+   * The open document is `text` — newer than its own draft, which trails it by a
+   * debounce window. Everything else is its draft, which for a dirty file is by
+   * definition the only copy of the edits.
+   */
+  const workingCopy = useCallback(
+    (path: string): string | null => {
+      if (path === openPath) return text
+      return loadDraft(docIdForPath(path))?.content ?? null
+    },
+    [openPath, text, docIdForPath],
+  )
+
+  /**
+   * Save every changed file — **one** commit, not one per file.
+   *
+   * The single commit is the whole feature. Looping the existing per-file save
+   * would put the same bytes on the branch, but as a run of commits that each
+   * describe a state the user never had, and that nobody can revert or review as
+   * the one change it actually was.
+   *
+   * Each file needs the blob sha its edits sit on top of, and the app only holds
+   * one of those — the open file's. For the rest it reads the saved file now, the
+   * same read `openFile` would do if the user had clicked it, which is also how a
+   * marker left over from an edit that has since been saved elsewhere gets
+   * cleared instead of committed. A change that lands between that read and the
+   * commit is still caught: `commitFiles` re-checks every sha server-side and
+   * refuses the whole batch.
+   */
+  const onSaveAll = useCallback(async () => {
+    if (!hasWorkspace || saving || saveAllPaths.length === 0) return
+
+    if (localMode) {
+      const failed: string[] = []
+      let saved = 0
+      for (const path of saveAllPaths) {
+        const content = workingCopy(path)
+        if (content === null) continue
+        if (!writeLocalFile(path, content)) {
+          failed.push(path)
+          continue
+        }
+        saved += 1
+        if (path === openPath) {
+          setBaseline(content)
+          setLoadedSha(LOCAL_SAVED)
+        } else {
+          settleCommitted(path, content)
+        }
+      }
+      setCreatedPaths((prev) => withoutPaths(prev, saveAllPaths))
+      refreshLocalFiles()
+      if (failed.length > 0) {
+        toast.error(
+          `Could not save ${failed.join(', ')} — this browser's storage is full. ` +
+            'Export what you need, or delete a file you are done with.',
+        )
+      }
+      if (saved > 0) toast.success(saved === 1 ? `Saved ${saveAllPaths[0]}` : `Saved ${saved} files`)
+      return
+    }
+
+    if (!repo) return
+    setSaving(true)
+    const writes: FileWrite[] = []
+    const alreadySaved: string[] = []
+    for (const path of saveAllPaths) {
+      const content = workingCopy(path)
+      if (content === null) continue
+      // Never committed: nothing on the branch to be stale against.
+      if (pendingPaths.has(path)) {
+        writes.push({ path, content })
+        continue
+      }
+      if (path === openPath && loadedSha !== null) {
+        writes.push({ path, content, sha: loadedSha })
+        continue
+      }
+      const current = await readSaved(path)
+      if (!current.ok) {
+        setSaving(false)
+        if (!current.expired) toast.error(current.message)
+        return
+      }
+      if (!contentDiffers(content, current.content, fileKind(path))) {
+        alreadySaved.push(path)
+        continue
+      }
+      writes.push({ path, content, sha: current.sha })
+    }
+
+    // Everything that looked dirty turned out to match the branch — no commit to
+    // make, just markers to put out.
+    if (writes.length === 0) {
+      setSaving(false)
+      for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+      toast.success('Everything is already committed.')
+      return
+    }
+
+    const summary =
+      writes.length === 1
+        ? `Update ${writes[0]!.path} via ${APP_NAME}`
+        : `Update ${writes.length} files via ${APP_NAME}`
+    const message =
+      writes.length === 1
+        ? summary
+        : `${summary}\n\n${writes.map((w) => `- ${w.path}`).join('\n')}`
+
+    const res = await commitFiles(repo.owner, repo.name, writes, repo.branch, message)
+    setSaving(false)
+    if (!res.ok) {
+      if (handleExpiredSession(res.error)) return
+      // Deliberately not the conflict modal: its two choices ("overwrite" /
+      // "start over") act on the open file, and the file that went stale here is
+      // usually not the one on screen. The message names the paths instead.
+      toast.error(res.error.message)
+      return
+    }
+
+    for (const file of res.data.files) {
+      if (file.path === openPath) {
+        setBaseline(file.content)
+        setLoadedSha(file.sha)
+      } else {
+        settleCommitted(file.path, file.content)
+      }
+    }
+    for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+    const committed = res.data.files.map((f) => f.path)
+    setCreatedPaths((prev) => withoutPaths(prev, committed))
+    setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
+    clearDraft(scratchDocId)
+    toast.success(
+      committed.length === 1
+        ? `Committed ${committed[0]}`
+        : `Committed ${committed.length} files in one commit`,
+    )
+    void refreshTree(repo)
+  }, [
+    hasWorkspace,
+    localMode,
+    saving,
+    saveAllPaths,
+    workingCopy,
+    openPath,
+    loadedSha,
+    pendingPaths,
+    repo,
+    readSaved,
+    settleCommitted,
+    refreshLocalFiles,
+    refreshTree,
+    scratchDocId,
   ])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
@@ -2076,6 +2416,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const HISTORY_PAGE_SIZE = 30
+
+/** How many unsaved paths the save menu names before it starts counting. Enough
+ *  to recognize the set at a glance; a list long enough to scroll would be a file
+ *  tree, and there is one of those on the left. */
+const MAX_LISTED_UNSAVED = 6
 
   // Loads one page of history for `path`; `append` decides whether it extends the
   // current list (Load more) or replaces it (first load / jump to another path).
@@ -2247,6 +2592,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [versionContent, repo, kind, openPrompt])
 
   const canSave = hasWorkspace && dirty && text.trim().length > 0 && !saving
+  /**
+   * Whether the save control splits.
+   *
+   * Not simply "more than one file is dirty": the condition is that there is
+   * unsaved work the primary button would *not* reach. One dirty file that is the
+   * open one is exactly what Save already does, and a second control offering to
+   * do the same thing is noise — but one dirty file that is **not** open is work
+   * with no other way to save it short of opening the file, which is the gap this
+   * closes.
+   */
+  const showSaveAll =
+    hasWorkspace &&
+    (saveAllPaths.length > 1 || (saveAllPaths.length === 1 && saveAllPaths[0] !== openPath))
   // A canvas has no text to diff, and a file with nothing saved behind it has
   // nothing to diff against.
   const canDiff = kind !== 'excalidraw' && loadedSha !== null
@@ -2272,16 +2630,45 @@ export default function AppShell({ user, mode }: AppShellProps) {
           <Link href="/" className="text-xl font-bold hover:text-primary">
             {APP_NAME}
           </Link>
+          {/* The repository pill carries two actions, because it names one thing
+              the user wants two things from: the label switches repositories, and
+              the arrow leaves for the repository itself on GitHub — its issues,
+              its PRs, the commits this app has been making. One pill rather than
+              two controls, since the second is meaningless without the first and
+              a ⌘-click on the label would be an affordance nothing announces.
+              The arrow opens the branch being browsed, which is the state the
+              user is actually looking at. */}
           {githubEnabled ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-1 rounded-full"
-              onClick={() => setRepoPickerOpen(true)}
-            >
-              <FolderGit2 />
-              {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
-            </Button>
+            <div className="ml-1 flex items-center rounded-full border border-border bg-background dark:border-input dark:bg-input/30">
+              <Button
+                size="sm"
+                variant="ghost"
+                className={cn('rounded-full', repo && 'rounded-r-none pr-1.5')}
+                onClick={() => setRepoPickerOpen(true)}
+                title={repo ? 'Switch repository' : 'Connect a repository'}
+              >
+                <FolderGit2 />
+                {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
+              </Button>
+              {repo ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="rounded-full rounded-l-none px-2"
+                  onClick={() =>
+                    window.open(
+                      `https://github.com/${repo.owner}/${repo.name}/tree/${encodeURIComponent(repo.branch)}`,
+                      '_blank',
+                      'noopener,noreferrer',
+                    )
+                  }
+                  title={`Open ${repo.owner}/${repo.name} on GitHub`}
+                  aria-label={`Open ${repo.owner}/${repo.name} on GitHub`}
+                >
+                  <SquareArrowOutUpRight />
+                </Button>
+              ) : null}
+            </div>
           ) : null}
           {githubEnabled && repo ? (
             <Button
@@ -2323,23 +2710,80 @@ export default function AppShell({ user, mode }: AppShellProps) {
               >
                 <RotateCcw /> Restore
               </Button>
-              <Button
-                size="sm"
-                onClick={onSave}
-                disabled={!canSave}
-                title={`${localMode ? 'Save' : 'Commit'} (${saveHint})`}
-              >
-                {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
-                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
-                  {isMac ? (
-                    <>
-                      <Command className="size-2.5" /> <span>S</span>
-                    </>
-                  ) : (
-                    <span>Ctrl + S</span>
-                  )}
-                </kbd>
-              </Button>
+              {/* Save is the primary action and always means *this file* — the
+                  one on screen, the one ⌘S has always saved. Save All is a
+                  second, deliberate choice behind the chevron rather than a mode
+                  the button silently switches into, because the two write
+                  different things and only one of them touches files the user is
+                  not looking at. */}
+              <div className="flex items-center">
+                <Button
+                  size="sm"
+                  onClick={onSave}
+                  disabled={!canSave}
+                  className={showSaveAll ? 'rounded-r-none' : undefined}
+                  title={`${localMode ? 'Save' : 'Commit'} this file (${saveHint})`}
+                >
+                  {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
+                  <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
+                    {isMac ? (
+                      <>
+                        <Command className="size-2.5" /> <span>S</span>
+                      </>
+                    ) : (
+                      <span>Ctrl + S</span>
+                    )}
+                  </kbd>
+                </Button>
+                {showSaveAll ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        disabled={saving}
+                        className="rounded-l-none border-l border-primary-foreground/30 px-1.5"
+                        aria-label={`More save actions — ${saveAllPaths.length} unsaved files`}
+                        title={`${saveAllPaths.length} unsaved files`}
+                      >
+                        <ChevronDown />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-64">
+                      <DropdownMenuItem
+                        onClick={() => void onSaveAll()}
+                        className="flex-col items-start gap-0.5"
+                      >
+                        <span>
+                          {localMode ? 'Save all' : 'Commit all'} ({saveAllPaths.length} files)
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {localMode
+                            ? 'Writes every changed file to this browser.'
+                            : 'All of them in a single commit.'}
+                        </span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                        Unsaved
+                      </DropdownMenuLabel>
+                      {saveAllPaths.slice(0, MAX_LISTED_UNSAVED).map((path) => (
+                        <DropdownMenuItem
+                          key={path}
+                          onClick={() => openFromTree(path)}
+                          className="text-xs"
+                        >
+                          <span className="truncate">{path}</span>
+                        </DropdownMenuItem>
+                      ))}
+                      {saveAllPaths.length > MAX_LISTED_UNSAVED ? (
+                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                          and {saveAllPaths.length - MAX_LISTED_UNSAVED} more
+                        </p>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+              </div>
               <span className="text-xs text-muted-foreground">
                 {dirty ? '● Unsaved' : 'Saved'}
               </span>
@@ -2357,6 +2801,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
             configYaml={config.mermaidConfig}
             background={config.exportBackground}
             onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
+            pngScale={config.pngScale}
+            onPngScaleChange={(v) => updateConfig({ pngScale: v })}
             config={appliedConfig}
             kind={kind}
           />
@@ -2407,6 +2853,51 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 </NewFileMenu>
               </div>
             </div>
+            {/* Filters what is already loaded — no fetch, both modes. Hidden while
+                the workspace is genuinely empty, where a search box is a control
+                that can only ever return nothing. */}
+            {displayNodes.length > 0 ? (
+              <div className="px-3 pb-2">
+                {/* The positioning context is the field itself, not the padded
+                    row around it: anchored to the row, the icon centred against
+                    the row's own height — field plus bottom padding — and sat a
+                    few pixels low of the text it belongs to. */}
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={fileFilter}
+                    onChange={(e) => {
+                      setFileFilter(e.target.value)
+                      setSearchCollapsed(EMPTY_PATHS)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        e.stopPropagation()
+                        setFileFilter('')
+                        setSearchCollapsed(EMPTY_PATHS)
+                      }
+                    }}
+                    placeholder="Search files"
+                    aria-label="Search files"
+                    className="h-7 bg-background pr-7 pl-7 text-xs"
+                  />
+                  {searching ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFileFilter('')
+                        setSearchCollapsed(EMPTY_PATHS)
+                      }}
+                      aria-label="Clear search"
+                      title="Clear search"
+                      className="absolute top-1/2 right-1.5 flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             <Separator />
             <div className="min-h-0 flex-1 overflow-auto p-2">
               {tree?.truncated ? (
@@ -2428,12 +2919,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 <FileTreeSkeleton />
               ) : (
                 <FileTree
-                  nodes={displayNodes}
+                  nodes={visibleNodes}
                   activePath={openPath}
                   dirtyPaths={dirtyPaths}
-                  expandedPaths={expandedPaths}
-                  onToggleDir={onToggleDir}
+                  expandedPaths={visibleExpanded}
+                  onToggleDir={toggleVisibleDir}
                   branch={repo?.branch ?? ''}
+                  searchQuery={searching ? fileFilter.trim() : undefined}
                   onOpenFile={openFromTree}
                   onDelete={requestDelete}
                   onNewFile={(dir, k) => newDiagram(dir, k)}

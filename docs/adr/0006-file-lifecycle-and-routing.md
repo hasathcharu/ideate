@@ -38,8 +38,37 @@ else. `onSubmit`/`validate` still receive the assembled path, so
 adds the one new failure mode (an empty name, which would assemble into `.md`).
 
 A name may still contain `/`, so creating a subfolder from the root "+" works.
-**Rename is deliberately different** — it keeps a single free-text path field,
-because moving a file between folders is the point of it.
+
+### Rename: the path is free text, the extension is not
+
+**Rename keeps a single free-text path field**, because moving a file between
+folders is the point of it — that is the one way it differs from creating a file,
+which knows its folder already. But the **extension is a fixed `suffix` there
+too**. Changing it would change the file's *kind*: the editor it opens in, the
+exporters it uses, whether its content parses at all. A rename has no business
+doing that silently to content that already exists, and save-as (`onFork`) is the
+deliberate way to write a document to a different kind — with `validatePathForKind`
+checking the pairing.
+
+Only the **name** is preselected (`PromptModal`'s `selection: 'name'`, which
+selects from after the last `/`). The folder is still there and still editable;
+selecting the whole path meant the first keystroke threw it away, which is the
+opposite of what a free-text path field is for.
+
+### The sidebar's search filters what is already loaded
+
+No call behind it, in either mode: `visibleNodes` is `buildTree` over the paths
+that match, so a folder whose *name* matched keeps everything under it and a folder
+that merely contains a match still appears as the route to it. Matching is every
+whitespace-separated term appearing somewhere in the **path**, which is what makes
+a folder name a usable search term.
+
+A search starts with every folder open — a result buried in a collapsed folder is
+a result the search did not deliver — so it cannot be driven by `expandedPaths`.
+Folders collapsed *while searching* go into their own short-lived set, which keeps
+the chevrons working without letting a search silently rewrite the layout the user
+returns to. The filter itself is in memory only: one left on across a reload is a
+sidebar that looks like a repo with three files in it.
 
 **Renaming a never-committed file is local only.** Such a file is spliced into the
 sidebar from `pendingPaths` and its content is a localStorage draft; GitHub has
@@ -76,6 +105,18 @@ together:
   would send its next rename or delete down the local-only branch and skip GitHub.
   For the same reason `confirmDelete` clears the drafts of everything it deletes:
   a leftover draft *is* a pending file to the recovery pass.
+- **A commit that lands after the user moved on must not adopt itself.** A commit is
+  a round trip, and picking another file during it is exactly what people do — the
+  button's whole point is that they are done with this one. `commitCurrent` captures
+  the document it came from and compares `openPathRef` on the way back:
+  `baseline`/`loadedSha`/`openPath` are applied only if that document is still on
+  screen (which is also what promotes an untitled one), and otherwise
+  `settleCommitted` does the half that is always right — clearing the path's draft
+  and its dirty marker. It clears them **only if the draft still matches what was
+  committed**: a user who kept typing between the click and the switch has newer text
+  in there, and that text is the only copy of those keystrokes, so the file stays
+  dirty. Without the guard the editor was yanked back to the file that had just been
+  saved, and the marker for it never went out.
 - **A commit hands the path straight to the tree** (`treeWithPath`), in the same
   batch that drops it from `createdPaths`. Membership is what puts the file in the
   sidebar, and committing is exactly what ends it — so waiting for `refreshTree` to

@@ -86,6 +86,25 @@ session via the same `logout()` server action the account menu uses and redirect
 to `/`. Rendering the message in place instead (what `RepoPicker` used to do) left
 the user inside an app whose every control was silently broken.
 
+### The session is checked at page load
+
+A session cookie outliving the credentials inside it is the normal shape of this
+failure, not an edge case: the App's access token lasts 8 hours and the refresh
+token is spent on every renewal, so a tab opened against a stale one renders a
+complete, signed-in-looking app whose every button is already broken. The user
+found out at the first thing they tried — usually a commit, which is the worst
+moment to be told to sign in again. `AppShell` therefore calls `checkSession()`
+once on mount in GitHub mode and feeds any error to the same
+`handleExpiredSession`.
+
+It makes **no GitHub request**. The answer is already in the cookie:
+`getGitHubToken` returns null for a missing token, for one whose refresh failed
+(`token.error`) and for one whose `expiresAt` has passed — which is every failure
+a page load can act on. A token GitHub has revoked out from under us still looks
+valid here and would need a real call to catch, but that call would then sit on
+the critical path of every page load to cover a case the next action reports
+anyway, through this same guard.
+
 Two properties it relies on: clearing the cookie has to happen *server-side*, or
 the stale cookie survives to fail the next call; and the flag is module-level, so
 concurrent failing actions collapse into one sign-out and one toast. That toast

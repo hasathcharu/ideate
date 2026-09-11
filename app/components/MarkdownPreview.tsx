@@ -10,14 +10,32 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { ArrowLeft, List, Maximize2, Minimize2 } from 'lucide-react'
 import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronUp,
+  List,
+  Maximize2,
+  Minimize2,
+  Search,
+  X,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  COPY_BUTTON_ATTR,
+  COPY_SOURCE_ATTR,
   SOURCE_LINE_ATTR,
   renderMarkdown,
   type MarkdownHeading,
   type MarkdownPart,
   type MarkdownRepoLocator,
 } from '@/lib/markdown'
+import {
+  clearFindHighlights,
+  findRanges,
+  paintFindHighlights,
+  scrollRangeIntoView,
+} from '@/lib/findInDocument'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { isDiagramFile } from '@/lib/tree'
 import DiagramViewport from './DiagramViewport'
@@ -116,6 +134,14 @@ const HOVER_CLOSE_MS = 160
  *  one you're reading" for the outline's active marker. */
 const ACTIVE_HEADING_OFFSET = 72
 
+/** How long a copied block shows its tick. Matches `DiagramViewport`, which
+ *  offers the same action for a top-level diagram. */
+const COPIED_FEEDBACK_MS = 1400
+
+/** Where a find match is parked below the top of the reading pane — clear of the
+ *  floating search bar, which sits over the document. */
+const FIND_SCROLL_OFFSET = 96
+
 /** An in-repo link the pointer is resting on. */
 interface HoverTarget {
   path: string
@@ -195,16 +221,119 @@ export default function MarkdownPreview({
   )
 
   const [isMaximized, setIsMaximized] = useState(false)
+
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  /** The document column — the subtree find-in-page searches. Narrower than
+   *  `scrollRef` on purpose: the outline panel is inside the scroller too, and
+   *  matching the table of contents would double every heading hit. */
+  const documentRef = useRef<HTMLDivElement | null>(null)
+
+  /* ---------------------------------------------------------------- */
+  /* Find in document (full-window reading view)                       */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Search, offered only in the reading view.
+   *
+   * Deliberately not beside the editor: that pane has the source next to it and
+   * CodeMirror's own ⌘F, which searches the thing you would then edit. Filling the
+   * window is the moment the document stops being something you are writing and
+   * becomes something you are reading, and reading a long document is when you
+   * need to find a word in it.
+   */
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
+  const [findIndex, setFindIndex] = useState(0)
+  const [findCount, setFindCount] = useState(0)
+  const findRangesRef = useRef<Range[]>([])
+  const findInputRef = useRef<HTMLInputElement | null>(null)
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false)
+    setFindQuery('')
+    setFindIndex(0)
+    setFindCount(0)
+    findRangesRef.current = []
+    clearFindHighlights()
+  }, [])
+
+  // Re-match whenever the query or the rendered document changes. `parts` is in
+  // the deps because an edit on the other side of the split re-renders this one,
+  // and ranges into replaced nodes point at a DOM that is no longer on screen.
+  useEffect(() => {
+    if (!findOpen || !isMaximized) return
+    const root = documentRef.current
+    if (!root) return
+    const ranges = findRanges(root, findQuery)
+    findRangesRef.current = ranges
+    setFindCount(ranges.length)
+    // Keep the reader near where they were as they keep typing, rather than
+    // sending them back to the top of the document on every keystroke.
+    setFindIndex((prev) => (ranges.length === 0 ? 0 : Math.min(prev, ranges.length - 1)))
+  }, [findOpen, isMaximized, findQuery, parts])
+
+  // Paint, and bring the current match into view. Split from the matching effect
+  // so stepping through hits doesn't re-run the search.
+  useEffect(() => {
+    const ranges = findRangesRef.current
+    const active = ranges[findIndex] ?? null
+    paintFindHighlights(ranges, active)
+    const container = scrollRef.current
+    if (container && active) scrollRangeIntoView(container, active, FIND_SCROLL_OFFSET)
+  }, [findIndex, findCount])
+
+  // Highlights are global to the page, so they have to go when this pane stops
+  // showing them — closing the reading view included, which `closeFind` is not
+  // called for.
+  useEffect(() => {
+    if (!findOpen || !isMaximized) clearFindHighlights()
+  }, [findOpen, isMaximized])
+  useEffect(() => clearFindHighlights, [])
+
+  const stepFind = useCallback((delta: number) => {
+    const total = findRangesRef.current.length
+    if (total === 0) return
+    // Wraps, because a reader at the last match wants the first one next, not a
+    // button that stops working.
+    setFindIndex((prev) => (prev + delta + total) % total)
+  }, [])
+
+  const openFind = useCallback(() => setFindOpen(true), [])
+
+  /**
+   * Put the caret in the find field as it appears.
+   *
+   * An effect rather than a `requestAnimationFrame` inside `openFind`: the field
+   * does not exist at the moment the state is set, and a frame callback is not
+   * ordered against React's commit — it ran first, found `null`, and left focus in
+   * the editor behind the reading view, so the query was typed into the document
+   * instead. An effect runs after the commit by definition.
+   */
+  useEffect(() => {
+    if (!findOpen) return
+    findInputRef.current?.focus()
+    findInputRef.current?.select()
+  }, [findOpen])
+
+  // ⌘F opens the search box, and Escape peels one layer at a time: the search
+  // first, the reading view only once there is no search left to close. Escape
+  // leaving both at once would dismiss a full-window document on the keystroke
+  // the reader meant as "stop searching".
   useEffect(() => {
     if (!isMaximized) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsMaximized(false)
+      if ((e.metaKey || e.ctrlKey) && e.code === 'KeyF' && !e.altKey) {
+        e.preventDefault()
+        openFind()
+        return
+      }
+      if (e.key !== 'Escape') return
+      if (findOpen) closeFind()
+      else setIsMaximized(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isMaximized])
-
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  }, [isMaximized, openFind, findOpen, closeFind])
 
   /* ---------------------------------------------------------------- */
   /* Outline (full-window reading view)                                */
@@ -450,9 +579,41 @@ export default function MarkdownPreview({
     [repo, scheduleClose, cancelClose, clearHoverTimer, hide],
   )
 
+  /**
+   * Copy a code block or an embedded diagram's source.
+   *
+   * Delegated, because the buttons live inside `dangerouslySetInnerHTML` runs
+   * where React has no components to attach handlers to — `lib/markdown.ts` emits
+   * the button and parks the exact source on the wrapper (`COPY_SOURCE_ATTR`), and
+   * this reads it back out. Acknowledgement is a class on that wrapper rather than
+   * React state for the same reason: re-rendering the run to show a tick would
+   * replace every node in it, taking the user's selection and the hover card's
+   * anchor with it.
+   */
+  const onCopyClick = useCallback((button: HTMLElement) => {
+    const holder = button.closest(`[${COPY_SOURCE_ATTR}]`)
+    const source = holder?.getAttribute(COPY_SOURCE_ATTR)
+    if (source === null || source === undefined) return
+    void navigator.clipboard.writeText(source).then(
+      () => {
+        holder?.classList.add('md-copied')
+        window.setTimeout(() => holder?.classList.remove('md-copied'), COPIED_FEEDBACK_MS)
+      },
+      () => toast.error('Could not write to the clipboard.'),
+    )
+  }, [])
+
   const onClick = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
       const target = e.target as HTMLElement | null
+
+      const copyButton = target?.closest?.(`[${COPY_BUTTON_ATTR}]`)
+      if (copyButton instanceof HTMLElement) {
+        e.preventDefault()
+        onCopyClick(copyButton)
+        return
+      }
+
       const anchor = target?.closest?.('a')
       if (!(anchor instanceof HTMLAnchorElement)) return
 
@@ -479,7 +640,7 @@ export default function MarkdownPreview({
       // the raw relative path, which would navigate away from the editor.
       if (!repo) e.preventDefault()
     },
-    [onOpenFile, repo, scrollToHeading, closeHover],
+    [onOpenFile, repo, scrollToHeading, closeHover, onCopyClick],
   )
 
   const themeBackground =
@@ -545,6 +706,7 @@ export default function MarkdownPreview({
             </div>
           ) : (
             <div
+              ref={documentRef}
               className="mx-auto max-w-3xl px-8 py-6"
               onClick={onClick}
               onDoubleClick={onDoubleClick}
@@ -562,6 +724,7 @@ export default function MarkdownPreview({
                       key={i}
                       className="md-mermaid"
                       svg={part.svg}
+                      source={part.source}
                       variant="embedded"
                       background={surface}
                       sourceLine={part.line}
@@ -581,7 +744,89 @@ export default function MarkdownPreview({
         </div>
       </div>
 
-      <div className="absolute top-3 right-4 flex items-center gap-1 rounded-lg border bg-card/80 p-1 shadow-sm backdrop-blur supports-backdrop-filter:bg-card/60">
+      {/* The search bar takes the toolbar's place while it is open rather than
+          sitting beside it: at this width the two together would reach halfway
+          across the document, and every control the toolbar holds is either
+          irrelevant while searching (the outline) or a way to leave the view the
+          search belongs to. */}
+      {isMaximized && findOpen ? (
+        <div className="absolute top-3 right-4 flex items-center gap-1 rounded-lg border bg-card/90 p-1 shadow-sm backdrop-blur supports-backdrop-filter:bg-card/75">
+          <Search className="ml-1.5 size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            ref={findInputRef}
+            value={findQuery}
+            onChange={(e) => {
+              setFindQuery(e.target.value)
+              // A new query starts at the first hit; keeping the old index would
+              // land the reader in the middle of a different set of matches.
+              setFindIndex(0)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                stepFind(e.shiftKey ? -1 : 1)
+              }
+            }}
+            placeholder="Find in document"
+            aria-label="Find in document"
+            className="h-7 w-48 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground"
+          />
+          <span className="min-w-14 shrink-0 px-1 text-right text-xs tabular-nums text-muted-foreground">
+            {findQuery.trim() === ''
+              ? ''
+              : findCount === 0
+                ? 'No results'
+                : `${findIndex + 1} of ${findCount}`}
+          </span>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => stepFind(-1)}
+            disabled={findCount === 0}
+            title="Previous match (⇧ Enter)"
+            aria-label="Previous match"
+          >
+            <ChevronUp />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={() => stepFind(1)}
+            disabled={findCount === 0}
+            title="Next match (Enter)"
+            aria-label="Next match"
+          >
+            <ChevronDown />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={closeFind}
+            title="Close find (Esc)"
+            aria-label="Close find"
+          >
+            <X />
+          </Button>
+        </div>
+      ) : null}
+
+      <div
+        className={cn(
+          'absolute top-3 right-4 flex items-center gap-1 rounded-lg border bg-card/80 p-1 shadow-sm backdrop-blur supports-backdrop-filter:bg-card/60',
+          isMaximized && findOpen && 'hidden',
+        )}
+      >
+        {isMaximized ? (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            onClick={openFind}
+            title="Find in document (⌘F)"
+            aria-label="Find in document"
+          >
+            <Search />
+          </Button>
+        ) : null}
         {isMaximized && onBack ? (
           <Button
             size="icon-xs"

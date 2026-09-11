@@ -38,7 +38,10 @@ pipeline differ. `.md` is markdown, **not** mermaid. → [ADR 0001](docs/adr/000
    origin. `AppConfig.mcpOrigin` is the opposite case and belongs in config.
 4. **Every read/write server action takes a caller-supplied `branch`** — there is no fixed
    branch constant. No PR-creation or merge logic of any kind: "Open PR" is a plain
-   redirect to GitHub's compare URL.
+   redirect to GitHub's compare URL. **Save All is one commit, not a loop** — `commitFiles`
+   builds a single tree and fast-forwards the ref (`force: false`), like `renameFile`;
+   it checks every sha up front and refuses the whole batch on any conflict, because
+   the commit is atomic and a partial answer is not a state it can produce.
 5. **The editor, preview and canvas are client components** (`'use client'`). Do not SSR them.
 6. **Never expose a true force-push.** "Overwrite" on conflict = refetch the latest sha,
    then commit on top of it. Do not use the git data API to rewrite refs.
@@ -124,7 +127,10 @@ listed first in `NewFileMenu` and in the toggle.
 
 - **Creating a file: only the name is typed.** `PromptModal` shows folder and extension as
   uneditable `prefix`/`suffix`. **Rename is deliberately different** — a single free-text
-  path field, because moving a file between folders is the point of it.
+  path field, because moving a file between folders is the point of it — but it keeps the
+  extension as a fixed `suffix` (changing it would change the file's *kind*; save-as is
+  the deliberate way to do that) and preselects only the name (`selection: 'name'`), so
+  the folder is editable without being what the first keystroke throws away.
 - **Renaming a never-committed file is local only** — move the draft slot, skip the API
   call and the tree refresh. A *committed* path still lands on GitHub **first**.
 - **`pendingPaths` is a set, not the open file.** It outlives the file being open;
@@ -148,6 +154,11 @@ One CodeMirror instance for both text kinds; swap per-document settings through 
   differs from the label.
 - **Keep the gutter order: line numbers → changes → folds.** `foldGutter` is added at the
   mount site, after the dirty gutter.
+- **Find/replace is a real CodeMirror panel, floated** — so `searchKeymap`, the query
+  state and `closeSearchPanel` keep working and it costs no document height. Two traps:
+  a custom `createPanel` must focus the field in its own `mount()` (`openSearchPanel`
+  only focuses a panel that is *already* open), and the panel's offset from the top is a
+  **margin**, because CodeMirror writes `style.top = "0"` inline on the wrapper.
 - **Every surface CodeMirror paints itself must be named in `editorTheme`** — including
   `.cm-searchMatch`, `.cm-selectionMatch` and `.cm-tooltip`.
 - **`dark` must be the palette's real mode** (`resolveThemeMode`), never a constant.
@@ -176,6 +187,14 @@ that same YAML via `setThemeInYaml`/`setLayoutInYaml` rather than owning separat
   in the repo holds bare ```mermaid fences. Only "Markdown + Theme" export bakes it in.
 - **Do not portal a viewport into a node `innerHTML` created.** `renderMarkdown` returns
   `MarkdownPart[]` so React owns every diagram outright.
+- **Nothing may mutate the rendered document to decorate it.** A copy button is emitted
+  by `renderMarkdown` itself (`COPY_SOURCE_ATTR` on the wrapper, read by a delegated
+  handler; the tick is a class, not a re-render), and find-in-page paints `Range`s
+  through `CSS.highlights` (`lib/findInDocument.ts`). Wrapping hits in `<mark>` would
+  rewrite a `dangerouslySetInnerHTML` run — taking the selection and the hover card's
+  anchor with it — and React would undo it on the next render.
+- **A top-level diagram copies its *source*, not its SVG** (`MarkdownPart.source`): the
+  source is the half that can be pasted back into a document.
 - **A maximized viewport must be opaque**; the fallback is white, not `var(--background)`.
 - **Sanitize order is render → sanitize → substitute**, never any other order. Placeholders
   are elements (the sanitizer strips comments); the top-level mermaid split marker is a
@@ -318,8 +337,16 @@ Published as `docker.io/hasathcharu/ideate-mcp`.
 
 `lib/export.ts` normalizes mermaid's SVG (dimensions, XML namespaces, optional background)
 through a single `resolveStandaloneSvg`; PNG rasterizes it. PNG resolution comes from
-`rasterScale(width, height)`, shared by both exporters.
+`resolvePngScale(spec, width, height)`, shared by both exporters — `rasterScale` is now
+the `auto` branch of it rather than the whole answer.
 
+- **Every PNG density resolves to a multiplier at export time, never before.** A DPI,
+  a target width and a target height are ratios against a natural size that only exists
+  once the drawing has rendered, which is why `AppConfig.pngScale` is a *spec*
+  (`PngScale`) and not a number. **Width and height are exclusive** — the aspect ratio
+  fixes the other one, so a second field could only state a contradiction. The
+  `MAX_RASTER_DIMENSION` cap applies to every mode, `auto` included: an over-large
+  request must come back as a smaller image, not a failed export.
 - **Markdown exports its source verbatim** — no render step, no image format, and
   deliberately **no theme-baking variant**.
 - **Scenes export through Excalidraw's own exporters** (`lib/exportScene.ts`), with
@@ -357,6 +384,20 @@ lives in `app/`, because that is Next's working directory.
 - **`refreshTree` never blanks the list.** Only the first load and a repo/branch switch
   discard it; a failed refresh shows an inline banner and keeps the list. `treeLoading` is
   tracked separately from `tree === null`.
+- **The sidebar's search filters what is already in memory** — no call, either mode. It
+  rebuilds the tree from the matching paths and force-expands it, tracking folders
+  collapsed *during a search* separately from `expandedPaths`, so a search never rewrites
+  the layout the user comes back to.
+- **A commit that lands after the user moved on must not adopt itself into the editor.**
+  `commitCurrent` compares `openPathRef` against the document the request came from:
+  `baseline`/`loadedSha`/`openPath` are applied only if it is still open, and the
+  path's marker and draft are settled by `settleCommitted` either way — which keeps the
+  draft when it holds keystrokes newer than what was committed.
+- **The GitHub session is checked once at mount** (`checkSession`), so a dead one is
+  found before the first commit rather than by it. It reads the session cookie and makes
+  **no GitHub request**: `getGitHubToken` already rejects a missing, errored or expired
+  token, and a revoked-but-unexpired one is caught by the next action's own
+  `handleExpiredSession`.
 - Loading states use `components/ui/skeleton.tsx` with per-call-site geometry mirroring the
   real rows.
 - **A list whose rows have both a hover fill and an active tint needs `space-y-px`.**

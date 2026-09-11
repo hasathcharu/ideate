@@ -39,6 +39,34 @@ three of its pieces need configuring rather than accepting.
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
 
+### Find/replace floats over the top-right
+
+It stays a real CodeMirror **panel** (`search({ top: true, createPanel })`) rather
+than becoming a widget of ours: the panel is what `searchKeymap`, the query state
+and `closeSearchPanel` already talk to, so making it float is a question of where
+it is painted and nothing else. Taken out of flow it also stops pushing the
+document down by its own height when it opens — which moved whatever the user was
+looking at, on the one action whose entire point is to find something.
+
+Two things about this are easy to regress and were both bugs first:
+
+- **A custom `createPanel` must focus the field in its own `mount()`.**
+  `openSearchPanel` focuses a panel that is *already* open; on the first ⌘F it only
+  dispatches the effect that creates one and returns. CodeMirror's own panel covers
+  that in `mount`, so a replacement has to as well, or ⌘F opens a search box nobody
+  is typing into.
+- **The offset from the top is a `margin`, not `top`.** CodeMirror's panel manager
+  writes `style.top = "0"` *inline* on the panel group when it creates it, and an
+  inline declaration beats any theme rule — a `top` of ours was simply ignored
+  (`right` is untouched, which is why that one works). A margin moves an absolutely
+  positioned box off its anchor just the same, without an `!important` arms race
+  over one number.
+
+The find field also carries a `min-width` rather than `min-width: 0`: the panel
+shrinks with a narrow editor pane, and with the fields free to collapse they were
+the first thing to go, leaving a row of toggles around a box too small for a
+character.
+
 **Every surface CodeMirror paints itself has to be named in `editorTheme`.** The
 pieces it does *not* name fall back to a stock theme whose colors are literals
 picked against a white editor, and those are what looked broken on dark palettes:

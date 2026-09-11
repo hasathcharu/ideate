@@ -1,4 +1,4 @@
-import type { AppConfig } from './types'
+import type { AppConfig, PngScale } from './types'
 import type { FileKind } from './tree'
 import { validateMcpOrigin } from './mcpOrigin'
 
@@ -70,6 +70,7 @@ function hasStorage(): boolean {
 const DEFAULT_CONFIG: AppConfig = {
   repo: null,
   exportBackground: 'white',
+  pngScale: { mode: 'auto' },
   splitRatio: 0.5,
   sidebarWidth: 256,
   wrapLines: false,
@@ -100,6 +101,11 @@ export function loadConfig(): AppConfig {
     if (typeof merged.exportBackground === 'boolean') {
       merged.exportBackground = merged.exportBackground ? 'white' : 'none'
     }
+    // A PNG density stored by an older build (or hand-edited) could be any
+    // shape at all, and an unusable one silently breaks every PNG export rather
+    // than showing up as a bad value anywhere — so it is validated here, not
+    // trusted at the canvas. Same defensive shape as the guards above.
+    if (!isPngScale(merged.pngScale)) merged.pngScale = { ...DEFAULT_CONFIG.pngScale }
     // An MCP origin that no longer passes the TLS rule is dropped back to the
     // default rather than kept. It is the same defensive shape as the two guards
     // above, and it matters more: an unusable origin here is not a cosmetic
@@ -116,6 +122,23 @@ export function loadConfig(): AppConfig {
   } catch {
     return { ...DEFAULT_CONFIG }
   }
+}
+
+/** Whether a stored value is a usable {@link PngScale}. A finite, positive
+ *  number is the whole of it for every mode but `auto`, which carries none. */
+function isPngScale(value: unknown): value is PngScale {
+  if (typeof value !== 'object' || value === null) return false
+  const spec = value as { mode?: unknown; value?: unknown }
+  if (spec.mode === 'auto') return true
+  if (
+    spec.mode !== 'multiplier' &&
+    spec.mode !== 'dpi' &&
+    spec.mode !== 'width' &&
+    spec.mode !== 'height'
+  ) {
+    return false
+  }
+  return typeof spec.value === 'number' && Number.isFinite(spec.value) && spec.value > 0
 }
 
 export function saveConfig(config: AppConfig): void {

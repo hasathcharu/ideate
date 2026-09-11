@@ -29,13 +29,39 @@ Deliberately *no* theme-baking variant: the theme is a render-time concern, and
 an export that rewrote every fence to carry `themeVariables` would hand the user
 a file that no longer matches what is in their repo.
 
-PNG resolution comes from `rasterScale(width, height)` (`lib/export.ts`), shared by
-both exporters so the two formats don't differ in density. It is size-aware on
-purpose: a flat device-pixel multiplier makes output density proportional to the
-*diagram*, so a small diagram lands in a small image — which is what reads as a
-low-quality export. It scales toward a 2400px long edge, with a 3× floor for big
-diagrams and a hard 8192px-per-side cap, because an over-large canvas request fails
-outright rather than degrading.
+### PNG resolution is a spec, resolved against the drawing
+
+PNG density comes from `resolvePngScale(spec, width, height)` (`lib/export.ts`),
+shared by both exporters so the two kinds never differ in what a given setting
+means. `rasterScale` is still there, but as the **`auto`** branch rather than the
+whole answer: it is size-aware on purpose, because a flat device-pixel multiplier
+makes output density proportional to the *diagram*, so a small diagram lands in a
+small image — which is what reads as a low-quality export. Auto scales toward a
+2400px long edge with a 3× floor for big diagrams, and stays the default.
+
+The other modes exist because "as good as we can make it" is not what someone
+exporting for print or for a fixed slot needs. `AppConfig.pngScale` is a
+`PngScale` — `auto`, a flat `multiplier` (1×/2×/3×), a `dpi`, or an exact `width`
+or `height` in pixels — and **every one of them resolves to a multiplier at export
+time, never before**: a DPI, a target width and a target height are all ratios
+against a natural size that does not exist until the diagram has rendered. That is
+why this is a spec and not a number, and why the resolution happens inside the
+render path rather than in the menu.
+
+**Width and height are exclusive, not a pair.** The drawing's aspect ratio already
+fixes whichever one is not given, so a second field could only ever be ignored or
+be a contradiction — hence one axis chosen from a segmented control, with the
+other reported in the hint underneath.
+
+The hard 8192px-per-side cap applies to **every** mode, `auto` included. Browsers
+refuse to allocate a canvas past a few thousand pixels a side and fail outright
+rather than degrading, so an over-large request has to come back as a smaller
+image: the difference between typing 40000 and getting a big PNG, and typing it
+and getting an error toast.
+
+The control lives **under the PNG row**, not beside the shared Background
+swatches. Scope is position: next to Background it read as another global setting
+and silently exempted the SVG row above it.
 
 ### Scenes export through Excalidraw's own exporters
 
