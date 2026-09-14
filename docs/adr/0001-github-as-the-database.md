@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/tree.ts, app/lib/markdown.ts`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -15,8 +15,8 @@ is currently selected. Save = commit; open old version = checkout.
 
 ### Local mode has files too, and localStorage is their saved state
 
-The rule above is about *our* server, and it still holds absolutely: nothing this
-app stores leaves the user's browser except a commit to their own repository.
+The rule above concerns durable storage. Agent Link can relay working documents
+through the service, but it does not provide a document database.
 
 What changed is that **local mode has a file system of its own** (`km:file:` in
 `lib/storage.ts`). It used to have one scratch document per kind and no way to keep
@@ -34,9 +34,9 @@ The shape is deliberately *the same relationship*, not a second concept:
 
 Because it is the same relationship, the dirty markers, the diff gutter, DiffView,
 Restore, draft recovery across a reload, and the agent's own path resolution work
-in local mode through the code paths they already used. `AppShell` asks *which
-store* through two functions — `docIdForPath` and `readSaved` — and nothing else
-branches on the mode.
+in local mode through the code paths they already used. `AppShell` centralizes
+document identity and saved-content reads in `docIdForPath` and `readSaved`.
+Writes and tree construction also distinguish the stores.
 
 **What local mode still does not have**, because these are properties of git and
 not of a file: history, conflicts, branches, Open PR, and the hover previews on
@@ -49,8 +49,8 @@ Two consequences worth naming:
 - **localStorage has a quota** (~5MB for everything, drafts included), and a local
   file has no copy anywhere else. `writeLocalFile` is therefore the one storage
   function that *reports* failure instead of swallowing it, and the caller says so
-  in a toast. Everything else in that module caches something that exists
-  elsewhere, where a dropped write costs a redundant copy.
+  in a toast. Drafts can hold the only copy of unsaved edits and never-saved
+  files. They are not necessarily redundant copies.
 - **`repo === null` no longer means "there are no files."** Anything asking that
   question — including `ideate_status`'s `fileCount` — has to ask about the
   workspace, not about the repository.

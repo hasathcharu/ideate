@@ -2,14 +2,17 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/auth.ts, app/proxy.ts, app/lib/session.server.ts, app/app/actions/github.ts, app/lib/sessionExpiry.ts`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
 ## Rule 1
 
-**All GitHub API calls go through Next.js Server Actions** in
-`app/actions/github.ts` (each `'use server'`). Octokit is server-side only.
+**Repository API operations go through Next.js Server Actions** in
+`app/app/actions/github.ts` (repository-relative path), marked `'use server'`.
+Octokit is server-side only.
+Authentication and token exchange use the existing server-side Auth.js flow in
+`app/auth.ts`.
 
 ## Rule 2
 
@@ -23,7 +26,7 @@ prop.
 
 ## Rule 14
 
-**Token refresh happens in `proxy.ts` and nowhere else.** GitHub App user
+**Token refresh uses the existing cookie-writable Auth.js request flow.** GitHub App user
 tokens expire in 8h and refresh tokens **rotate** (each use invalidates the
 previous one), so a refresh whose result isn't written back to the session
 cookie locks the user out. `cookies().set()` throws during a render, so
@@ -60,7 +63,7 @@ may touch at install time and can change that later. Consequences to keep in min
   (Metadata: read covers it), and `config.repo` is deliberately *not* cleared: the
   user may be mid-reinstall.
 - **Tokens**: 8h access token + rotating 6-month refresh token, refreshed ~30 min
-  ahead of expiry (`REFRESH_SKEW_SECONDS`) in `proxy.ts` (rule 12). Session
+  ahead of expiry (`REFRESH_SKEW_SECONDS`) through the request flow in rule 14. Session
   `maxAge` is 10 days, *rolling* (re-issued on activity), so the refresh window
   never expires in practice and there is no absolute-expiry machinery.
 - **Concurrent refresh is not locked** and cannot be, statelessly (no app
@@ -111,3 +114,10 @@ concurrent failing actions collapse into one sign-out and one toast. That toast
 outlives the navigation because the `Toaster` is in the root layout and
 `redirectTo` is a client-side nav. Add the guard to any new error site — a missed
 one degrades to the old inline message, not a crash.
+
+## Live verification status
+
+The instruction audit on 2026-09-14 did not run live GitHub checks. The previous
+guide marked the installation endpoints in `listRepos()` and refresh-token exchange
+as unverified against live GitHub. Retain that limitation until a signed-in check
+records its date and results. See the root README for GitHub App setup.

@@ -1,8 +1,8 @@
 # 0014. Conventions, and the bugs behind them
 
-**Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/hooks, app/components/AppShell.tsx, app/components/ui/skeleton.tsx`
+**Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/hooks.ts, app/components/AppShell.tsx, app/components/ui/skeleton.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -19,7 +19,11 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
   (preview, export, the draft autosave) sees the *outgoing* document for a full
   delay window — which rendered mermaid's parse-error dump for the scene JSON on
   every canvas→diagram switch, and wrote the previous file's text into the new
-  file's localStorage draft slot.
+  file's localStorage draft slot. Keep the key and value in one `{key, value}`
+  snapshot. On a key mismatch, return the incoming value directly. Do not replace
+  this with two state setters during render: a pass can commit with the outgoing
+  value and mount a preview for the wrong document. The effect updates the snapshot
+  after the delay while the document identity stays the same.
 - **The scratch/file draft is written only while the document is dirty**, and
   cleared the moment it isn't (the autosave effect in `AppShell`). Saving
   unconditionally persisted the auto-inserted starter template as a draft as soon

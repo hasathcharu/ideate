@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `ideate-mcp/, app/lib/agentProtocol.ts, app/lib/agentLink.ts, app/lib/textEdit.ts, app/lib/sceneEdit.ts`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -195,7 +195,7 @@ observable that says somebody may be holding an older list: a client subscribing
 arrives either because the client is new — it just listed the tools, so a notification
 costs it one redundant `tools/list` — or because its stream died and it came back,
 which after a deploy is precisely the client holding the stale list. So a subscription
-is answered with a notification (`refresh.go`), coalesced on the trailing edge because
+is answered with `tools/list_changed` (`refresh.go`), coalesced on the trailing edge because
 a deploy brings every client back at once, and capped so a steady trickle of
 subscriptions cannot postpone the pulse forever. Silently never firing is the one
 failure mode that looks exactly like the bug.
@@ -253,7 +253,7 @@ losing their cursor each time. A `path` argument makes that work invisible to th
 
 The interesting part is *where the field is optional*, and the two answers are opposite:
 
-- **`read`, `check`, `scene_get` — optional.** "What is on screen" is a real question, and
+- **`read`, `check`, `scene_get`, `scene_render` — optional.** "What is on screen" is a real question, and
   answering it about the wrong document costs one wasted call.
 - **`edit`, `write`, `scene_edit` — required.** The open document is not a stable address.
   The human keeps browsing while the agent works, so "the open document" means whichever
@@ -265,7 +265,7 @@ on `openPath === null` rather than on "is a repo connected" is what makes the ru
 both modes — local mode has files now, and a connected repo still has an untitled
 document. It also means an agent that meant the untitled document, while the human opened
 a file mid-turn, is *refused* rather than silently redirected onto theirs. The wire keeps
-the field optional in all six because only the tab knows which case it is in; the schema
+the field optional for these commands because only the tab knows which case it is in; the schema
 says "required" in prose and `targetPathArgs` explains why the Go side does not enforce it
 too.
 
@@ -439,7 +439,7 @@ a shape, a label wider than the box holding it, a column of boxes at x = 100, 10
 — all of it committed happily and none of it visible to the caller. That is the whole
 of why agent-drawn canvases read badly, and most of it is not the agent's arithmetic.
 
-So `scene_edit`, `create_canvas` and `scene_get` all answer with `warnings`. Design
+`scene_edit`, `create_canvas`, `scene_get`, and `scene_render` all answer with `warnings`. Design
 constraints, in the order they mattered:
 
 - **Warnings, never errors.** Most findings are judgements — a shape inside a shape is
@@ -683,7 +683,7 @@ tab at the result — the docs link there is for the environment variables, not 
 the one line that gets you running.
 
 Then point the tab at it in **Agent Link → Advanced options**. `http://localhost:7391`
-is the one plaintext origin either side accepts (rule 12); 7391 is the old bridge
+and `http://127.0.0.1:7391` are the plaintext origins both sides accept (rule 12); 7391 is the old bridge
 port, kept because it is the number in everyone's muscle memory.
 
 
@@ -756,7 +756,7 @@ which typechecking can see:
   afterwards. The old behaviour is reproducible by blocking
   `/excalidraw-assets/font-faces.json`, which should produce `font_unavailable` rather
   than a silently narrow box
-- **`warnings` come back from all three scene tools, and are `[]` rather than absent
+- **`warnings` come back from all four scene tools, and are `[]` rather than absent
   on a clean scene.** Then earn each kind: two boxes 20px apart (`overlap`), three in
   a row with an arrow from the first to the last (`arrow_crosses`), two arrows between
   the same pair (`arrow_duplicate`), a `text` element placed on top of a rectangle

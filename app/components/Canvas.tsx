@@ -24,7 +24,7 @@ const ASSET_PATH = '/excalidraw-assets/'
  *
  * `ssr: false` isn't optional: Excalidraw touches `window` at module scope and
  * renders to a real canvas, the same reason `Editor`/`Preview` are client-only
- * (see rule 5 in CLAUDE.md). Deferring it also keeps the editor bundle — around
+ * (see rule 5 in AGENTS.md). Deferring it also keeps the editor bundle — around
  * a megabyte, plus 13MB of lazily-fetched fonts — out of the path for users who
  * only open mermaid diagrams.
  *

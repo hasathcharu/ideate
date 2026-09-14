@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/markdown.ts, app/lib/highlight.ts, app/components/MarkdownPreview.tsx, app/components/DiagramViewport.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -14,8 +14,9 @@ standalone one — the Theme *and* Layout dropdowns and the config cogwheel all 
 visible for markdown for exactly that reason (`kind !== 'excalidraw'` in
 `AppShell.tsx`). **The config is injected at render time and never written into
 the document**: the file in the repo holds bare ```mermaid fences, which is what
-lets GitHub render it too. Only the "Markdown + Theme" export bakes it in, into a
-copy.
+lets GitHub render it too. Markdown exports its source verbatim, with no theme-baking
+variant. Mermaid source export can include config in frontmatter. See
+[ADR 0012](0012-export-pipeline.md).
 
 Embedded diagrams get the same zoom/pan/fit controls as the diagram pane, because
 they are literally the same component. To make that possible `renderMarkdown`

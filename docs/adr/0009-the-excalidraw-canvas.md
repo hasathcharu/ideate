@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/components/Canvas.tsx, app/components/CanvasInner.tsx, app/lib/excalidraw.ts`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -10,16 +10,18 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
 
 **Excalidraw must stay code-split.** The editor bundle is ~1MB plus ~13MB of
 lazily-fetched fonts, and mermaid-only users must never pay for it. It is
-reachable through exactly two doors: `components/Canvas.tsx`'s
+reachable through `components/Canvas.tsx`'s
 `dynamic(..., { ssr: false })` (which loads `CanvasInner.tsx`, the only module
-allowed to import the component and its CSS) and `lib/exportScene.ts`'s
-per-function `await import(...)`. **`lib/excalidraw.ts` must never
+allowed to value-import the library and its CSS at module scope) and utility
+functions' `await import(...)` calls in `lib/exportScene.ts` and `lib/sceneEdit.ts`.
+The boundary is the import form, not a fixed count of entry points.
+**`lib/excalidraw.ts` must never
 *value*-import `@excalidraw/excalidraw`** — type-only imports are erased and so
 are fine — because `AppShell` loads it eagerly. Same reason `ExportMenu` may
 only reach the library via `lib/exportScene.ts`.
 
-`lib/excalidrawFonts.ts` is **not** a third door, and it is worth saying why it
-looks like one. It runs on page load for every user, canvas or not, and its whole
+`lib/excalidrawFonts.ts` does not load the editor bundle.
+It runs on page load for every user, canvas or not, and its whole
 job is to register Excalidraw's fonts — but it imports nothing from the library.
 It reads a 1.3KB manifest that `scripts/vendor-excalidraw-assets.mjs` lifts out of
 the bundle *at build time*, and hands the browser `FontFace` objects pointing at
@@ -126,3 +128,11 @@ built-in right-click "Copy as PNG" isn't left at the display's `devicePixelRatio
 and re-frames the scene with `scrollToContent` on mount — scroll/zoom are
 deliberately *not* persisted (panning must not dirty a file), so a reopened scene
 would otherwise land at the canvas origin.
+
+## Verifying canvas chrome
+
+For canvas CSS changes, reproduce both editing and view mode in `?mode=local`.
+Resize below approximately 730px to activate Excalidraw's mobile layout. Toggle
+`canvas-host--view-mode` on the live host element from the console to inspect view
+mode. Check the menus and bottom bars in both states. A selector search alone
+does not prove that controls appear in the correct state.

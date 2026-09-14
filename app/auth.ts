@@ -40,7 +40,7 @@ const SESSION_MAX_AGE = 10 * 24 * 60 * 60
  *  1. `proxy.ts` sets the rotated cookie on the *response*, so the request that
  *     triggered the refresh still carries the old access token downstream to the
  *     server action. Refreshing early guarantees that old token is still valid.
- *  2. Refresh cannot be locked in a stateless app (no DB — see CLAUDE.md), so two
+ *  2. Refresh cannot be locked in a stateless app (no DB — see AGENTS.md), so two
  *     browser tabs can refresh concurrently. Because both only act inside this
  *     window while still holding a working token, a genuine collision needs two
  *     requests to cross the threshold within milliseconds of each other.

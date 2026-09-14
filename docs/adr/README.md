@@ -1,9 +1,9 @@
 # Architecture decision records
 
-`CLAUDE.md` at the repo root states the invariants — what to do and what never to do.
-These records hold the reasoning: what was tried, what broke, and why each rule is
-worded the way it is. Read the record before changing the rule it justifies, and
-update the record when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and directs agents to
+these records before they modify a subsystem. The records define detailed contracts,
+regression checks, and the reasoning behind them. Their requirements remain in force
+when the root guide summarizes them. Update the relevant record when a decision changes.
 
 | # | Record | Covers |
 |---|---|---|

@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/app/editor/page.tsx, app/components/AppShell.tsx, app/components/NewFileMenu.tsx, app/components/RepoPicker.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -13,10 +13,14 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
   (sign in → `/editor`).
 - `/editor` — the app (`app/editor/page.tsx` → `AppShell`). Reads `auth()`:
   signed-in → `mode="github"` (repo features on); `?mode=local` without a session
-  → `mode="local"` (editor + export only); otherwise redirects to `/`.
+  → `mode="local"` (local files, editor, and export); otherwise redirects to `/`.
 
-With a file open, its extension picks the editing surface. With nothing open —
-local mode, or before picking a file — there is no extension to read, so the user
+Both modes have a file tree, Save, and Restore. Gate them with `hasWorkspace`
+(a selected repository or local mode), not `githubEnabled`. A signed-in user
+without a selected repository has neither workspace.
+
+With a file open, its extension picks the editing surface. With nothing open,
+there is no extension to read, so the user
 chooses via a Diagram/Markdown/Canvas toggle backed by `AppConfig.scratchKind`.
 **Each kind gets its own localStorage draft slot** (`SCRATCH_DOC_ID` /
 `SCRATCH_MARKDOWN_DOC_ID` / `SCRATCH_SCENE_DOC_ID`, resolved through

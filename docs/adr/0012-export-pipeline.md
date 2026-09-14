@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/export.ts, app/lib/exportScene.ts, app/components/ExportMenu.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -53,7 +53,7 @@ fixes whichever one is not given, so a second field could only ever be ignored o
 be a contradiction — hence one axis chosen from a segmented control, with the
 other reported in the hint underneath.
 
-The hard 8192px-per-side cap applies to **every** mode, `auto` included. Browsers
+The hard 8192px-per-side cap (`MAX_RASTER_DIMENSION`) applies to **every** mode, `auto` included. Browsers
 refuse to allocate a canvas past a few thousand pixels a side and fail outright
 rather than degrading, so an over-large request has to come back as a smaller
 image: the difference between typing 40000 and getting a big PNG, and typing it

@@ -2,23 +2,23 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/color.ts, app/lib/themes.ts, app/lib/mermaidConfig.ts, app/app/globals.css`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
 ## Rule 7
 
 **Diagrams render with the official `mermaid` library** (`lib/mermaid.ts`),
-on the built-in `base` theme so the global YAML config's `themeVariables` can
-retune it. Rendering is async and browser-only. Any diagram type mermaid
+with the global YAML config merged over renderer defaults. Rendering is async
+and browser-only. Any diagram type mermaid
 supports works.
 
 ## Rendering & theming
 
-Diagrams render through the official `mermaid` library, initialized once in
-`lib/mermaid.ts` on the `base` theme (the only built-in theme that honors
-`themeVariables`), `htmlLabels: false` (pure-SVG labels, no `<foreignObject>`),
-and `curve: 'basis'` for smooth edges. `mermaid.render()` is async and needs the
+Diagrams render through the official `mermaid` library in `lib/mermaid.ts`.
+The fallback config uses `theme: 'default'`, `htmlLabels: false` (pure-SVG labels),
+and `curve: 'basis'`. The YAML config overrides these defaults. Palette presets
+select `base` with `themeVariables`. `mermaid.render()` is async and needs the
 DOM, so `Preview.tsx` renders in an effect (guarding against stale in-flight
 renders) — never during SSR.
 

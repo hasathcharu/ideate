@@ -2,13 +2,13 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/types.ts, app/lib/agentLink.ts, app/lib/mcpOrigin.ts`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
 ## Rule 3
 
-**localStorage stores only** uncommitted editor drafts and app config
+**localStorage stores only** local-mode saved files (`km:file:`), uncommitted editor drafts, and app config
 (selected repo, active theme, export prefs, scratch-document kind, editor
 line-wrap and viewfinder, **and the Agent Link service origin**). Never
 tokens/secrets. Two pieces of Agent Link state are deliberately *not* in
