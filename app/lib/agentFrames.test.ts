@@ -8,25 +8,7 @@ import {
   type ServerFrame,
 } from './agentProtocol'
 
-/**
- * The TypeScript half of the cross-language wire guard.
- *
- * `lib/agentProtocol.ts` used to compile under two tsconfigs — the browser's and
- * the MCP server's — so the compiler itself guaranteed the two ends of Agent Link
- * agreed on the frame shapes. Protocol 3 replaced the Node server with a Go one,
- * and that guarantee went with it: the contract is now written twice, in two
- * languages, and nothing mechanical connects them.
- *
- * `ideate-mcp/testdata/frames/` is what replaces it. Each frame below is written
- * as a **typed literal**, so `tsc` rejects it if the declarations move, and then
- * asserted equal to the fixture on disk. The Go tests decode the same files with
- * unknown fields disallowed and re-encode them. Change the TS type and this test
- * fails; update the fixture and the Go test fails; the drift has nowhere to hide.
- *
- * So the literals below must stay literals. Deriving one from the fixture it is
- * being compared against (`const frame = fixture('server-ready') as ServerFrame`)
- * would assert that a file equals itself and typecheck nothing at all.
- */
+/** The TypeScript half of the cross-language wire guard. */
 
 const FRAMES_DIR = join(import.meta.dirname, '..', '..', 'ideate-mcp', 'testdata', 'frames')
 

@@ -1,16 +1,4 @@
-/**
- * Preset diagram themes for the "Theme" dropdown (next to the layout dropdown).
- *
- * Each preset is a native mermaid `themeVariables` palette layered on the `base`
- * theme — the only built-in theme that honors `themeVariables` overrides.
- * Selecting one injects `theme` + `themeVariables` into the YAML config (the
- * single source of truth) via `setThemeInYaml`, which both retunes every diagram
- * render and recolors the app chrome (see `applyThemeToSite`).
- *
- * The palettes below mirror popular editor color schemes (zinc, Tokyo Night,
- * Catppuccin, Nord, Dracula, GitHub, Solarized, One Dark, Gruvbox, Rosé Pine,
- * Everforest, Monokai).
- */
+/** Preset diagram themes for the "Theme" dropdown (next to the layout dropdown). */
 
 export interface ThemePreset {
   /** Stable id used as the Select value and for round-trip matching. */

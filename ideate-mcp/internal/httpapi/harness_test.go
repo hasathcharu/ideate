@@ -22,12 +22,8 @@ import (
 	"github.com/hasathcharu/ideate/ideate-mcp/internal/tools"
 )
 
-// Everything the bridge actually does lives in the interaction between an HTTP
-// request, a WebSocket, and a clock — none of which a typechecker can see. Two real
-// bugs in the previous implementation were found only by driving it, so this file
-// drives it: a real MCP client over real HTTP, a real WebSocket standing in for the
-// tab, and an injected clock so the grace window and the idle timeout can be tested
-// in microseconds instead of minutes.
+// Everything the bridge actually does lives in the interaction between an HTTP request, a
+// WebSocket, and a clock — none of which a typechecker can see.
 
 const testCode = "K7QM4XZP"
 
@@ -335,11 +331,6 @@ func sampleState() protocol.BridgeState {
 /* ------------------------------------------------------------------ */
 
 // agent connects a real MCP client over Streamable HTTP.
-//
-// Using the SDK's own client rather than hand-rolled JSON-RPC is the point: the
-// service runs in Stateless mode, where GET /mcp answers 405, and whether a
-// conforming client copes with that is exactly the compatibility question this
-// transport rests on. A hand-written client would prove nothing about it.
 func (h *harness) agent() *mcp.ClientSession {
 	h.t.Helper()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "0"}, nil)
@@ -356,11 +347,6 @@ func (h *harness) agent() *mcp.ClientSession {
 }
 
 // agentWatchingTools is an agent that cares when the tool list changes.
-//
-// Setting ToolListChangedHandler is what makes the SDK client open a SEP-2575
-// subscriptions/listen stream on connect, which is the only channel a stateless
-// server has for a server-initiated notification — so this client is also the
-// assertion that the channel exists at all.
 func (h *harness) agentWatchingTools() (*mcp.ClientSession, <-chan struct{}) {
 	h.t.Helper()
 	changed := make(chan struct{}, 8)

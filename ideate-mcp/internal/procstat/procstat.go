@@ -1,25 +1,5 @@
-// Package procstat reports what this process is costing the box it runs on, for
-// the operator's stats endpoint.
-//
-// It is deliberately built out of the standard library and nothing else: the
-// service ships as a distroless image with no shell and no libc, so anything that
-// wanted to run `ps` or link against a system library is not an option, and a
-// dependency that reads /proc for us would be a lot of code for two numbers.
-//
-// **Do not take the CPU number from runtime/metrics.** The obvious-looking
-// `/cpu/classes/total:cpu-seconds` counts *idle* GOMAXPROCS time as well as work,
-// so on a multi-core box it grows at roughly GOMAXPROCS × wall-clock whatever the
-// process is doing — measured here, it read 3.6 CPU-seconds for 300ms of real work.
-// That is a scheduler accounting figure, not what `top` would show you, and
-// publishing it as "CPU usage" would have an idle service look pegged. Getrusage is
-// the actual OS accounting, and it is what this uses (see cpu_unix.go).
-//
-// Memory is reported twice on Linux for a reason the two numbers make obvious: RSS
-// is what the platform's memory limit kills the process over, and the runtime's own
-// total is what MAX_INFLIGHT_BYTES was sized against. They differ — the runtime
-// counts pages it has mapped but already released back to the OS — and an operator
-// staring at an OOM needs the first while anyone tuning the frame budget needs the
-// second.
+// Package procstat reports what this process is costing the box it runs on, for the operator's
+// stats endpoint.
 package procstat
 
 import (
@@ -57,14 +37,7 @@ type Snapshot struct {
 	Goroutines int    `json:"goroutines"`
 }
 
-// Sampler holds the previous CPU reading so a rate can be derived from two
-// cumulative ones.
-//
-// The window is advanced by Sample from the service's existing sweep ticker rather
-// than by a request, on purpose: computing the rate between consecutive *polls*
-// would let two pollers shorten each other's window and report each other's
-// numbers, and a single poller would see whatever interval its cron happened to
-// use. A fixed tick means the percentage always means the same thing.
+// Sampler holds the previous CPU reading so a rate can be derived from two cumulative ones.
 type Sampler struct {
 	now func() time.Time
 	// cpu is the reading function, a field only so the rate arithmetic can be

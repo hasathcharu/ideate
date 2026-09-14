@@ -95,9 +95,8 @@ const mermaidLanguage = StreamLanguage.define<unknown>({
 
 /**
  * Syntax colors reference the shadcn design tokens (`--primary`, `--foreground`,
- * `--muted-foreground`) defined statically in globals.css, so highlighting stays
- * consistent with the app chrome. An accent-weighted scheme rather than many
- * independent hues.
+ * `--muted-foreground`) defined statically in globals.css, so highlighting stays consistent with
+ * the app chrome.
  */
 function highlightStyle(): HighlightStyle {
   const accent = 'var(--primary)'
@@ -176,13 +175,8 @@ function relativeLink(fromDir: readonly string[], to: string): string {
 }
 
 /**
- * Complete the target of a markdown link or image from the repository's own
- * files: type `[text](` and every file in the repo is offered, spelled relative
- * to the document being edited.
- *
- * Scoped to the inside of a `](…)` target, so it never interferes with typing
- * prose. An absolute URL being typed there is left alone — there is nothing in
- * the repository to suggest for it.
+ * Complete the target of a markdown link or image from the repository's own files: type `[text](`
+ * and every file in the repo is offered, spelled relative to the document being edited.
  */
 function linkTargetCompletions(context: CompletionContext): CompletionResult | null {
   const { paths, docPath } = context.state.field(repoPathsField, false) ?? NO_PATHS
@@ -214,11 +208,8 @@ function linkTargetCompletions(context: CompletionContext): CompletionResult | n
         const label = relativeLink(dir, path)
         return {
           label,
-          // The full repo path, as context for a link written relative to this
-          // document — but only when it actually adds something. A sibling file
-          // relativizes to its own name, and for a document at the repo root
-          // *every* path does, so an unconditional detail printed the same string
-          // twice on every row.
+          // The full repo path, as context for a link written relative to this document — but only
+          // when it actually adds something.
           ...(label === path ? {} : { detail: path }),
           type: 'file',
         }
@@ -257,11 +248,9 @@ const CHEVRON_RIGHT =
   '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 4 4 4-4 4"/></svg>'
 
 /**
- * The fold arrow beside a foldable line. CodeMirror's default is a bare `⌄`/`›`
- * text glyph, which renders at whatever the monospace font makes of it and sits
- * on every foldable line at full strength — visual noise down the whole gutter.
- * These are proper chevrons, muted, and (see globals.css) revealed on gutter
- * hover unless the line is actually folded.
+ * The fold arrow beside a foldable line. CodeMirror's default is a bare `⌄`/`›` text glyph, which
+ * renders at whatever the monospace font makes of it and sits on every foldable line at full
+ * strength — visual noise down the whole gutter.
  */
 function foldMarker(open: boolean): HTMLElement {
   const el = document.createElement('span')
@@ -271,20 +260,7 @@ function foldMarker(open: boolean): HTMLElement {
   return el
 }
 
-/**
- * Put the committed text back for one change block.
- *
- * `lib/diff.ts` reduces every kind of change to "replace these lines with this
- * text", so there is only one operation here — but two line-break details it has
- * to get right, both invisible in the line range itself:
- *
- * - **Deleting** lines has to take one line break with them, or the revert leaves
- *   a blank line where the added lines were.
- * - **Inserting** at the end of the document has to put the break *before* the
- *   text, since there is no following line to put it in front of.
- *
- * It goes through `dispatch`, so it lands in the undo history like any other edit.
- */
+/** Put the committed text back for one change block. */
 function applyRevert(view: EditorView, revert: LineChangeRevert): void {
   const doc = view.state.doc
   const totalLines = doc.lines
@@ -309,14 +285,11 @@ function applyRevert(view: EditorView, revert: LineChangeRevert): void {
 }
 
 /**
- * What `basicSetup` bundles, spelled out — because three of its pieces need
- * configuring rather than accepting: `autocompletion`, which must be included
- * exactly once for the language-scoped link completions above to reach it, and
- * `foldGutter` (see {@link foldMarker}), which is added at the mount site so it
- * lands to the *right* of the dirty gutter — the gutters render in extension
- * order, and the change bar belongs beside the line numbers. Dropped from the
- * stock bundle: `defaultHighlightStyle` (this editor has its own, see
- * {@link highlightStyle}) and the lint gutter, which nothing here lints.
+ * What `basicSetup` bundles, spelled out — because three of its pieces need configuring rather than
+ * accepting: `autocompletion`, which must be included exactly once for the language-scoped link
+ * completions above to reach it, and `foldGutter` (see {@link foldMarker}), which is added at the
+ * mount site so it lands to the *right* of the dirty gutter — the gutters render in extension
+ * order, and the change bar belongs beside the line numbers.
  */
 const baseSetup = [
   lineNumbers(),
@@ -329,13 +302,9 @@ const baseSetup = [
   indentOnInput(),
   bracketMatching(),
   closeBrackets(),
-  // `icons: false`: CodeMirror renders an icon slot for every row and only ships
-  // glyphs for its own completion types, of which `file` is not one — so the
-  // markdown link completions got an empty box indenting every path. Nothing in a
-  // list of file paths is disambiguated by a per-row icon, so the column goes.
-  // `editorTheme` collapses it too, so the row's geometry doesn't depend on this
-  // flag. Still exactly one `autocompletion()`, which is what the link
-  // completions need to reach it.
+  // `icons: false`: CodeMirror renders an icon slot for every row and only ships glyphs for its own
+  // completion types, of which `file` is not one — so the markdown link completions got an empty
+  // box indenting every path.
   autocompletion({ icons: false }),
   rectangularSelection(),
   crosshairCursor(),
@@ -357,13 +326,8 @@ const baseSetup = [
 /* ------------------------------------------------------------------ */
 
 /**
- * The bar beside the line numbers marking lines that differ from what is
- * committed — added, modified, or sitting where lines were deleted.
- *
- * The map is computed in React (from the committed baseline, `lib/diff.ts`) and
- * pushed in as a state effect rather than derived inside a CodeMirror extension.
- * The baseline is the app's state, not the editor's: it changes on commit,
- * restore and file switch, none of which are document changes the editor sees.
+ * The bar beside the line numbers marking lines that differ from what is committed — added,
+ * modified, or sitting where lines were deleted.
  */
 const setLineChanges = StateEffect.define<Map<number, LineChangeKind>>()
 
@@ -402,10 +366,10 @@ const CHANGE_MARKERS: Record<LineChangeKind, ChangeMarker> = {
 }
 
 /**
- * Where a click on the gutter is delivered. A facet would be the idiomatic way to
- * pass a handler into an extension, but the extension array is built once at
- * module scope and the handler has to reach React state that changes on every
- * render — so the view carries a mutable slot instead, set by the component.
+ * Where a click on the gutter is delivered. A facet would be the idiomatic way to pass a handler
+ * into an extension, but the extension array is built once at module scope and the handler has to
+ * reach React state that changes on every render — so the view carries a mutable slot instead, set
+ * by the component.
  */
 const clickHandlers = new WeakMap<EditorView, (line: number) => void>()
 
@@ -447,15 +411,9 @@ const CLOSE_X =
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>'
 
 /**
- * A VSCode-styled search / replace panel. Replaces CodeMirror's default checkbox
- * options with icon toggles (Aa / ab̲ / .*), uses up/down arrows for previous /
- * next, drops the "all" (select-all-matches) button, and capitalizes the
- * Replace / Replace All actions.
- *
- * It is a CodeMirror *panel* that is styled to float (see `.cm-panels-top` in
- * `editorTheme`) rather than a widget of our own: a real panel is what the
- * `searchKeymap` commands, the query state and `closeSearchPanel` already talk
- * to, so floating it is a matter of where it is painted and nothing else.
+ * A VSCode-styled search / replace panel. Replaces CodeMirror's default checkbox options with icon
+ * toggles (Aa / ab̲ / .*), uses up/down arrows for previous / next, drops the "all"
+ * (select-all-matches) button, and capitalizes the Replace / Replace All actions.
  */
 function createSearchPanel(view: EditorView): Panel {
   const query = () => getSearchQuery(view.state)
@@ -603,15 +561,7 @@ function createSearchPanel(view: EditorView): Panel {
   return {
     dom,
     top: true,
-    /**
-     * Focus and select the find field as the panel appears.
-     *
-     * `openSearchPanel` only focuses a panel that is *already* open — on the
-     * first ⌘F it dispatches the effect that creates one and returns, leaving
-     * focus in the document. CodeMirror's own panel covers that in its `mount`,
-     * and a custom `createPanel` has to do the same or ⌘F opens a search box
-     * nobody is typing into.
-     */
+    /** Focus and select the find field as the panel appears. */
     mount() {
       searchField.focus()
       searchField.select()
@@ -662,20 +612,12 @@ function editorTheme(dark: boolean) {
       '.cm-activeLineGutter': {
         backgroundColor: 'color-mix(in srgb, var(--foreground) 18%, transparent)',
       },
-      // Blended into the *page*, not into transparency. A translucent accent over
-      // a dark theme composites toward the accent's own (bright) colour, which
-      // washed the selection out and took the selected text with it; mixing into
-      // `--background` keeps a dark palette's selection dark and a light one's
-      // light, at the same visual strength either way.
+      // Blended into the *page*, not into transparency.
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
         {
           backgroundColor: 'color-mix(in srgb, var(--primary) 28%, var(--background))',
         },
-      // Search hits and other occurrences of the selected word. CodeMirror's
-      // defaults for these are fixed pale yellow/green, chosen against a white
-      // editor — on a dark palette they are the brightest thing on screen. Both
-      // are re-derived from the accent instead, at strengths that keep the text
-      // on top of them readable.
+      // Search hits and other occurrences of the selected word.
       '.cm-searchMatch': {
         backgroundColor: 'color-mix(in srgb, var(--primary) 22%, var(--background))',
         outline: '1px solid color-mix(in srgb, var(--primary) 45%, transparent)',
@@ -696,11 +638,6 @@ function editorTheme(dark: boolean) {
         backgroundColor: 'color-mix(in srgb, var(--destructive) 30%, transparent)',
       },
       // Tooltips (the completion popup, and anything else CodeMirror floats).
-      // Left to the stock theme these are a light card with a blue selection bar,
-      // which is both unreadable on a dark palette and unlike every other menu in
-      // the app — so the geometry below is deliberately the same as
-      // `components/ui/dropdown-menu.tsx`: rounded-lg popover, 4px padding,
-      // rounded-md items tinted with `--accent` on selection.
       '.cm-tooltip': {
         backgroundColor: 'var(--popover)',
         color: 'var(--popover-foreground)',
@@ -739,11 +676,9 @@ function editorTheme(dark: boolean) {
       '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText': {
         color: 'inherit',
       },
-      // The icon column. `autocompletion({ icons: false })` stops it being
-      // rendered at all; this collapses it if it ever is, because the geometry of
-      // the row shouldn't depend on that flag holding. CodeMirror gives the slot
-      // `width: .8em` + `padding-right: .6em` and ships no glyph for `file`, so
-      // every path in the list was indented ~1.4em by an empty box.
+      // The icon column. `autocompletion({ icons: false })` stops it being rendered at all; this
+      // collapses it if it ever is, because the geometry of the row shouldn't depend on that flag
+      // holding.
       '.cm-completionIcon': {
         display: 'none',
       },
@@ -762,27 +697,18 @@ function editorTheme(dark: boolean) {
         color: 'inherit',
         opacity: '0.75',
       },
-      // Search / replace panel (⌘F): custom VSCode-styled panel themed with the
-      // app's design tokens instead of CodeMirror's default light chrome.
-      //
-      // It **floats over the top-right of the document** rather than taking a
-      // full-width strip above it, which is where VS Code puts it and where it
-      // costs the fewest lines of visible text. Taken out of flow it also stops
-      // shifting the document down by its own height when it opens — which moved
-      // whatever the user was looking at, on the one action whose entire point is
-      // to find something.
+      // Search / replace panel (⌘F): custom VSCode-styled panel themed with the app's design tokens
+      // instead of CodeMirror's default light chrome.
       '.cm-panels': {
         backgroundColor: 'var(--popover)',
         color: 'var(--popover-foreground)',
       },
       '.cm-panels.cm-panels-top': {
         position: 'absolute',
-        // Offset by margin, not by `top`. CodeMirror's panel manager writes
-        // `style.top = "0"` **inline** on this element when it creates the group,
-        // and an inline declaration beats any rule here — a `top` of our own was
-        // simply ignored (`right` is untouched by it, which is why that one
-        // works). A margin moves an absolutely positioned box off its anchor just
-        // the same, without an `!important` arms race over one number.
+        // Offset by margin, not by `top`. CodeMirror's panel manager writes `style.top = "0"`
+        // **inline** on this element when it creates the group, and an inline declaration beats any
+        // rule here — a `top` of our own was simply ignored (`right` is untouched by it, which is
+        // why that one works).
         marginTop: '10px',
         right: '10px',
         left: 'auto',
@@ -879,28 +805,12 @@ function editorTheme(dark: boolean) {
   )
 }
 
-/**
- * The imperative surface Agent Link drives (`lib/agentLink.ts`).
- *
- * It exists so an agent's edit lands as a **real CodeMirror transaction** rather
- * than a whole-document swap: the untouched parts of the document keep their
- * folds and the cursor keeps its place, the dirty gutter and viewfinder update
- * through the paths they already use, and the whole batch is a single undo step —
- * so ⌘Z takes back "what the agent did", not one anchor at a time.
- */
+/** The imperative surface Agent Link drives (`lib/agentLink.ts`). */
 /** How many recent emissions the echo guard remembers. See `emittedRef`. */
 const EMITTED_HISTORY = 8
 
 export interface EditorHandle {
-  /** Apply anchored replacements as one transaction, scrolling the last one into
-   *  view. Throws (rather than partially applying) if any anchor is missing or
-   *  ambiguous — see `resolveEdits`.
-   *
-   *  Returns the resulting document. That return value is not a convenience: the
-   *  caller needs the new text *now*, to render diagnostics for what it just
-   *  wrote, and `onChange` only reaches React state on the next render — so
-   *  reading the text back from a prop would report on the document as it was
-   *  before the edit. */
+  /** Apply anchored replacements as one transaction, scrolling the last one into view. */
   applyEdits: (edits: readonly TextEdit[]) => string
   /** 1-based cursor position, for `ideate_status`. */
   cursor: () => { line: number; column: number } | null
@@ -968,21 +878,8 @@ export default function Editor({
   // once at mount, and this handler changes identity on every parent render.
   const onRevealPreviewRef = useRef(onRevealPreview)
   /**
-   * Documents this editor has emitted that may still be in flight as a stale
-   * `value` prop, newest last.
-   *
-   * The reconcile effect below cannot tell an *external* change (open a file,
-   * restore a version, `ideate_write`) from an *echo* of its own output by value
-   * alone, and the difference matters: React can commit a render carrying an older
-   * value after a newer programmatic edit has already moved the document, and
-   * force-replacing the document with that older value silently discards the
-   * newer edit. Two agent edits arriving faster than React commits used to lose
-   * every second one for exactly this reason.
-   *
-   * Capped, because these are whole document copies. A handful covers every render
-   * that can realistically be in flight; the cap only ever discards echoes so old
-   * that treating one as external would replace the document with what it already
-   * contains.
+   * Documents this editor has emitted that may still be in flight as a stale `value` prop, newest
+   * last.
    */
   const emittedRef = useRef<string[]>([value])
   const themeCompartment = useRef(new Compartment())
@@ -1075,12 +972,7 @@ export default function Editor({
     })
   }, [kind])
 
-  // Recompute the dirty gutter when the document or the committed baseline
-  // changes. Debounced, because this runs per keystroke and the diff — cheap as
-  // it is after the prefix/suffix trim — has nothing to gain from being redone
-  // mid-word.
-  // Held in React as well as in the editor state: the viewfinder draws from it,
-  // and the peek popup reads it back out of the same source of truth.
+  // Recompute the dirty gutter when the document or the committed baseline changes.
   const [changes, setChanges] = useState<Map<number, LineChangeKind>>(() => new Map())
   useEffect(() => {
     const view = viewRef.current

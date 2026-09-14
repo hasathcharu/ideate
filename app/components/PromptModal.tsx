@@ -27,13 +27,8 @@ export interface PromptModalProps {
    *  file, since the kind was already chosen in the menu that opened this. */
   suffix?: string
   /**
-   * What is selected when the dialog opens.
-   *
-   * `'all'` (the default) suits a suggested value that is meant to be replaced
-   * wholesale. `'name'` selects only the part after the last `/`, which is what
-   * renaming a file wants: the directory is still there to be edited — moving a
-   * file between folders is half the point of a rename — but the name is what
-   * the user came to change, so it is what typing replaces.
+   * What is selected when the dialog opens. `'all'` (the default) suits a suggested value that is
+   * meant to be replaced wholesale.
    */
   selection?: 'all' | 'name'
   submitLabel?: string
@@ -66,13 +61,7 @@ export default function PromptModal({
     }
   }, [open, defaultValue])
 
-  // Select the editable part on open, so the suggested name can be replaced by
-  // typing. Deferred a frame: the dialog moves focus itself as it opens, and
-  // selecting before that would be undone.
-  //
-  // `selection: 'name'` narrows that to the segment after the last `/` — the
-  // caret still lands in a field holding the whole path, so the directory can be
-  // edited, but typing replaces only the file name.
+  // Select the editable part on open, so the suggested name can be replaced by typing.
   useEffect(() => {
     if (!open) return
     const frame = requestAnimationFrame(() => {

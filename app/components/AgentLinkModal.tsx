@@ -28,39 +28,9 @@ import type { AgentLinkStatus } from '@/lib/agentLink'
 import { DEFAULT_MCP_ORIGIN, REPO_URL } from '@/lib/config'
 import { normalizeMcpOrigin, validateMcpOrigin } from '@/lib/mcpOrigin'
 
-/**
- * Turning Agent Link on and off, and handing over the pairing code.
- *
- * Its own modal rather than a row in the diagram-config dialog: it has nothing to
- * do with diagrams, and it applies to all three document kinds. And a modal rather
- * than a plain toolbar toggle because switching this on lets a process outside the
- * browser rewrite whatever document is open — that deserves reading a sentence
- * first, not one click on a button.
- *
- * There are **two copyable things in the open and their order is deliberate**: the
- * pairing code comes first, because it is what the human does every session and what
- * they change to point an agent at a different tab. The setup command comes second,
- * because it is run once and then never again. The third — the command that runs a
- * service of your own — sits inside Advanced options, beside the field that points
- * this tab at the result.
- *
- * The code has **two** copy buttons for two different destinations: the bare code for
- * a human writing a request around it, and `connectPrompt` for an agent, which needs
- * to be told what the eight characters are for.
- *
- * "Waiting" remains the ordinary resting state rather than a fault — the service is
- * shared and always up, but no agent has claimed this tab until one decides to.
- */
+/** Turning Agent Link on and off, and handing over the pairing code. */
 
-/**
- * The one-line ask, for handing to an agent instead of the bare code.
- *
- * The code alone is what a human needs, because they are about to type a request
- * around it. An agent pasted the same eight characters has to infer what to do with
- * them, so this spells out the one thing: attach to this tab. It names the tool
- * rather than only the product, because "Ideate" is a word an agent may not have
- * seen and `ideate_connect` is in its tool list.
- */
+/** The one-line ask, for handing to an agent instead of the bare code. */
 function connectPrompt(code: string): string {
   return `Connect to Ideate with ideate_connect using the pairing code ${code}.`
 }
@@ -213,13 +183,7 @@ export default function AgentLinkModal({
   )
 }
 
-/**
- * The code, big enough to read off the screen to somebody.
- *
- * `tracking-widest` and a monospace face are not decoration: this is a string that
- * gets transcribed, and the Crockford alphabet's whole purpose (no I, L, O or U) is
- * defeated if the glyphs are ambiguous anyway.
- */
+/** The code, big enough to read off the screen to somebody. */
 function PairingCode({
   code,
   codeRef,
@@ -266,12 +230,9 @@ function PairingCode({
 }
 
 /**
- * Advanced options, behind a disclosure because almost nobody needs them — and
- * directly below the capacity message, because "run your own" and the field that
- * points at it should not be in different parts of the dialog.
- *
- * A native `<details>` rather than a Radix collapsible: it is one toggle with no
- * state to coordinate, and the element already does the keyboard and ARIA work.
+ * Advanced options, behind a disclosure because almost nobody needs them — and directly below the
+ * capacity message, because "run your own" and the field that points at it should not be in
+ * different parts of the dialog.
  */
 function AdvancedOptions({
   mcpOrigin,
@@ -364,14 +325,9 @@ function AdvancedOptions({
 }
 
 /**
- * Copy `text`, with a fallback, because the async Clipboard API is refused more
- * often than it looks: it needs a secure context *and* transient user activation,
- * and some embedded or automated browsers decline it outright even then. A copy
- * button that silently does nothing is worse than no button, so this tries three
- * things in descending order of niceness and only claims success when one worked.
- *
- * The last resort is not a failure message but a **selection** of the visible text,
- * so ⌘C finishes the job the button started.
+ * Copy `text`, with a fallback, because the async Clipboard API is refused more often than it
+ * looks: it needs a secure context *and* transient user activation, and some embedded or automated
+ * browsers decline it outright even then.
  */
 async function copyText(
   text: string,
@@ -413,11 +369,10 @@ async function copyText(
   return 'selected'
 }
 
-/** Mirrors the copy affordance in `ExportMenu`: a ghost button and a toast, with a
- *  moment of acknowledgement on the icon itself so the click is not silent.
- *
- *  Icon-only unless `children` are given, and `target` is optional: text that is not
- *  rendered anywhere has nothing to fall back to selecting. */
+/**
+ * Mirrors the copy affordance in `ExportMenu`: a ghost button and a toast, with a moment of
+ * acknowledgement on the icon itself so the click is not silent.
+ */
 function CopyButton({
   text,
   target,

@@ -91,10 +91,9 @@ function noop(): void {}
 const COMMIT_SKELETON_WIDTHS = ['w-40', 'w-28', 'w-44', 'w-32', 'w-36'] as const
 
 /**
- * Placeholder commit rows. Returns a fragment rather than a wrapper so each row is
- * a direct child of the list's flex container and picks up its `gap-1`; geometry
- * matches the real commit button (`p-2.5`, message line over a meta line) so the
- * list doesn't jump when the data lands.
+ * Placeholder commit rows. Returns a fragment rather than a wrapper so each row is a direct child
+ * of the list's flex container and picks up its `gap-1`; geometry matches the real commit button
+ * (`p-2.5`, message line over a meta line) so the list doesn't jump when the data lands.
  */
 function CommitSkeleton({ rows }: { rows: number }) {
   return (

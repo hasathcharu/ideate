@@ -19,11 +19,8 @@ export interface NewFileMenuProps {
 }
 
 /**
- * The "new file" kind picker, shared by the sidebar's root **+** and every
- * folder's **+** so the two can't drift apart.
- *
- * Both entry points still lead to the same path prompt, and the extension typed
- * there is what ultimately decides the file's kind — this menu only prefills it.
+ * The "new file" kind picker, shared by the sidebar's root **+** and every folder's **+** so the
+ * two can't drift apart.
  */
 export default function NewFileMenu({ onSelect, children }: NewFileMenuProps) {
   return (

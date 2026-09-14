@@ -3,13 +3,7 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/*
- * shadcn/ui design tokens — the default light palette used when no diagram
- * theme is set. `applyThemeToSite` (lib/mermaidConfig.ts) overrides these via
- * inline styles on <body> when the user picks/edits a theme, so this is a
- * fallback, not a fixed palette. The `.dark` block is kept for a possible
- * future dark mode but is currently unused.
- */
+/* shadcn/ui design tokens — the default light palette used when no diagram theme is set. */
 :root {
   --radius: 0.625rem;
   --background: oklch(1 0 0);
@@ -40,12 +34,7 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
-  /* Diff hues (the editor's dirty gutter, and DiffView's rows). Deliberately
-     fixed rather than derived from the palette: added has to stay recognizably
-     green, deleted red and modified blue whichever theme the user picked, and
-     these three mid-tones stay legible on a white and on a near-black surface
-     alike. They are NOT in `MANAGED_TOKENS` — `applyThemeToSite` must not
-     repaint them. */
+  /* Diff hues (the editor's dirty gutter, and DiffView's rows). */
   --diff-add: #2f9e44;
   --diff-remove: #e5484d;
   --diff-modified: #2f74e5;
@@ -141,25 +130,7 @@
   }
 }
 
-/* Scrollbars follow the active theme, everywhere.
-
-   The rule is on `*` rather than on `:root` on purpose. `scrollbar-color` is an
-   inherited property, so a single declaration high up would be resolved *there*
-   — against the fallback palette in `:root` — and every descendant would inherit
-   that already-computed color, ignoring the theme tokens `applyThemeToSite`
-   writes onto <body>. Declaring it per element makes each one resolve the vars
-   against its own values.
-
-   Standard properties only, with the `::-webkit-scrollbar` pseudo-elements kept
-   strictly as a fallback for engines that lack them. Chromium ignores those
-   pseudo-elements as soon as `scrollbar-width`/`scrollbar-color` is set, so
-   shipping both unconditionally meant the scrollbar's appearance depended on
-   which browser (and which platform's overlay-scrollbar behavior) was in play —
-   which is exactly the intermittent theming this replaces.
-
-   `color-scheme` matters here too: scrollbars the page can't reach (inside a
-   lazily-styled third-party subtree, or drawn by the OS) follow it instead.
-   `applyThemeToSite` sets it from the active palette's light/dark mode. */
+/* Scrollbars follow the active theme, everywhere. */
 * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--foreground) 25%, transparent) transparent;
@@ -306,12 +277,7 @@
   max-width: none !important;
 }
 
-/* Rendered markdown (components/MarkdownPreview.tsx).
-
-   Everything is expressed against the shadcn tokens rather than literal colors,
-   so a rendered document follows whichever mermaid theme is active exactly like
-   the rest of the chrome does — including the embedded diagrams, which mermaid
-   paints from the same `themeVariables`. */
+/* Rendered markdown (components/MarkdownPreview.tsx). */
 .md-prose {
   font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
   color: var(--foreground);
@@ -319,21 +285,16 @@
   line-height: 1.7;
   overflow-wrap: break-word;
 }
-/* A run of prose between two diagrams. `display: contents` removes the wrapper's
-   own box, so its children participate in `.md-prose` layout exactly as if they
-   were direct children — margins collapse normally and the descendant selectors
-   below all still match. The wrapper exists purely to give React one element per
-   HTML run (MarkdownPreview.tsx). */
+/*
+ * A run of prose between two diagrams. `display: contents` removes the wrapper's own box, so its
+ * children participate in `.md-prose` layout exactly as if they were direct children — margins
+ * collapse normally and the descendant selectors below all still match.
+ */
 .md-prose-run {
   display: contents;
 }
 
-/* The block a double-click in the editor just jumped to (MarkdownPreview.tsx).
-   A smooth scroll lands mid-document with a dozen blocks on screen and no clue
-   which one was asked for, so the target says so for a moment and then stops.
-   Outline rather than a background: it has to read on a paragraph, a table and a
-   diagram alike, none of which share a surface — and `outline` takes no space, so
-   nothing on the page moves while it's on. */
+/* The block a double-click in the editor just jumped to (MarkdownPreview.tsx). */
 .md-sync-flash {
   outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent);
   outline-offset: 3px;
@@ -615,13 +576,7 @@
   font-size: 0.9em;
 }
 
-/* Find-in-document (the reading view's search).
-   Painted through the CSS Custom Highlight API, which colors `Range`s without
-   putting a single node into the document — see lib/findInDocument.ts for why
-   that is the only workable way to highlight this particular DOM. Only `color`,
-   `background-color` and a few decorations are honoured inside `::highlight()`;
-   anything box-like (padding, border, radius) is ignored by the spec, so there
-   is deliberately none here. */
+/* Find-in-document (the reading view's search). */
 ::highlight(md-find) {
   background-color: color-mix(in srgb, var(--color-amber-400, #fbbf24) 55%, transparent);
   color: var(--foreground);
@@ -654,11 +609,11 @@
   opacity: 1;
 }
 
-/* Alerts (`> [!NOTE]` …). GitHub's five kinds, keyed by a per-kind hue held in
-   `--md-alert`: the surrounding palette is user-chosen, so a note has to stay
-   recognizably blue and a caution recognizably red on any of them. Both the tint
-   and the rule are mixed against the hue rather than stated outright, so the box
-   sits on a light and a dark surface equally well. */
+/*
+ * Alerts (`> [!NOTE]` …). GitHub's five kinds, keyed by a per-kind hue held in `--md-alert`: the
+ * surrounding palette is user-chosen, so a note has to stay recognizably blue and a caution
+ * recognizably red on any of them.
+ */
 .md-prose .md-alert {
   --md-alert: var(--primary);
   margin: 0 0 1em;
@@ -816,14 +771,11 @@
   margin-bottom: 0.6em;
 }
 
-/* Hide Excalidraw's hamburger (main) menu: every item in it is either redundant
-   with the app's chrome (export lives in the Export menu, saving is Commit) or
-   controlled by the app (canvas background follows the active theme).
-
-   Target `main-menu-trigger` specifically. The generic `dropdown-menu-button`
-   class — and the `dropdown-menu-button` data-testid — are ALSO worn by the
-   toolbar's "More tools" trigger (`App-toolbar__extra-tools-trigger`), so matching
-   on those hides the frame/embed/laser tools instead of the menu. */
+/*
+ * Hide Excalidraw's hamburger (main) menu: every item in it is either redundant with the app's
+ * chrome (export lives in the Export menu, saving is Commit) or controlled by the app (canvas
+ * background follows the active theme).
+ */
 .excalidraw .main-menu-trigger,
 .excalidraw [data-testid='main-menu-trigger'] {
   display: none !important;
@@ -834,18 +786,7 @@
   display: none !important;
 }
 
-/* Dress Excalidraw's UI in the app's active palette.
-
-   Excalidraw themes its chrome through CSS custom properties, so the whole editor
-   can adopt the diagram theme by remapping them onto the shadcn tokens that
-   `applyThemeToSite` already writes onto <body>. Prefixed with `body` so these beat
-   Excalidraw's own `.excalidraw` / `.excalidraw.theme--dark` definitions on
-   specificity — the two stylesheets' load order isn't guaranteed, since
-   Excalidraw's arrives with the lazy chunk.
-
-   Colour *swatches* are deliberately left alone: they opt into `--theme-filter`,
-   which is Excalidraw's own mechanism for showing stored light-mode colours in a
-   dark UI. */
+/* Dress Excalidraw's UI in the app's active palette. */
 body .excalidraw,
 body .excalidraw.theme--dark {
   /* Surfaces */
@@ -926,17 +867,10 @@ body .excalidraw.theme--dark {
   height: 1rem;
 }
 
-/* Excalidraw's right-click menu is its own component, so it can't simply be swapped
-   for `components/ui/dropdown-menu.tsx` — it gets restyled to match instead.
-
-   The values come through `@apply` of the very same utilities `DropdownMenuContent`
-   / `DropdownMenuItem` / `DropdownMenuSeparator` use, rather than hand-copied
-   numbers, so the two stay in lockstep if those change.
-
-   Remapping Excalidraw's CSS variables alone wasn't enough here: this menu hardcodes
-   several colors outright — a `#adb5bd` separator, `#f03e3e` danger text, a
-   `--button-gray-3` border — and its hover *inverts* (highlight fill + popup-colored
-   text) where shadcn tints subtly. */
+/*
+ * Excalidraw's right-click menu is its own component, so it can't simply be swapped for
+ * `components/ui/dropdown-menu.tsx` — it gets restyled to match instead.
+ */
 body .excalidraw .context-menu {
   @apply rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10;
   border: none;
@@ -980,20 +914,7 @@ body .excalidraw .context-menu-item-separator {
   margin-right: -0.25rem;
 }
 
-/* A read-only version preview should show the drawing and nothing else.
-   `viewModeEnabled` drops Excalidraw's toolbar and property panels but leaves two
-   opaque islands behind, both of which read as stray white boxes over a preview:
-
-   - `.App-menu_bottom` — the zoom controls and help button. Wheel and pinch zoom
-     still work without the buttons.
-   - `.App-bottom-bar` — the *mobile* layout's bottom island, which renders empty in
-     view mode. It shows up because Excalidraw switches to its mobile layout below
-     ~730px, and the history sheet's preview pane is narrower than that. Note this
-     one is a direct child of `.excalidraw`, not of `.layer-ui__wrapper` like the
-     other menus, so a selector aimed at the menu containers misses it.
-
-   Both are scoped to view mode: in the editing canvas `.App-bottom-bar` is where the
-   mobile property panel lives, so hiding it there would break narrow-screen editing. */
+/* A read-only version preview should show the drawing and nothing else. */
 body .canvas-host--view-mode .App-menu_bottom,
 body .canvas-host--view-mode .App-bottom-bar {
   display: none !important;

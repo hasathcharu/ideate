@@ -75,15 +75,7 @@ export interface MarkdownPreviewProps {
   ref?: React.Ref<MarkdownPreviewHandle>
 }
 
-/**
- * The document half of the editor ↔ preview scroll sync.
- *
- * Imperative rather than a `line` prop for one reason: scrolling is an *event*,
- * not state. As a prop, double-clicking the same line twice — which is exactly
- * what you do after scrolling away — would pass React an unchanged value and
- * nothing would happen, and the usual fix (pairing the line with a nonce) makes
- * every jump re-render the whole document, diagrams included.
- */
+/** The document half of the editor ↔ preview scroll sync. */
 export interface MarkdownPreviewHandle {
   /** Scroll to the block that owns `line` in the source. */
   revealLine: (line: number) => void
@@ -93,15 +85,7 @@ export interface MarkdownPreviewHandle {
  *  doesn't sit flush against the edge (or under the window controls). */
 const SYNC_SCROLL_OFFSET = 24
 
-/**
- * The deepest rendered block that starts at or before `line`.
- *
- * `lib/markdown.ts` stamps every block — nested ones included — so the candidates
- * for line 12 might be a `<blockquote>` on line 9, a `<p>` on line 11 and the
- * `<li>` between them. Document order plus "last one that starts early enough"
- * picks the innermost, because a child always follows its parent in the tree and
- * so appears later in the query result.
- */
+/** The deepest rendered block that starts at or before `line`. */
 function blockForLine(container: HTMLElement, line: number): HTMLElement | null {
   let best: HTMLElement | null = null
   let bestLine = -Infinity
@@ -123,11 +107,7 @@ function blockForLine(container: HTMLElement, line: number): HTMLElement | null 
  *  doesn't fetch every one of them. */
 const HOVER_DELAY_MS = 350
 
-/** How long the preview outlives the pointer leaving the link — or leaving the
- *  card. The card sits 8px below the link it describes, which is a gap the
- *  pointer has to cross to reach it, so closing the instant the link is left made
- *  the card unreachable. Long enough to cross the gap, short enough that it still
- *  reads as dismissed when you look away. */
+/** How long the preview outlives the pointer leaving the link — or leaving the card. */
 const HOVER_CLOSE_MS = 160
 
 /** Distance from the top of the reading pane at which a heading counts as "the
@@ -148,23 +128,7 @@ interface HoverTarget {
   rect: DOMRect
 }
 
-/**
- * Rendered markdown, beside the editor exactly like the diagram preview.
- *
- * Unlike `Preview`, this is a *document*: it scrolls rather than zooming and
- * panning, and it gets a measured column width instead of filling the pane edge
- * to edge. The embedded diagrams still scale down to that column (see the
- * `.md-prose .md-mermaid svg` rule in globals.css).
- *
- * Three behaviors here belong to the document rather than to the renderer:
- *
- * - **In-repo links open in the editor.** `lib/markdown.ts` resolves them to a
- *   repo path and tags them; the click handler below intercepts a plain click and
- *   opens the file, while ⌘/Ctrl-click still follows the `href` to GitHub.
- * - **Resting on such a link previews the file** (`FileHoverCard`).
- * - **Filling the window offers the outline**, since a full-screen document is
- *   being *read* rather than edited, and reading one wants a table of contents.
- */
+/** Rendered markdown, beside the editor exactly like the diagram preview. */
 export default function MarkdownPreview({
   text,
   paintBackground = true,
@@ -208,13 +172,7 @@ export default function MarkdownPreview({
     }
   }, [text, options, mounted])
 
-  /**
-   * One stable `dangerouslySetInnerHTML` wrapper per prose run, rebuilt only when
-   * `parts` is. Inline object literals here made React rewrite every run's
-   * `innerHTML` on every render of this component — see `useInnerHtml`, and note
-   * that the hover preview below holds a reference to a link *inside* one of these
-   * runs, which a rebuild would replace under it.
-   */
+  /** One stable `dangerouslySetInnerHTML` wrapper per prose run, rebuilt only when `parts` is. */
   const runHtml = useMemo(
     () => parts.map((part) => ({ __html: part.type === 'html' ? part.html : '' })),
     [parts],
@@ -233,13 +191,8 @@ export default function MarkdownPreview({
   /* ---------------------------------------------------------------- */
 
   /**
-   * Search, offered only in the reading view.
-   *
-   * Deliberately not beside the editor: that pane has the source next to it and
-   * CodeMirror's own ⌘F, which searches the thing you would then edit. Filling the
-   * window is the moment the document stops being something you are writing and
-   * becomes something you are reading, and reading a long document is when you
-   * need to find a word in it.
+   * Search, offered only in the reading view. Deliberately not beside the editor: that pane has the
+   * source next to it and CodeMirror's own ⌘F, which searches the thing you would then edit.
    */
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState('')
@@ -300,15 +253,7 @@ export default function MarkdownPreview({
 
   const openFind = useCallback(() => setFindOpen(true), [])
 
-  /**
-   * Put the caret in the find field as it appears.
-   *
-   * An effect rather than a `requestAnimationFrame` inside `openFind`: the field
-   * does not exist at the moment the state is set, and a frame callback is not
-   * ordered against React's commit — it ran first, found `null`, and left focus in
-   * the editor behind the reading view, so the query was typed into the document
-   * instead. An effect runs after the commit by definition.
-   */
+  /** Put the caret in the find field as it appears. */
   useEffect(() => {
     if (!findOpen) return
     findInputRef.current?.focus()
@@ -446,18 +391,7 @@ export default function MarkdownPreview({
 
   const [hover, setHover] = useState<HoverTarget | null>(null)
   const hoveredLinkRef = useRef<HTMLElement | null>(null)
-  /**
-   * The path the pointer is resting on, tracked beside the node itself.
-   *
-   * The node alone is not a reliable identity: anything that re-renders the
-   * document replaces every element the markup created (editing the source,
-   * switching theme), so the `<a>` under a motionless pointer can become a
-   * different object without the pointer having gone anywhere. Identified by node
-   * only, that read as *a different link* — hide the preview, fetch it again, show
-   * it 350ms later, and re-render, which replaced the node again: a flicker loop
-   * that ran for as long as the pointer rested there. The path is what the preview
-   * is actually keyed on, so it survives the node.
-   */
+  /** The path the pointer is resting on, tracked beside the node itself. */
   const hoveredPathRef = useRef<string | null>(null)
   const hoverTimerRef = useRef<number | null>(null)
   const closeTimerRef = useRef<number | null>(null)
@@ -488,16 +422,7 @@ export default function MarkdownPreview({
     hide()
   }, [clearHoverTimer, cancelClose, hide])
 
-  /**
-   * Close after the grace window rather than now.
-   *
-   * Every "the pointer left" path goes through this — leaving the link, leaving
-   * the reading pane, leaving the card — because none of them can tell on its own
-   * whether the pointer is on its way to the card, back to the link, or gone.
-   * Whichever it turns out to be cancels this or lets it run. Re-entrant on
-   * purpose: an already-pending close is not restarted, so drifting across the
-   * gap doesn't extend the window indefinitely.
-   */
+  /** Close after the grace window rather than now. */
   const scheduleClose = useCallback(() => {
     if (closeTimerRef.current !== null) return
     closeTimerRef.current = window.setTimeout(() => {
@@ -579,17 +504,7 @@ export default function MarkdownPreview({
     [repo, scheduleClose, cancelClose, clearHoverTimer, hide],
   )
 
-  /**
-   * Copy a code block or an embedded diagram's source.
-   *
-   * Delegated, because the buttons live inside `dangerouslySetInnerHTML` runs
-   * where React has no components to attach handlers to — `lib/markdown.ts` emits
-   * the button and parks the exact source on the wrapper (`COPY_SOURCE_ATTR`), and
-   * this reads it back out. Acknowledgement is a class on that wrapper rather than
-   * React state for the same reason: re-rendering the run to show a tick would
-   * replace every node in it, taking the user's selection and the hover card's
-   * anchor with it.
-   */
+  /** Copy a code block or an embedded diagram's source. */
   const onCopyClick = useCallback((button: HTMLElement) => {
     const holder = button.closest(`[${COPY_SOURCE_ATTR}]`)
     const source = holder?.getAttribute(COPY_SOURCE_ATTR)

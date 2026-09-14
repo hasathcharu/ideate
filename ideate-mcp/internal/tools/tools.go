@@ -1,27 +1,4 @@
 // Package tools registers the fourteen MCP tools an agent drives the editor with.
-//
-// The whole point of these, and the reason the feature exists at all, is that they
-// act on a document **in a browser right now** rather than on a file on disk. An
-// edit lands in CodeMirror as a real transaction, mermaid re-renders, and the
-// renderer's verdict comes back in the result of the agent's own tool call — so a
-// broken diagram is fixed in the same turn. An agent editing files finds out its
-// diagram is broken when a human next opens it.
-//
-// From protocol 4 that document need not be the one on screen: every tool that
-// names a document takes an optional path (docPathArgs), and only the *default* is
-// the open one. The renderer still has the last word either way, because the tab is
-// still what runs the command.
-//
-// Two rules shape everything here:
-//
-//   - **Nothing writes to GitHub.** There is no commit tool, and rename and delete
-//     are deliberately not exposed either, because in this app those *are* commits.
-//     An agent's blast radius is the uncommitted working copy: on screen, and one
-//     ⌘Z away.
-//   - **Failures are tool errors with a readable message, never exceptions.** A
-//     missing edit anchor, a wrong path, a scene tool aimed at a markdown document
-//     — every one of them is something the agent can act on, and an exception
-//     reaches the model with the useful part stripped off.
 package tools
 
 import (
@@ -64,22 +41,7 @@ type Deps struct {
 /* Argument shapes                                                     */
 /* ------------------------------------------------------------------ */
 
-// codeArgs is embedded in every tool's input, and its description is doing more
-// work than it looks.
-//
-// The pairing code is a tool *argument* rather than an `Authorization` header, and
-// that was the central design choice of this transport. A header is the more
-// standard remote-MCP shape and would keep the credential out of the model's
-// context — but a header lives in client config, so pointing the agent at a
-// different tab would mean re-running `claude mcp add` and tearing down the MCP
-// connection. Switching tabs mid-session is a hard requirement, and only an
-// argument gives it: the human names another code and the very next call lands on
-// a different tab.
-//
-// The last clause of the description below is what makes that work in practice —
-// an agent that has not been told the argument is the tab selector will keep using
-// whichever code it saw first. Keep it. (It cannot be factored into a constant:
-// struct tags must be literals.)
+// codeArgs is embedded in every tool's input, and its description is doing more work than it looks.
 type codeArgs struct {
 	Code string `json:"code" jsonschema:"The pairing code shown in the browser tab's Agent Link dialog (the plug icon in the toolbar), e.g. \"K7QM-4XZP\". Case and the dash are ignored. Change this when the human names a different tab's code — that is how you switch which tab you are driving, mid-session, with no reconfiguration."`
 }
@@ -90,34 +52,11 @@ type connectArgs struct {
 }
 
 // docPathArgs names the document a *reading* tool acts on, and may be omitted.
-//
-// Before this existed the tools meant "whatever the human is looking at", so an
-// agent asked to fix six diagrams had to ideate_open each one — which drags the
-// human's editor to a different file six times and loses their cursor each time.
-// The path makes that work invisible to them.
-//
-// Optional here because "what is on screen" is a real question, and reading the
-// wrong document costs one wasted call. The mutating tools take targetPathArgs
-// below instead, where it is not optional at all.
 type docPathArgs struct {
 	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Omit it to read the open document. A path leaves the editor where it is, so prefer it to ideate_open for work across several files."`
 }
 
 // targetPathArgs names the document a *mutating* tool changes, and is required.
-//
-// Required because the open document is not a stable address. The human keeps
-// browsing their files while the agent works, so "the open document" means whichever
-// one they clicked last — and an edit that lands on the wrong file is not something
-// reading it again can undo. Naming the path costs one ideate_status call and makes
-// the target the agent's own decision.
-//
-// The field stays a pointer, and the schema stays permissive, for one case: the
-// **untitled** document has no path yet, so omission is the only way to name it. That
-// is a state of the tab, not a mode of the app — local mode has its own files, and a
-// connected repo still has an untitled document until the human saves it somewhere.
-// Only the tab knows which document is open, so the tab is where the refusal lives
-// (AppShell's requirePath) — one implementation, and the one that cannot be wrong. Do
-// not add a second here against the pushed state.
 type targetPathArgs struct {
 	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Required: the open document changes as the human browses, so an unnamed target can be a file you never read. Call ideate_status for the open path. Omit it only when ideate_status reports no open path, which means the untitled document has no path to name yet."`
 }
@@ -162,11 +101,6 @@ type createFileArgs struct {
 }
 
 // createCanvasArgs is create_file's path plus scene_edit's ops.
-//
-// Path is required and non-pointer, like openArgs and createFileArgs: a command
-// whose purpose is to make a *new* document has nothing to default to. Ops is
-// optional, because "give me a blank canvas to draw on next" is a reasonable thing
-// to ask for and refusing it would only push the agent into two calls.
 type createCanvasArgs struct {
 	codeArgs
 	Path string       `json:"path" jsonschema:"Repo-relative path. It must end in .excalidraw, and no file can hold that path already. To change a canvas that exists, use ideate_scene_edit."`
@@ -193,13 +127,6 @@ type sceneEditArgs struct {
 }
 
 // sceneOpArg is the add/update/delete union flattened into one object.
-//
-// The old Node server declared it as a zod union of three shapes, which a JSON
-// Schema generated from a Go struct cannot express. Flattening loses the schema's
-// ability to say "id is required for update"; the handler says it instead, in a
-// message that names the op and the missing field. That is a worse schema and a
-// better error, and the error is what the agent actually reads when it gets it
-// wrong.
 type sceneOpArg struct {
 	Op              string     `json:"op" jsonschema:"One of \"add\", \"update\", \"delete\", \"align\" or \"distribute\"."`
 	ID              *string    `json:"id,omitempty" jsonschema:"For add: your own id for this element, so arrows in the same call can bind to it and a later call can update it; generated when omitted. For update and delete: the element id, from ideate_scene_get."`
@@ -427,10 +354,6 @@ func Register(server *mcp.Server, deps *Deps) {
 }
 
 // toolSurface is what Register accumulates as it registers.
-//
-// readd re-registers one tool — whichever came first — and is the only way to make
-// the SDK emit notifications/tools/list_changed, which is why it is captured here
-// instead of a tool definition being repeated somewhere for the purpose.
 type toolSurface struct {
 	names []string
 	readd func()
@@ -474,11 +397,6 @@ func (d *Deps) disconnect(ctx context.Context, _ *mcp.CallToolRequest, in codeAr
 }
 
 // status is the one tool allowed through unattached.
-//
-// It returns metadata about *which* document is open and never its content, which
-// is precisely what lets an agent describe what attaching would give it without
-// first helping itself to it. Widening this to anything that reads the document
-// would collapse the distinction that makes ideate_connect mean something.
 func (d *Deps) status(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) (*mcp.CallToolResult, any, error) {
 	s, err := d.resolve(ctx, in.Code)
 	if err != nil {
@@ -501,10 +419,6 @@ func (d *Deps) status(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) 
 }
 
 // forwardStatus is forward plus this build's own identity.
-//
-// Folded into the tab's object rather than sent as a second content block: an agent
-// reads one JSON document here, and a status answer split across two of them is a
-// worse trade than losing the tab's key order to a re-encode.
 func (d *Deps) forwardStatus(ctx context.Context, s *session.Session) (*mcp.CallToolResult, any, error) {
 	data, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdStatus})
 	if err != nil {
@@ -574,10 +488,6 @@ func (d *Deps) open(ctx context.Context, _ *mcp.CallToolRequest, in openArgs) (*
 }
 
 // createFile refuses a canvas, which is the one extension it could otherwise honour.
-//
-// It would honour it badly: `content` is scene JSON an agent has no business writing
-// by hand, and omitting it opens a blank canvas nobody asked to look at. Sending the
-// agent to create_canvas costs it one retry and gets it the drawing in that call.
 func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in createFileArgs) (*mcp.CallToolResult, any, error) {
 	if in.Path == "" {
 		return nil, nil, errors.New("path is empty — pass a repo-relative path including the extension.")
@@ -594,11 +504,6 @@ func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in create
 }
 
 // createCanvas is create_file and scene_edit in one command.
-//
-// The ops are validated here, before the tab is asked for anything, so a malformed
-// drawing does not leave a blank canvas open in the human's editor with an error in
-// the agent's transcript. The tab applies the same all-or-nothing rule internally
-// (sceneEdit resolves before it writes), but the cheap refusal belongs on this side.
 func (d *Deps) createCanvas(ctx context.Context, _ *mcp.CallToolRequest, in createCanvasArgs) (*mcp.CallToolResult, any, error) {
 	if in.Path == "" {
 		return nil, nil, errors.New(
@@ -656,12 +561,6 @@ func (d *Deps) sceneEdit(ctx context.Context, _ *mcp.CallToolRequest, in sceneEd
 /* ------------------------------------------------------------------ */
 
 // checkDocPath refuses a path that is present but empty.
-//
-// Absent and empty are different commands on this wire (see protocol.Command), and
-// only one of them is a decision: a model that fills in "" for an optional string
-// has not chosen the open document, it has failed to omit the field. Forwarding it
-// would reach the tab as a path naming no file, which the tab would then offer to
-// create.
 func checkDocPath(path *string) error {
 	if path != nil && *path == "" {
 		return errors.New(
@@ -678,10 +577,6 @@ func (d *Deps) resolve(ctx context.Context, code string) (*session.Session, erro
 	s := d.Registry.Lookup(hash)
 	if s == nil {
 		// Only *unknown* codes are rationed, and only the first sighting of each.
-		// A busy agent working against a real tab must never be slowed down by the
-		// control that exists to slow down somebody guessing — and neither must
-		// the colleague sharing its public address, which is what charging an
-		// agent's repeated stale code used to do. See AllowDistinct.
 		if !d.UnknownCode.AllowDistinct(ratelimit.ClientIPFrom(ctx), hash) {
 			return nil, errors.New(
 				"Too many attempts with pairing codes that match no tab. Wait a moment, " +
@@ -727,12 +622,6 @@ func (d *Deps) claim(ctx context.Context, code string) (*session.Session, error)
 }
 
 // sceneRender is the one tool whose answer is not text.
-//
-// The picture arrives base64 in a JSON frame, because the frame is JSON. It is
-// decoded back to bytes here and handed over as an ImageContent, which the SDK
-// encodes again for its own wire — and dropped from the JSON before that is
-// rendered as the text block beside it. Leaving it in would spend the agent's
-// context twice on one image, once in a form it cannot look at.
 func (d *Deps) sceneRender(ctx context.Context, _ *mcp.CallToolRequest, in sceneRenderArgs) (*mcp.CallToolResult, any, error) {
 	if err := checkDocPath(in.Path); err != nil {
 		return nil, nil, err

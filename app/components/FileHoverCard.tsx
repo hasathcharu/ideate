@@ -14,28 +14,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 
 /**
- * The preview that appears when a repo-relative link inside a markdown document
- * is hovered — enough of the linked file to tell whether it's the one you meant,
- * without leaving the document.
- *
- * Two things keep it cheap. Fetches are **cached per repo+branch+path** for the
- * lifetime of the page, since a document usually links the same handful of files
- * repeatedly. And the rendered preview is built from a **truncated** copy of the
- * source, so a 3000-line document doesn't get laid out to fill a 300px card.
- *
- * **The card survives the pointer landing on it.** It used to be
- * `pointer-events: none`, on the theory that a preview never has to negotiate
- * hover with the link that opened it — but the card is placed *under* the link,
- * which is the direction a pointer drifts while reading, and it vanished the
- * moment it was reached. So it takes hover itself: entering it cancels the close
- * the reading pane scheduled when the pointer left the link (`HOVER_CLOSE_MS` in
- * `MarkdownPreview`), and leaving it schedules that close again.
- *
- * Its **contents** stay inert, though. The preview is rendered without a repo
- * locator, so the links inside it are still the raw relative paths the source
- * wrote — clicking one would navigate away from the editor to a path that isn't a
- * route. It is a preview, not a menu; the file itself is one click away on the
- * link that opened this.
+ * The preview that appears when a repo-relative link inside a markdown document is hovered — enough
+ * of the linked file to tell whether it's the one you meant, without leaving the document.
  */
 
 /** Longest prefix of a document that gets rendered into the card. Past this the
@@ -95,11 +75,8 @@ export default function FileHoverCard({
     let cancelled = false
     setLoaded(null)
     void readFile(repo.owner, repo.name, path, repo.branch).then((res) => {
-      // A never-committed file isn't on the branch, so the read 404s — but the
-      // file does exist here, in the sidebar and one click away, and its draft is
-      // the only copy. Falling back to it keeps the preview from claiming a file
-      // the app will happily open cannot be read. (It doubles as a fallback for a
-      // committed file whose read failed and whose working copy we still hold.)
+      // A never-committed file isn't on the branch, so the read 404s — but the file does exist
+      // here, in the sidebar and one click away, and its draft is the only copy.
       const draft = res.ok
         ? null
         : loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))

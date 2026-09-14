@@ -1,21 +1,7 @@
 /**
- * Line diffs, for showing what is uncommitted.
- *
- * The app already holds both sides of the comparison — the committed content it
- * loaded (`baseline`) and the working copy in the editor — so a diff needs no
- * GitHub call at all; only an algorithm. This is that algorithm, plus the
- * grouping into hunks that makes the result readable the way GitHub's file view
- * is readable.
- *
- * The core is Myers' O((N+M)D) diff, which is what git itself uses by default.
- * Two guards keep it honest on real documents:
- *
- * - A **common prefix and suffix trim** first. Editing three lines of a
- *   500-line document leaves Myers a handful of lines to work on rather than
- *   1000, which is the difference between instant and noticeable.
- * - A **size cap** on what's left. Past it (two large, wholly different files)
- *   the diff degrades to "all of the old, then all of the new" rather than
- *   spending seconds and hundreds of megabytes proving the obvious.
+ * Line diffs, for showing what is uncommitted. The app already holds both sides of the comparison —
+ * the committed content it loaded (`baseline`) and the working copy in the editor — so a diff needs
+ * no GitHub call at all; only an algorithm.
  */
 
 /** Beyond this many differing lines, fall back to a whole-file replacement. The
@@ -69,13 +55,7 @@ interface Edit {
   text: string
 }
 
-/**
- * Myers' shortest edit script between two line arrays.
- *
- * `trace` holds the furthest-reaching path for every edit distance `d` *before*
- * that round runs, which is what the backtrack pass needs to walk the path back
- * out again.
- */
+/** Myers' shortest edit script between two line arrays. */
 function myers(a: string[], b: string[]): Edit[] | null {
   const n = a.length
   const m = b.length
@@ -190,9 +170,8 @@ export function diffLines(before: string, after: string): { lines: DiffLine[]; t
 }
 
 /**
- * Group changed lines into hunks with `context` unchanged lines around them,
- * merging two changes that are close enough to share context — the same shape as
- * a unified diff's `@@` blocks.
+ * Group changed lines into hunks with `context` unchanged lines around them, merging two changes
+ * that are close enough to share context — the same shape as a unified diff's `@@` blocks.
  */
 export function buildHunks(lines: DiffLine[], context = 3): DiffHunk[] {
   const changed = lines
@@ -244,22 +223,12 @@ export function diffFile(before: string, after: string, context = 3): FileDiff {
 /* ------------------------------------------------------------------ */
 
 /**
- * What happened to one line of the working copy, relative to what was committed:
- * it is new, it replaced a committed line, or committed lines were deleted
- * immediately above it.
+ * What happened to one line of the working copy, relative to what was committed: it is new, it
+ * replaced a committed line, or committed lines were deleted immediately above it.
  */
 export type LineChangeKind = 'added' | 'modified' | 'removed'
 
-/**
- * One run of adjacent changed lines — what the gutter marks and what the peek
- * popup shows.
- *
- * A block, rather than a line, is the unit here for the same reason VS Code uses
- * one: the three states only mean anything when a run of edits is read as a
- * whole. Removals *and* additions together are a **modification**; additions
- * alone are an **addition**; removals alone leave nothing in the working copy to
- * mark, so the marker lands on the line that now sits where they were.
- */
+/** One run of adjacent changed lines — what the gutter marks and what the peek popup shows. */
 export interface LineChangeBlock {
   kind: LineChangeKind
   /** Every line of the run, both sides, in order — the peek popup's content. */
@@ -270,18 +239,7 @@ export interface LineChangeBlock {
   revert: LineChangeRevert
 }
 
-/**
- * A revert, expressed as "replace these working-copy lines with this text".
- *
- * One shape covers all three kinds, which is the point: the editor applies it
- * without re-deriving what sort of change it was.
- *
- * - **Modified** — replace the block's lines with the committed ones.
- * - **Added** — same range, empty text (the line break goes with it).
- * - **Deleted** — an insertion: `toLine` is `fromLine - 1`, an empty range, and
- *   `fromLine` is the line the committed text goes back in front of (one past the
- *   last line when the deletion ran to the end of the file).
- */
+/** A revert, expressed as "replace these working-copy lines with this text". */
 export interface LineChangeRevert {
   /** First 1-based working-copy line to replace. */
   fromLine: number
@@ -391,13 +349,7 @@ export interface SplitRow {
   right: DiffLine | null
 }
 
-/**
- * Re-shape a run of unified diff lines into aligned left/right rows.
- *
- * Removed and added lines within one run are paired positionally, so a changed
- * line sits opposite the line it replaced — which is the whole point of reading a
- * diff side by side. Whichever side runs out first pads with blanks.
- */
+/** Re-shape a run of unified diff lines into aligned left/right rows. */
 export function splitRows(lines: DiffLine[]): SplitRow[] {
   const rows: SplitRow[] = []
   for (let i = 0; i < lines.length; i++) {

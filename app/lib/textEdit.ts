@@ -1,19 +1,6 @@
 import type { TextEdit } from './agentProtocol'
 
-/**
- * Turning anchored replacements into concrete document ranges.
- *
- * Pure: no React, no CodeMirror, no I/O — same discipline as `lib/diff.ts`. Two
- * callers need it and neither can own it. `Editor` resolves against its live
- * document and dispatches the result as one transaction; the bridge falls back to
- * resolving against the plain text and calling `setText` when no editor is mounted
- * (a scene is open, or the diff view has taken the pane).
- *
- * Every range is resolved against the *original* document before any is applied.
- * That is what makes a batch atomic: CodeMirror maps a whole `ChangeSet` from the
- * pre-transaction document, and `applyResolved` walks the same offsets backwards,
- * so neither has to reason about earlier edits shifting later ones.
- */
+/** Turning anchored replacements into concrete document ranges. */
 
 export interface ResolvedChange {
   from: number
@@ -21,14 +8,7 @@ export interface ResolvedChange {
   insert: string
 }
 
-/**
- * Resolve each edit to a range, or throw explaining which one failed and why.
- *
- * Throwing rather than reporting per-edit success is deliberate: a half-applied
- * batch leaves the document in a state neither the agent nor the user asked for,
- * and the agent's next edit would then be anchored against text it never saw.
- * Failing whole means the document is always either fully updated or untouched.
- */
+/** Resolve each edit to a range, or throw explaining which one failed and why. */
 export function resolveEdits(doc: string, edits: readonly TextEdit[]): ResolvedChange[] {
   if (edits.length === 0) throw new Error('No edits given.')
 

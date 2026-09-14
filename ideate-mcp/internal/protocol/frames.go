@@ -1,20 +1,4 @@
 // Package protocol is the Go half of the Agent Link wire contract.
-//
-// The other half is app/lib/agentProtocol.ts, and the two are mirrored **by
-// hand**. Before protocol 3 they were the same file — one TypeScript module that
-// compiled under both the browser's tsconfig and the Node MCP server's, so the
-// compiler guaranteed they agreed. Replacing that server with this one gave that
-// guarantee up, and the replacement is ideate-mcp/testdata/frames: every frame
-// below has a golden JSON fixture, frames_test.go decodes each one with unknown
-// fields disallowed and re-encodes it, and the app's own test asserts the same
-// files against typed TypeScript literals. Add a frame, add its fixture in the
-// same change — see that directory's README for why "afterwards" does not work.
-//
-// The shape of the types here follows from round-tripping rather than from taste.
-// Optional fields are pointers, never bare values with `omitempty`: `scene_get`
-// with full:false and `read` with no path are different commands from `scene_get`
-// with the field absent and `read` with an empty path, and a bare bool or string
-// collapses each pair into one.
 package protocol
 
 import (
@@ -22,32 +6,8 @@ import (
 	"time"
 )
 
-// Version is bumped on any breaking change to the frames here, and must equal
-// PROTOCOL_VERSION in app/lib/agentProtocol.ts. The tab sends it in its hello and
-// a mismatch is refused with a message naming both numbers — the alternative, a
-// subtly wrong field, surfaces as an inexplicable tool failure much later.
-//
-// 4 made Path optional on every document command rather than only on read, so an
-// agent can work on files the human does not have open. The struct below did not
-// have to change for it — which is precisely why the version had to: nothing about
-// these types distinguishes a service that will forward a path on an edit from one
-// that will silently drop it, and dropping it edits the wrong document.
-//
-// 5 told the agent about the theme (BridgeState.Theme, and the colors the scene
-// summary now carries) and added create_canvas. Additive in shape, bumped for the
-// same reason 4 was: a tab that answers status without a theme is indistinguishable
-// from one whose human set no theme, and an agent that reads no theme hardcodes
-// colors into a document the app was going to theme at render time. An older tab
-// would also refuse create_canvas as an unknown command, which reads as a broken
-// tool rather than as two ends of different vintages.
-//
-// 6 added scene_render (with its optional ids, which crop it), and the align and
-// distribute scene ops. The command is the
-// same story as create_canvas. The ops are worse, and are the reason this could not
-// be additive: an unknown *command* is refused, but an unknown op arrives inside a
-// well-formed scene_edit that an older tab answers with a successful-looking result
-// having moved nothing at all. Nothing in these structs can catch that; the version
-// is the only thing that can.
+// Version is bumped on any breaking change to the frames here, and must equal PROTOCOL_VERSION in
+// app/lib/agentProtocol.ts.
 const Version = 6
 
 // Close codes, in the WebSocket private-use range (4000–4999), so they cannot
@@ -76,12 +36,7 @@ const (
 	CapacityPath = "/v1/capacity"
 )
 
-// MaxFrameBytes bounds one WebSocket frame in either direction. A scene JSON is
-// the largest legitimate payload and is nowhere near this.
-//
-// Enforced by reading with a limit one byte higher and checking the length here,
-// rather than by the socket's own read limit: exceeding that limit closes with the
-// protocol's generic 1009, and CloseFrameTooLarge says which side's rule was hit.
+// MaxFrameBytes bounds one WebSocket frame in either direction.
 const MaxFrameBytes = 8 << 20
 
 // HelloDeadline is how long a socket may stay un-paired. The tab is accepted and
@@ -112,11 +67,6 @@ type ScenePoint struct {
 }
 
 // SceneOp is the add/update/delete/align/distribute union flattened into one struct.
-//
-// The service never interprets a scene op — it validates the shape the agent sent
-// and forwards it — so splitting this into three types would buy nothing and cost
-// a discriminated decode. Op carries the discriminant; everything else is optional
-// because it belongs to only some of the three.
 type SceneOp struct {
 	Op   string  `json:"op"`
 	ID   *string `json:"id,omitempty"`
@@ -191,23 +141,13 @@ type StateRepo struct {
 }
 
 // StateTheme is the palette the app renders with, which is not in the document.
-//
-// A mermaid theme is injected at render time and the file holds bare fences, so an
-// agent that writes colors into a diagram opts it out of every theme the human
-// picks. Mode is also what tells an agent to leave scene colors light: Excalidraw
-// renders dark mode as a filter over the whole canvas. Name is nullable but never
-// omitted, for the same reason as Repo below.
 type StateTheme struct {
 	Name *string `json:"name"`
 	Mode string  `json:"mode"`
 }
 
-// BridgeState is pushed by the tab whenever the answer changes, so ideate_status
-// can answer without a round trip and a text tool aimed at a scene can be refused
-// before one is spent.
-//
-// Repo and OpenPath are nullable but never omitted: the TypeScript declares them
-// `| null` and required, so an absent key would arrive there as undefined.
+// BridgeState is pushed by the tab whenever the answer changes, so ideate_status can answer without
+// a round trip and a text tool aimed at a scene can be refused before one is spent.
 type BridgeState struct {
 	Mode      string     `json:"mode"`
 	Repo      *StateRepo `json:"repo"`
@@ -244,10 +184,6 @@ type Ready struct {
 func NewReady() Ready { return Ready{T: TReady} }
 
 // Attached says an agent deliberately claimed this tab with ideate_connect.
-//
-// Agent is a *string and NOT omitempty: an agent that declined to name itself
-// sends null, and "anonymous" has to stay distinguishable from a frame that
-// forgot the field.
 type Attached struct {
 	T     string  `json:"t"`
 	Agent *string `json:"agent"`

@@ -2,15 +2,7 @@ import type { Diagnostic, DocKind } from './agentProtocol'
 import type { MermaidUserConfig } from './mermaidConfig'
 import { parseDiagram } from './mermaid'
 
-/**
- * What the renderer thinks of the document, reported back to the agent after
- * every edit.
- *
- * This is the reason the bridge exists at all. An agent editing files on disk
- * writes a diagram, and finds out whether it parses when a human opens it. An
- * agent editing through the live editor gets mermaid's own verdict in the result
- * of its own tool call, and can fix its mistake in the same turn.
- */
+/** What the renderer thinks of the document, reported back to the agent after every edit. */
 
 /** One ` ```mermaid ` fence found in a markdown document. */
 interface Fence {
@@ -50,15 +42,7 @@ export async function collectDiagnostics(
   return diagnostics
 }
 
-/**
- * Every ` ```mermaid ` fence in a markdown document.
- *
- * Line-based rather than one regex: a fence can be indented (inside a list item
- * or a blockquote) and can be opened with more than three backticks, and its
- * closing fence has to match the opener's length. A regex that got all three
- * right would be less readable than this loop, and one that got them wrong would
- * silently skip exactly the fences most likely to be malformed.
- */
+/** Every ` ```mermaid ` fence in a markdown document. */
 function mermaidFences(text: string): Fence[] {
   const lines = text.split('\n')
   const fences: Fence[] = []

@@ -107,12 +107,8 @@ export default function ConfigModal({
   onChangeRef.current = onChange
   valueRef.current = value
 
-  // A callback ref mounts CodeMirror the instant the host node attaches and
-  // tears it down when it detaches. This is immune to the portal + open/close
-  // animation timing of the Radix dialog (a plain mount effect can run before
-  // the portaled node exists, leaving an empty box). The dialog only renders
-  // its content while open, so the node attaches with the current value and
-  // detaches on close.
+  // A callback ref mounts CodeMirror the instant the host node attaches and tears it down when it
+  // detaches.
   const hostRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) {
       viewRef.current?.destroy()

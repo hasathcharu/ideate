@@ -2,11 +2,10 @@ package config
 
 import "testing"
 
-// The Go half of the TLS rule. Its twin is validateMcpOrigin in
-// app/lib/mcpOrigin.ts, and these cases are deliberately the same list, because
-// the two implementations disagreeing is the only way this control fails quietly:
-// the browser would accept an origin the service rejects, and the user would find
-// out from a connection that never comes up.
+// The Go half of the TLS rule. Its twin is validateMcpOrigin in app/lib/mcpOrigin.ts, and these
+// cases are deliberately the same list, because the two implementations disagreeing is the only way
+// this control fails quietly: the browser would accept an origin the service rejects, and the user
+// would find out from a connection that never comes up.
 func TestValidateMCPOrigin(t *testing.T) {
 	valid := []string{
 		"https://mcp.ideate.haru.lk",

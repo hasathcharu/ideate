@@ -2,24 +2,8 @@ import type { BundledLanguage, Highlighter } from 'shiki'
 import type { ThemeMode } from './mermaidConfig'
 
 /**
- * Syntax highlighting for the code fences inside a markdown document, so a
- * rendered document reads like it does on GitHub.
- *
- * Shiki is loaded **lazily and only on demand** — the first fence that carries a
- * language triggers `await import('shiki')`, and each grammar arrives in its own
- * chunk after that. A document of pure prose (and every mermaid-only user) never
- * pays for any of it. Same reasoning as the Excalidraw split: this is a large
- * library serving one optional surface.
- *
- * Two further choices keep the cost down:
- *
- * - The **JavaScript regex engine**, not the default Oniguruma one, which would
- *   drag a ~500KB WASM binary along. `forgiving: true` makes a grammar that the
- *   JS engine can't fully express degrade to partial highlighting instead of
- *   throwing.
- * - **Both GitHub themes are loaded up front** (they are small JSON documents)
- *   and picked per render from the active palette's light/dark mode, because a
- *   dark-theme document with light-theme token colors is unreadable.
+ * Syntax highlighting for the code fences inside a markdown document, so a rendered document reads
+ * like it does on GitHub.
  */
 
 /** Themes to load. Two, so a render can follow the active palette's mode without
@@ -57,13 +41,9 @@ async function getHighlighter(): Promise<Highlighter> {
 }
 
 /**
- * Highlight one code fence, or return `null` when it can't be highlighted — an
- * unknown language, or shiki failing to load — so the caller falls back to the
- * plain escaped code block rather than losing the content.
- *
- * The returned markup is a full `<pre class="shiki">…</pre>`. Shiki's own inline
- * background and text color are stripped, so the block keeps the `.md-prose pre`
- * surface that follows the active theme; only the per-token colors survive.
+ * Highlight one code fence, or return `null` when it can't be highlighted — an unknown language, or
+ * shiki failing to load — so the caller falls back to the plain escaped code block rather than
+ * losing the content.
  */
 export async function highlightCode(
   code: string,

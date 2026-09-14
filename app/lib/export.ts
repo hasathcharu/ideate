@@ -3,15 +3,7 @@ import { buildExportSource } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
 import type { ExportBackground, PngScale } from './types'
 
-/**
- * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
- * standalone SVG" step.
- *
- * Official mermaid bakes literal colors and a self-contained `<style>` block into
- * the SVG at render time, so — unlike the previous CSS-variable renderer — the
- * markup already stands alone. We only normalize dimensions, add the XML
- * namespaces, and optionally paint a background.
- */
+/** Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a standalone SVG" step. */
 
 export interface StandaloneSvg {
   /** The fully self-contained SVG markup (literal colors, no external refs). */
@@ -68,16 +60,7 @@ export async function resolveStandaloneSvg(
 ): Promise<StandaloneSvg> {
   const raw = await renderToSvg(text, opts.config ?? null)
 
-  // Parse via the HTML parser, not `DOMParser(..., 'image/svg+xml')`. Note/label
-  // text renders through a `<foreignObject>` with real HTML inside (e.g. `<br>`
-  // for line breaks) regardless of `flowchart.htmlLabels` — valid HTML, but not
-  // well-formed XML. Strict XML parsing hits that on the first multi-line note
-  // and silently truncates the document from there on (browsers recover from
-  // `image/svg+xml` parse errors by rendering only the content up to the
-  // failure), which is why exports could lose content after the first note.
-  // The HTML parser has spec'd foreign-content handling for embedded
-  // <svg>/<foreignObject> subtrees, so this parses the same DOM Preview.tsx
-  // shows on screen; XMLSerializer then always emits well-formed XML.
+  // Parse via the HTML parser, not `DOMParser(..., 'image/svg+xml')`.
   const container = document.createElement('div')
   container.innerHTML = raw
   const svg = container.querySelector('svg')
@@ -131,16 +114,7 @@ const TARGET_LONG_EDGE = 2400
  *  rather than degrading, so stay well inside it. */
 const MAX_RASTER_DIMENSION = 8192
 
-/**
- * Pixel multiplier for rasterizing a diagram of `width` × `height` to PNG.
- *
- * A flat device-pixel-ratio multiplier isn't enough on its own: it makes output
- * density proportional to the *diagram's* size, so a small diagram lands in a
- * correspondingly small image — which is what usually reads as a "low quality"
- * export. Scaling toward a target long edge fixes exactly that case, while the
- * floor keeps big diagrams dense and the dimension cap keeps the canvas
- * allocatable.
- */
+/** Pixel multiplier for rasterizing a diagram of `width` × `height` to PNG. */
 export function rasterScale(width: number, height: number): number {
   const longest = Math.max(width, height)
   if (!longest || !Number.isFinite(longest)) return MIN_RASTER_SCALE
@@ -156,21 +130,7 @@ export const CSS_DPI = 96
 /** The default PNG density — the size-aware one, not a fixed multiplier. */
 export const DEFAULT_PNG_SCALE: PngScale = { mode: 'auto' }
 
-/**
- * The pixel multiplier `spec` asks for, given a drawing of `width` × `height`.
- *
- * Every mode lands here rather than at the call site because only `auto` can be
- * answered without the drawing: a DPI, a target width and a target height are all
- * ratios against a natural size that exists only once the diagram has rendered.
- *
- * The `MAX_RASTER_DIMENSION` cap is applied to every mode, `auto` included.
- * Browsers refuse to allocate a canvas past a few thousand pixels a side and fail
- * outright rather than degrade, so an over-large request has to come back as a
- * smaller image instead of as a failed export — which is the difference between a
- * user typing 40000 and getting a big PNG, and typing it and getting an error
- * toast. The floor is one device pixel, for the same reason in the other
- * direction.
- */
+/** The pixel multiplier `spec` asks for, given a drawing of `width` × `height`. */
 export function resolvePngScale(
   spec: PngScale | undefined,
   width: number,
@@ -322,10 +282,9 @@ export async function copySource(text: string, configYaml: string): Promise<void
 /* ------------------------------------------------------------------ */
 
 /**
- * A markdown document exports as itself — there is no render step, because the
- * file already *is* the portable artifact (GitHub, and every other markdown
- * renderer, will draw the ```mermaid fences themselves). The theme stays a
- * render-time concern and never enters the file.
+ * A markdown document exports as itself — there is no render step, because the file already *is*
+ * the portable artifact (GitHub, and every other markdown renderer, will draw the ```mermaid fences
+ * themselves).
  */
 
 const MARKDOWN_MIME = 'text/markdown;charset=utf-8'

@@ -1,72 +1,12 @@
-/**
- * The wire contract between the Agent Link service and the browser tab.
- *
- * Imported by the app, and **mirrored by hand in Go** (`ideate-mcp/internal/protocol`).
- * The compiler used to enforce the old two-consumer rule; nothing does now, so the
- * guard is a set of golden JSON frames in `ideate-mcp/testdata/frames/` that both
- * sides parse — the Go tests round-trip them, and `lib/agentFrames.fixtures.ts`
- * type-checks them against the declarations below. A frame added without a fixture
- * is a frame that can drift silently.
- *
- * Direction of the socket, and who listens, changed in protocol 3. The MCP server
- * used to run on the user's machine and *listen* on loopback while the tab dialled
- * out to it. That could not work at all in Safari — no loopback exemption for mixed
- * content, so `ws://127.0.0.1` from an `https://` page is simply blocked — and it
- * confined the whole feature to an agent on the same machine as the browser.
- *
- * Now one remote Go service is **both** the MCP server and the relay:
- *
- *     agent ──MCP Streamable HTTP──► service ──WebSocket──► browser tab
- *
- * The tab is still the WebSocket client, but it dials the service rather than
- * loopback, and a **pairing code** the tab generates (and the human hands to their
- * agent) is what joins the two halves. Everything the old design needed to make a
- * loopback listener safe — the port walk, the `Origin` allowlist as a security
- * control, the whole JWT/JWKS apparatus — is gone with it.
- */
+/** The wire contract between the Agent Link service and the browser tab. */
 
-/** Bumped on any breaking change to the frames below. The tab sends it with the
- *  hello frame and a mismatch is refused with a message naming both versions,
- *  because the alternative — a subtly wrong field — surfaces as an inexplicable
- *  tool failure much later.
- *
- *  3: the loopback bridge became a remote relay (see above). Deliberately a
- *  one-way break: an old `npx github:` install and a new app refuse each other.
- *
- *  4: every document command takes an optional `path`. The tools stopped meaning
- *  "the open document" and started meaning "a document in the repo, the open one
- *  by default" — see `Command` below. A break rather than an additive change
- *  because the *results* grew fields too, and a tab that answers `edit` without
- *  saying which document it edited is exactly the ambiguity the path introduces.
- *
- *  5: the agent can see the theme (`BridgeState.theme`, and the colors on
- *  `SceneElementSummary`), and `create_canvas` was added. Additive in shape, and a
- *  break all the same, for the reason 4 was: nothing in these types distinguishes
- *  a tab that reports its theme from one that answers `status` without the field,
- *  and an agent that reads no theme is an agent that hardcodes colors into a
- *  document the app was going to theme at render time. Same for the command — an
- *  older tab would refuse `create_canvas` as unknown, which reads as the tool
- *  being broken rather than as the two ends being different vintages.
- *
- *  6: `scene_render` was added, along with the `align` and `distribute` scene ops.
- *  Same reasoning as 5 on both counts — an older tab answers an unknown command
- *  with a refusal that reads as a broken tool, and an unknown *op* is worse than
- *  that: `applySceneOps` would fall through its switch and report a successful
- *  edit that moved nothing. A version the two ends agree on is the only thing that
- *  can catch the second case, because the frame carrying it is well-formed. */
+/** Bumped on any breaking change to the frames below. */
 export const PROTOCOL_VERSION = 6
 
 /** Where the tab opens its WebSocket, under the configured service origin. */
 export const TAB_PATH = '/v1/tab'
 
-/** Capacity probe. A plain GET answering `{live, max}`, and **529** when full.
- *
- *  It exists because a *refused* WebSocket handshake cannot carry a status code to
- *  a browser: a rejected upgrade surfaces in the tab as `onclose` 1006 with an
- *  empty reason, indistinguishable from the service being down. So the tab learns
- *  it is capacity, not an outage, from a `CLOSE_SERVICE_FULL` on an **accepted**
- *  socket — and this route is where a non-browser client can read the 529 that a
- *  browser never gets to see. */
+/** Capacity probe. A plain GET answering `{live, max}`, and **529** when full. */
 export const CAPACITY_PATH = '/v1/capacity'
 
 /** Crockford base32, so a code can be read aloud down a corridor: no I, L, O or U,
@@ -94,19 +34,7 @@ export const REQUEST_TIMEOUT_MS = 15_000
  *  precisely so this limit never becomes the thing that catches it. */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
-/** Longest edge of a `scene_render` image, in pixels.
- *
- *  Two costs push this down — every rendered byte crosses the relay, which is one
- *  process serving every paired tab, and then lands in a context window that charges
- *  an image by its area. One thing pushes it up: an unreadable picture is not cheap,
- *  it is wasted. At this size the image runs about a thousand tokens, roughly what a
- *  medium `scene_get` costs, and 20px label text survives the encode. Below it the
- *  labels turn to mush first and the layout goes soon after, which is the whole
- *  subject of the tool.
- *
- *  It is a *cap*, not a target: the scale never exceeds 1, so a drawing smaller than
- *  this renders at its natural size and a drawing larger than it is downscaled to
- *  fit. **That downscale is what `ids` exists to escape** — see `SceneRenderResult`. */
+/** Longest edge of a `scene_render` image, in pixels. */
 export const SCENE_RENDER_LONG_EDGE = 1024
 
 /** The same, for a canvas dense enough that the first encode came out too big.
@@ -115,11 +43,10 @@ export const SCENE_RENDER_LONG_EDGE = 1024
  *  to fail again. */
 export const SCENE_RENDER_FALLBACK_LONG_EDGE = 640
 
-/** Ceiling on the encoded image the tab will put on the socket, well under
- *  `MAX_FRAME_BYTES` so that a huge drawing is answered by a smaller picture rather
- *  than by a closed socket. A drawing that cannot be encoded under this even at the
- *  fallback size is refused with a message, because the alternative is spending the
- *  relay's memory and the agent's context on an image neither can use. */
+/**
+ * Ceiling on the encoded image the tab will put on the socket, well under `MAX_FRAME_BYTES` so that
+ * a huge drawing is answered by a smaller picture rather than by a closed socket.
+ */
 export const SCENE_RENDER_MAX_BYTES = 512 * 1024
 
 /* ------------------------------------------------------------------ */
@@ -187,15 +114,7 @@ export interface SceneDeleteOp {
   id: string
 }
 
-/**
- * Line several elements up on one edge, or on a centre line.
- *
- * Derivable from `update` ops, and derived wrongly often enough that `misaligned`
- * is one of the lint findings: the caller has to do the arithmetic against numbers
- * `scene_get` reported a call ago, on boxes whose widths were decided by a text
- * measurement it never saw. Naming the intent instead lets the app compute it from
- * the geometry it holds, which is the only copy that is current.
- */
+/** Line several elements up on one edge, or on a centre line. */
 export interface SceneAlignOp {
   op: 'align'
   /** Two or more element ids. Anything bound to them — labels, arrows — follows. */
@@ -224,41 +143,7 @@ export type SceneOp =
   | SceneAlignOp
   | SceneDistributeOp
 
-/**
- * The union of everything the tab can be asked to do.
- *
- * **Every command that names a document takes a `path`.** That is the whole of
- * protocol 4, and it is a bigger change than one field: until then the tool surface
- * was "whatever the human is looking at", so an agent asked to fix six diagrams had
- * to `open` each one — which yanks the human's editor to a different file six
- * times, and loses their cursor each time. With a path the same work never touches
- * what is on screen.
- *
- * Where the field is *optional* differs by what the command does, and the split is
- * deliberate:
- *
- * - **`read`, `check` and `scene_get` may omit it**, and then mean the open
- *   document. "What is on screen" is a legitimate question, and answering it about
- *   the wrong document costs a wasted call.
- * - **`edit`, `write` and `scene_edit` must carry one** whenever a file is open.
- *   The open document is not a stable address: the human browses their files while
- *   the agent works, so a mutation aimed at "the open document" is aimed at whatever
- *   they happened to click last, and it is not recoverable by reading again. The tab
- *   refuses those, naming the tool that reports the open path. The type keeps the
- *   field optional for the one document that has no path to carry — the **untitled**
- *   one, before it has been saved anywhere. That is a state of the tab rather than a
- *   mode of the app: local mode has files of its own, and a connected repository
- *   still has an untitled document. The tab is the only side that knows.
- *
- * What a path does *not* buy is a second way to reach the open document. When it
- * names the file already open, the tab routes the command through the live editor
- * exactly as an omitted path would, or the human's undo history and cursor would
- * depend on which spelling the agent happened to pick.
- *
- * `open`, `create_file` and `create_canvas` have always required a path, because a
- * command whose entire purpose is to change *which* document is open cannot
- * default to the current one.
- */
+/** The union of everything the tab can be asked to do. */
 export type Command =
   | { cmd: 'status' }
   | { cmd: 'list_files' }
@@ -267,30 +152,12 @@ export type Command =
   | { cmd: 'write'; path?: string; text: string }
   | { cmd: 'open'; path: string }
   | { cmd: 'create_file'; path: string; content?: string }
-  /** A new canvas, drawn and **opened** in one command.
-   *
-   *  Both halves of that already existed and neither did the job, which is also
-   *  why `create_file` now *refuses* a `.excalidraw` path outright: its content
-   *  argument is raw scene JSON — element records with ids, bindings, seeds and
-   *  measured text boxes — which is not something to ask a model to author, and
-   *  omitting it only opens an empty canvas nobody asked to look at. `scene_edit`
-   *  creates the file its path names and draws into it properly, but deliberately
-   *  does **not** move the editor, because it exists to work on files the human is
-   *  not looking at. A new canvas is the one case where they should be looking at
-   *  it: nothing was there to browse away from, and a drawing nobody is shown may
-   *  as well not have been drawn. */
+  /** A new canvas, drawn and **opened** in one command. */
   | { cmd: 'create_canvas'; path: string; ops?: SceneOp[] }
   | { cmd: 'check'; path?: string }
   | { cmd: 'scene_get'; path?: string; full?: boolean }
   | { cmd: 'scene_edit'; path?: string; ops: SceneOp[] }
-  /** A picture of a canvas, for the agent that drew it.
-   *
-   *  Read-only, so it may omit `path` like `read` and `scene_get`, and it does not
-   *  move the editor. It exists because `lib/sceneLint.ts` is a text approximation
-   *  of looking at the drawing, and an approximation is all it can be: the findings
-   *  are the defects somebody thought to write a rule for.
-   *
-   *  `ids` renders only part of the canvas — see `SceneRenderResult`. */
+  /** A picture of a canvas, for the agent that drew it. */
   | { cmd: 'scene_render'; path?: string; ids?: string[] }
 
 export type CommandName = Command['cmd']
@@ -304,19 +171,8 @@ export type CommandName = Command['cmd']
 export type DocKind = 'mermaid' | 'markdown' | 'excalidraw'
 
 /**
- * The palette the app is rendering with, which the agent has to know about
- * because it is **not in the document**.
- *
- * A mermaid theme lives in `AppConfig.mermaidConfig` and is injected at render
- * time; the file on the branch holds bare ```mermaid fences. So an agent that
- * writes `style A fill:#f00` has not colored a node, it has opted that node out
- * of every theme the human ever picks — and it had no way to know that until this
- * field existed.
- *
- * `mode` is the same light/dark the canvas runs in (`resolveThemeMode`), and it is
- * reported for a *different* reason: Excalidraw renders dark mode as a filter over
- * the whole canvas, so scene colors are authored light and inverted on display.
- * Knowing the mode is how an agent knows not to "help" by picking dark ones.
+ * The palette the app is rendering with, which the agent has to know about because it is **not in
+ * the document**.
  */
 export interface StateTheme {
   /** The preset's id (`'tokyo-night'`), `'custom'` for a hand-tuned palette, or
@@ -360,13 +216,7 @@ export interface Diagnostic {
   message: string
 }
 
-/** Which document a command actually acted on, and whether it had to invent it.
- *
- *  Echoed on every mutating result rather than left implicit, because from
- *  protocol 4 the agent's request no longer determines the answer on its own: an
- *  omitted `path` resolves against whatever the human has open *at that moment*,
- *  and a path that matched nothing resolves to a file that did not exist a moment
- *  ago. Both are things the agent has to be told rather than assume. */
+/** Which document a command actually acted on, and whether it had to invent it. */
 export interface Touched {
   /** The path acted on. Null only for the untitled document, which has none until
    *  the human saves it somewhere. */
@@ -388,14 +238,10 @@ export interface EditResult extends Touched {
 export interface ReadResult {
   path: string | null
   text: string
-  /** True when what came back is byte-for-byte (drawing-for-drawing, for a scene)
-   *  what the branch has committed.
-   *
-   *  Not "did you pass a path": a path whose file has uncommitted edits in this
-   *  browser answers with *those*, because the working copy is the thing the human
-   *  is looking at and the thing the next commit will carry. Reading committed
-   *  bytes past an edit somebody made — an agent's own edit, one call earlier — is
-   *  how an agent talks itself into re-applying work it has already done. */
+  /**
+   * True when what came back is byte-for-byte (drawing-for-drawing, for a scene) what the branch
+   * has committed.
+   */
   committed: boolean
 }
 
@@ -417,12 +263,7 @@ export interface SceneElementSummary {
   width: number
   height: number
   text: string | null
-  /** The element's own colors, so an addition can match what is already on the
-   *  canvas. Reported because a scene *is* its colors — unlike a mermaid diagram
-   *  there is no theme layer to re-resolve them, so the only way to be consistent
-   *  with the neighbours is to have seen them. Omitting these was what forced an
-   *  agent to ask for `full` (the whole scene JSON) to answer a question about two
-   *  hex strings. */
+  /** The element's own colors, so an addition can match what is already on the canvas. */
   strokeColor: string | null
   backgroundColor: string | null
 }
@@ -452,14 +293,7 @@ export type SceneWarningKind =
    *  on it (re-run the edit against an open canvas) and cannot otherwise see it. */
   | 'font_unavailable'
 
-/**
- * One layout problem found in a scene, for the agent that drew it.
- *
- * Warnings, never errors — see `lib/sceneLint.ts` for why the same geometry can be
- * a mistake or a deliberate choice. They exist because a canvas has no equivalent
- * of `ideate_check`: mermaid parses a diagram and lays it out, whereas `scene_edit`
- * takes absolute coordinates and makes the caller the layout engine.
- */
+/** One layout problem found in a scene, for the agent that drew it. */
 export interface SceneWarning {
   kind: SceneWarningKind
   /** Plain prose, naming the elements and the numbers to change. This is the field
@@ -474,36 +308,18 @@ export interface SceneGetResult {
   path: string | null
   elementCount: number
   elements: SceneElementSummary[]
-  /** Layout problems in the scene. **Always present, empty when there are none** —
-   *  and that is the whole reason this needed no `PROTOCOL_VERSION` bump. An older
-   *  tab omits the field rather than sending `[]`, so "checked and clean" and "this
-   *  tab does not check" are different answers on the wire, which is exactly what
-   *  the theme field could not manage when it forced the bump to 5. Nothing here
-   *  changes what a command *does*, so a stale tab loses advice and no correctness. */
+  /**
+   * Layout problems in the scene. **Always present, empty when there are none** — and that is the
+   * whole reason this needed no `PROTOCOL_VERSION` bump.
+   */
   warnings: SceneWarning[]
   /** Only when `full` was requested — the entire scene file. Large. */
   json?: string
 }
 
 /**
- * A rendered canvas.
- *
- * The image is bounded rather than sized: `SCENE_RENDER_LONG_EDGE` is a ceiling the
- * drawing is scaled *down* to when it exceeds it, never up. So fidelity is not a
- * setting, it is a consequence of how much canvas is in frame — a six-box diagram
- * arrives at full size and reads perfectly, and the same six boxes in the corner of a
- * 4000px sprawl arrive at a quarter scale with their labels gone to mush.
- *
- * **That is what `ids` is for, and why the region selector is a list of elements
- * rather than a rectangle.** Cropping to the elements in question removes the
- * downscale instead of fighting it, and it addresses the drawing the way everything
- * else here does — `scene_get` hands out ids, every warning carries ids, so "the
- * warning names box-a and box-c, show me those" needs no arithmetic. A rectangle
- * would put the agent back to computing coordinates from a scene_get several edits
- * old, which is the thing `align` and `distribute` exist to stop.
- *
- * `dataBase64` is the encoded image itself: the frame is JSON, so there is nothing
- * else it could be, and the service decodes it back to bytes before handing it on.
+ * A rendered canvas. The image is bounded rather than sized: `SCENE_RENDER_LONG_EDGE` is a ceiling
+ * the drawing is scaled *down* to when it exceeds it, never up.
  */
 export interface SceneRenderResult {
   path: string | null
@@ -552,12 +368,10 @@ export type ServerFrame =
    *  arrives the tab must not report success at all, or a refused code would look
    *  like a working link. */
   | { t: 'ready' }
-  /** An agent has deliberately attached to this tab (`ideate_connect`), and only
-   *  now can it read or change the document. Kept separate from `ready` because a
-   *  paired tab is not a decision anybody made about *driving* it: pairing says
-   *  which tab, attaching says whether. Also re-sent when a tab rejoins its bucket
-   *  inside the grace window while an agent still holds it, so a reload does not
-   *  leave the toolbar claiming nobody is attached. */
+  /**
+   * An agent has deliberately attached to this tab (`ideate_connect`), and only now can it read or
+   * change the document.
+   */
   | { t: 'attached'; agent: string | null }
   /** The agent let go — it called `ideate_disconnect`, or its attachment idled out.
    *  The socket stays up and the tab keeps holding its bucket. */
@@ -584,9 +398,9 @@ export const CLOSE_PROTOCOL_MISMATCH = 4002
 /** Another tab already holds this code's bucket. */
 export const CLOSE_SLOT_TAKEN = 4003
 export const CLOSE_FRAME_TOO_LARGE = 4004
-/** The service is at `MAX_WS_SESSIONS`. Delivered on an *accepted* socket rather
- *  than as a refused handshake, because a refused handshake reaches a browser as an
- *  anonymous 1006 — see `CAPACITY_PATH`. The reason names the self-host option, and
- *  the tab stops its automatic retry loop on it: capacity does free up, so retrying
- *  is not pointless, but hammering a full service is not the way to wait for it. */
+/**
+ * The service is at `MAX_WS_SESSIONS`. Delivered on an *accepted* socket rather than as a refused
+ * handshake, because a refused handshake reaches a browser as an anonymous 1006 — see
+ * `CAPACITY_PATH`.
+ */
 export const CLOSE_SERVICE_FULL = 4005

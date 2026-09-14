@@ -6,25 +6,8 @@ import type { LineChangeKind } from '@/lib/diff'
 import { cn } from '@/lib/utils'
 
 /**
- * The viewfinder beside the editor: the whole document at a glance, with the
- * visible region marked and the uncommitted changes banded across it.
- *
- * Drawn on a **canvas**, not as elements. A thousand-line file is a thousand
- * marks, and a thousand absolutely-positioned divs would cost more to lay out
- * than the editor itself; one canvas redraws in well under a frame.
- *
- * Lines get shorter marks the shorter they are and start where their indentation
- * starts, so the shape of the file (headings, blocks, fences) stays recognizable
- * even though no glyph is legible.
- *
- * The scale is **fixed**, and a document taller than the column makes the map
- * itself slide — the same thing VS Code does. Squeezing every line into the
- * available height instead was the obvious first implementation and it is useless
- * past a few hundred lines: every line collapses to a sub-pixel smear and the
- * marks stop meaning anything. Sliding keeps each line 3px tall however long the
- * file is, and moves the map by the editor's *scroll progress* rather than its
- * scroll offset, so the whole document is still reachable and the map drifts
- * slowly against the text.
+ * The viewfinder beside the editor: the whole document at a glance, with the visible region marked
+ * and the uncommitted changes banded across it.
  */
 
 /** Height of one line's mark. Fixed, so the map reads the same in a 40-line file

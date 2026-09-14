@@ -3,19 +3,8 @@ import type { FileKind } from './tree'
 import { validateMcpOrigin } from './mcpOrigin'
 
 /**
- * localStorage holds the WORKING COPY — uncommitted drafts and app config — and,
- * in local mode only, the saved files themselves. Never tokens or secrets: those
- * live in the encrypted session, server-side.
- *
- * In GitHub mode the split is unchanged and is the whole architecture: GitHub is
- * the saved state, this is what has not been committed yet.
- *
- * Local mode has no GitHub, so something has to be the saved state, and until now
- * nothing was — there was one scratch document per kind and no way to keep two
- * diagrams at once. `km:file:` is that store. It is deliberately the *same*
- * relationship as a repo, not a second concept: a saved file plus a draft layered
- * over it, so dirty markers, the diff gutter, Restore and the agent's own
- * bookkeeping work in local mode through the code paths they already use.
+ * localStorage holds the WORKING COPY — uncommitted drafts and app config — and, in local mode
+ * only, the saved files themselves.
  */
 
 const CONFIG_KEY = 'km:config'
@@ -54,11 +43,11 @@ export function docIdForFile(owner: string, repo: string, branch: string, path: 
   return `${owner}/${repo}@${branch}:${path}`
 }
 
-/** Stable id for a local file's draft.
- *
- *  Cannot collide with `docIdForFile`, whose ids always contain a `/` and an `@`
- *  before the colon — and cannot collide with the scratch slots either, which have
- *  no third segment. */
+/**
+ * Stable id for a local file's draft. Cannot collide with `docIdForFile`, whose ids always contain
+ * a `/` and an `@` before the colon — and cannot collide with the scratch slots either, which have
+ * no third segment.
+ */
 export function docIdForLocalFile(path: string): string {
   return `local:file:${path}`
 }
@@ -87,11 +76,9 @@ export function loadConfig(): AppConfig {
     if (!raw) return { ...DEFAULT_CONFIG }
     const parsed = JSON.parse(raw) as Partial<AppConfig>
     const merged = { ...DEFAULT_CONFIG, ...parsed }
-    // A repo saved before branch support shipped is missing `branch`/
-    // `defaultBranch` — that shape can't drive the branch picker or the PR
-    // link, so treat it as disconnected rather than let `undefined` leak into
-    // GitHub API calls and URLs. The user just reconnects the repo, which
-    // repopulates both fields.
+    // A repo saved before branch support shipped is missing `branch`/ `defaultBranch` — that shape
+    // can't drive the branch picker or the PR link, so treat it as disconnected rather than let
+    // `undefined` leak into GitHub API calls and URLs.
     if (merged.repo && (!merged.repo.branch || !merged.repo.defaultBranch)) {
       merged.repo = null
     }
@@ -106,11 +93,8 @@ export function loadConfig(): AppConfig {
     // than showing up as a bad value anywhere — so it is validated here, not
     // trusted at the canvas. Same defensive shape as the guards above.
     if (!isPngScale(merged.pngScale)) merged.pngScale = { ...DEFAULT_CONFIG.pngScale }
-    // An MCP origin that no longer passes the TLS rule is dropped back to the
-    // default rather than kept. It is the same defensive shape as the two guards
-    // above, and it matters more: an unusable origin here is not a cosmetic
-    // fallback but a tab that cannot connect at all, with the reason buried in
-    // localStorage where nobody would think to look.
+    // An MCP origin that no longer passes the TLS rule is dropped back to the default rather than
+    // kept.
     if (typeof merged.mcpOrigin === 'string' && validateMcpOrigin(merged.mcpOrigin)) {
       merged.mcpOrigin = null
     }
@@ -154,24 +138,7 @@ export function saveConfig(config: AppConfig): void {
 /* Agent Link — per tab, not per origin                                */
 /* ------------------------------------------------------------------ */
 
-/**
- * Whether *this tab* offers itself to the Agent Link service, and under which
- * pairing code.
- *
- * `sessionStorage`, not `localStorage`, and deliberately not part of `AppConfig`:
- * config is shared by every tab on the origin, so persisting either of these there
- * meant one switch armed every tab that opened afterwards. All of them would then
- * race for the service and whichever won became the tab an agent drove — leaving the
- * human no way to choose. Per-tab scoping makes "switch it on here" mean this tab,
- * and gives each tab a code of its own to be named by.
- *
- * Both survive a reload, which matters on each count: a refresh mid-session should
- * not silently drop the link, and it should come back under the *same* code, or the
- * agent is left holding one that no longer reaches anything.
- *
- * Where the service lives is the opposite kind of fact and lives in `AppConfig`
- * instead — see the comment block in lib/types.ts.
- */
+/** Whether *this tab* offers itself to the Agent Link service, and under which pairing code. */
 const AGENT_LINK_KEY = 'km:agent-link'
 
 function hasSessionStorage(): boolean {
@@ -263,15 +230,7 @@ export function readLocalFile(path: string): LocalFile | null {
   }
 }
 
-/**
- * Save a local file. Returns false when the browser refused to store it.
- *
- * The only function here that reports failure, and it has to: everything else in
- * this module is a cache of something that exists elsewhere, so swallowing a quota
- * error costs a redundant copy. A local file has no elsewhere. Losing this write
- * silently would tell the user their work is saved when it is gone, so the caller
- * says so instead.
- */
+/** Save a local file. Returns false when the browser refused to store it. */
 export function writeLocalFile(path: string, content: string): boolean {
   if (!hasStorage()) return false
   try {
@@ -338,15 +297,7 @@ export function clearDraft(docId: string): void {
   }
 }
 
-/**
- * Every path under `owner/repo@branch` that currently has a draft.
- *
- * A never-committed file leaves no other record: its path isn't in the fetched
- * tree and GitHub has nothing under it, so the draft key *is* the file. Reading
- * the keys back is therefore what lets those files survive a reload — see
- * `pendingPaths` in `AppShell`, which treats a draft under a path the branch
- * doesn't have as exactly that.
- */
+/** Every path under `owner/repo@branch` that currently has a draft. */
 export function listDraftPaths(owner: string, repo: string, branch: string): string[] {
   return draftPathsUnder(DRAFT_PREFIX + docIdForFile(owner, repo, branch, ''))
 }

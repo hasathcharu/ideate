@@ -142,21 +142,7 @@ export default function ExportMenu({
   const custom = isCustomScale(pngScale)
   const customUnit: CustomUnit = custom ? pngScale.mode : 'dpi'
 
-  /**
-   * What the custom field is showing, when that is not simply the committed spec.
-   *
-   * A number input has states a `PngScale` cannot represent — empty, and
-   * mid-typing values like `"30"` on the way to `"300"` — so the field cannot be
-   * driven by the spec alone: the first backspace would commit something and snap
-   * the value back. But it cannot be *seeded* from the spec either, which is what
-   * a plain `useState` initializer did. `AppConfig` is hydrated from localStorage
-   * one render after mount, so the initializer always ran against the default
-   * `auto` and left this at `''` — a user who had set 2560px reopened the menu to
-   * an empty field above a control insisting it was in width mode.
-   *
-   * `null` means "whatever is committed", which is the honest answer except while
-   * the user is actually typing. So there is no copy to fall out of date.
-   */
+  /** What the custom field is showing, when that is not simply the committed spec. */
   const [customDraft, setCustomDraft] = useState<string | null>(null)
   const customValue = customDraft ?? (custom ? String(pngScale.value) : '')
 
@@ -192,20 +178,7 @@ export default function ExportMenu({
       ? config.themeVariables.background
       : undefined
 
-  /**
-   * PNG density, rendered directly under the PNG row it belongs to.
-   *
-   * Placed there rather than beside the background swatches because it modifies
-   * exactly one of the formats in the list: next to the shared Background control
-   * it read as another global setting, and the SVG row above it was silently
-   * exempt. Under the PNG row the scope is the position.
-   *
-   * The toggles are `Button`s in the same secondary/ghost pairing the toolbar's
-   * kind switch uses, rather than hand-rolled classes. Hand-rolled, the pressed
-   * state picked `bg-secondary` straight while the surface under it is
-   * `--popover`, and the two tokens are close enough in the light theme to look
-   * deliberate and far enough apart in the dark one to look broken.
-   */
+  /** PNG density, rendered directly under the PNG row it belongs to. */
   const pngResolution = (
     <div className="px-2 pt-0.5 pb-2">
       <div className="flex items-center gap-0.5 rounded-md border p-0.5">

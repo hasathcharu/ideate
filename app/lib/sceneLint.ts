@@ -1,28 +1,7 @@
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { SceneWarning, SceneWarningKind } from './agentProtocol'
 
-/**
- * Layout defects in an Excalidraw scene, reported back to the agent that drew it.
- *
- * This is `ideate_check` for a canvas, and it exists for the same reason: an agent
- * editing a diagram cannot see the result, so the renderer's verdict has to come
- * back in the result of its own tool call. A mermaid diagram gets that for free —
- * mermaid parses it and dagre lays it out. A scene has no parser to fail and no
- * layout engine to appeal to: `scene_edit` takes absolute pixel coordinates, so the
- * *agent* is the layout engine, and it is one working blind. Overlapping shapes,
- * arrows drawn straight through a box, and a label wider than the box holding it
- * are all silent successes without this.
- *
- * Nothing here is an error. Every finding is a warning carrying the ids it concerns
- * and a number the caller can act on, because most of them are judgements — a shape
- * inside a shape may be a mistake or a deliberate group, and only the caller knows
- * which. Refusing an edit over a guess would be worse than drawing it.
- *
- * **Pure geometry, and no `@excalidraw/excalidraw` value import** (rule 8): every
- * measurement below reads fields off elements the converter has already produced.
- * That is what lets this run on the way out of `applySceneOps` and inside
- * `summarizeScene` without either becoming a dynamic-import site.
- */
+/** Layout defects in an Excalidraw scene, reported back to the agent that drew it. */
 
 /** Inner padding Excalidraw leaves around a bound label (`BOUND_TEXT_PADDING`).
  *  Hardcoded because it is not exported, and it is the number the container's own
@@ -67,11 +46,9 @@ interface Point {
 }
 
 /**
- * Lint `elements`.
- *
- * Takes elements rather than scene text so the two call sites can share it:
- * `applySceneOps` holds the array it just built, and re-serializing it only to
- * parse it again would be the same work done twice.
+ * Lint `elements`. Takes elements rather than scene text so the two call sites can share it:
+ * `applySceneOps` holds the array it just built, and re-serializing it only to parse it again would
+ * be the same work done twice.
  */
 export function lintScene(elements: readonly ExcalidrawElement[]): SceneWarning[] {
   const live = elements.filter((element) => !element.isDeleted)
@@ -100,12 +77,9 @@ export function lintScene(elements: readonly ExcalidrawElement[]): SceneWarning[
 }
 
 /**
- * A bounded, per-kind-fair accumulator.
- *
- * Ordering matters as much as the caps: the checks are called in descending order
- * of how likely a finding is to be a real defect rather than a style opinion, and
- * `all()` preserves that, so a truncated list is truncated from the least useful
- * end.
+ * A bounded, per-kind-fair accumulator. Ordering matters as much as the caps: the checks are called
+ * in descending order of how likely a finding is to be a real defect rather than a style opinion,
+ * and `all()` preserves that, so a truncated list is truncated from the least useful end.
  */
 class Collector {
   private readonly warnings: SceneWarning[] = []
@@ -134,15 +108,7 @@ class Collector {
 /* The checks                                                          */
 /* ------------------------------------------------------------------ */
 
-/**
- * A label that does not fit the box it is bound to.
- *
- * The most consequential check here, because it is the one failure the agent gets
- * blamed for and did not cause: a container is sized by a canvas `measureText`
- * against Excalidraw's own font, and a font that has not loaded measures ~20%
- * narrow — see `awaitTextFonts` in `lib/sceneEdit.ts`. Whatever the cause, the
- * remedy is a number, so the message carries one.
- */
+/** A label that does not fit the box it is bound to. */
 function labelOverflow(
   found: Collector,
   labels: readonly ExcalidrawElement[],
@@ -178,14 +144,7 @@ function labelOverflow(
   }
 }
 
-/**
- * A standalone text element sitting inside a shape.
- *
- * Almost always an agent that placed two elements where it wanted one: a text
- * element is not bound to the shape it happens to sit on, so it does not move with
- * it, does not wrap to it, and is not deleted with it. The fix is the `text` field
- * on the shape's own op, which is a different call rather than a nudge.
- */
+/** A standalone text element sitting inside a shape. */
 function textNotBound(
   found: Collector,
   freeText: readonly ExcalidrawElement[],
@@ -341,14 +300,7 @@ function unboundArrows(
   }
 }
 
-/**
- * Edges that are close to lining up without doing so.
- *
- * The tell of coordinates worked out by hand: a column of boxes at x = 100, 100,
- * 103 was meant to be a column. Reported last and capped hardest, because unlike
- * everything above it this is cosmetic — and reported at all because it is the
- * defect a caller has no way to notice and the cheapest one to fix.
- */
+/** Edges that are close to lining up without doing so. */
 function nearMisses(found: Collector, shapes: readonly ExcalidrawElement[]): void {
   // Grouped by the axis they measure along, and that grouping is load-bearing —
   // see the exact-alignment escape below.
@@ -372,12 +324,8 @@ function nearMisses(found: Collector, shapes: readonly ExcalidrawElement[]): voi
       const b = shapes[j]!
       for (const group of groups) {
         const gaps = group.map((axis) => ({ axis, gap: Math.abs(axis.of(a) - axis.of(b)) }))
-        // Exactly aligned on *any* axis in this direction settles the direction, and
-        // the other two axes are then consequences rather than decisions. This is
-        // not a nicety: a left-aligned column of boxes auto-sized to their own
-        // labels has three different widths and therefore three right edges a couple
-        // of pixels apart, and reporting that would fire on the best-laid-out drawing
-        // an agent can produce. Below half a pixel is the measurement pass rounding.
+        // Exactly aligned on *any* axis in this direction settles the direction, and the other two
+        // axes are then consequences rather than decisions.
         if (gaps.some(({ gap }) => gap < 0.5)) continue
 
         const near = gaps
@@ -506,11 +454,9 @@ function shorten(text: string): string {
 }
 
 /**
- * Names elements in a message.
- *
- * A shape holds no text: its caption is a `text` element with a `containerId`
- * pointing back at it, which is why this is a small object holding a map rather
- * than two free functions.
+ * Names elements in a message. A shape holds no text: its caption is a `text` element with a
+ * `containerId` pointing back at it, which is why this is a small object holding a map rather than
+ * two free functions.
  */
 class Namer {
   private readonly captions = new Map<string, string>()

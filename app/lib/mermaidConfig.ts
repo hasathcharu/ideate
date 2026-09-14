@@ -8,26 +8,7 @@ import {
   relativeLuminance,
 } from './color'
 
-/**
- * The user-editable mermaid config (the cogwheel next to the layout dropdown).
- *
- * mermaid diagrams are normally tuned with a YAML frontmatter block:
- *
- *   ---
- *   config:
- *     theme: base
- *     themeVariables: { primaryColor: '#e5e9f0', ... }
- *     sequence: { actorMargin: 50 }
- *   ---
- *   flowchart TD
- *     ...
- *
- * Here we lift that same object out of the diagram and make it a single *global*
- * config that applies to every render (via `mermaid.initialize`, see lib/mermaid.ts)
- * and — for anything under `themeVariables` — to the whole app chrome as well
- * (see `applyThemeToSite`). The stored value is the raw YAML text; parsing is
- * tolerant so a half-typed config never breaks the preview.
- */
+/** The user-editable mermaid config (the cogwheel next to the layout dropdown). */
 
 /** Result of parsing the user's YAML config text. */
 export interface ParsedConfig {
@@ -55,13 +36,7 @@ export const CONFIG_PLACEHOLDER = `config:
     background: '#eceff4'
 `
 
-/**
- * Parse the user's YAML config text into a plain object.
- *
- * Accepts both a bare config body and a full frontmatter paste: leading/trailing
- * `---` fences are stripped, and a top-level `config:` wrapper (the frontmatter
- * key) is unwrapped so either form works.
- */
+/** Parse the user's YAML config text into a plain object. */
 export function parseMermaidConfig(yaml: string): ParsedConfig {
   const stripped = stripFrontmatterFences(yaml)
   if (!stripped.trim()) return { config: null, error: null }
@@ -121,12 +96,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /* ------------------------------------------------------------------ */
 
 /**
- * Combine the diagram text with the global config as a real mermaid YAML
- * frontmatter block, so the exported source stands alone (renders identically
- * if pasted elsewhere). The stored config is normally the bare-body form (keys
- * at the root, e.g. from `setThemeInYaml`); real mermaid frontmatter nests
- * those keys under a top-level `config:` key, so it's added here unless the
- * user already pasted the full frontmatter form themselves.
+ * Combine the diagram text with the global config as a real mermaid YAML frontmatter block, so the
+ * exported source stands alone (renders identically if pasted elsewhere).
  */
 export function buildExportSource(text: string, mermaidConfigYaml: string): string {
   if (!mermaidConfigYaml.trim()) return text
@@ -155,12 +126,8 @@ export function layoutFromConfig(
 }
 
 /**
- * Set the top-level `layout` key in the raw YAML text, so the layout dropdown
- * can write back into the config that is the single source of truth. Works on
- * the raw string (not a parse → dump round-trip) so user comments, key order,
- * and formatting survive. Handles both the bare-body form (layout at the root)
- * and the frontmatter form (layout nested under a `config:` key), updating an
- * existing key in place or inserting one when absent.
+ * Set the top-level `layout` key in the raw YAML text, so the layout dropdown can write back into
+ * the config that is the single source of truth.
  */
 export function setLayoutInYaml(yaml: string, layout: string): string {
   const nl = yaml.includes('\r\n') ? '\r\n' : '\n'
@@ -236,9 +203,8 @@ function themeVarsSignature(vars: unknown): string | null {
 }
 
 /**
- * Identify which preset theme the config currently reflects, by matching its
- * `themeVariables` against each preset's. Returns null when nothing matches (a
- * hand-tuned palette or no theme at all) so the dropdown can show "Custom".
+ * Identify which preset theme the config currently reflects, by matching its `themeVariables`
+ * against each preset's.
  */
 export function themeFromConfig(config: MermaidUserConfig | null): ThemePreset | null {
   const sig = themeVarsSignature(config?.themeVariables)
@@ -247,13 +213,8 @@ export function themeFromConfig(config: MermaidUserConfig | null): ThemePreset |
 }
 
 /**
- * Write a preset theme (its `theme` + `themeVariables`) into the raw YAML text,
- * the single source of truth — or, with `preset === null`, strip both keys to
- * revert to the default look. Like `setLayoutInYaml`, this edits the raw string
- * rather than round-tripping through a parse → dump, so unrelated keys (layout,
- * sequence, …), comments, and formatting survive. Handles both the bare-body
- * form (keys at the root) and the frontmatter form (keys nested under `config:`),
- * replacing an existing `themeVariables` block in place or inserting a fresh one.
+ * Write a preset theme (its `theme` + `themeVariables`) into the raw YAML text, the single source
+ * of truth — or, with `preset === null`, strip both keys to revert to the default look.
  */
 export function setThemeInYaml(yaml: string, preset: ThemePreset | null): string {
   const nl = yaml.includes('\r\n') ? '\r\n' : '\n'
@@ -342,11 +303,7 @@ export function setThemeInYaml(yaml: string, preset: ThemePreset | null): string
 /* Theme → app chrome                                                 */
 /* ------------------------------------------------------------------ */
 
-/**
- * The shadcn design tokens this module manages. They're cleared on every apply
- * (restoring the static `:root` palette from globals.css) and then re-set from
- * the current `themeVariables`, so removing a theme reverts the whole site.
- */
+/** The shadcn design tokens this module manages. */
 const MANAGED_TOKENS = [
   '--background',
   '--foreground',
@@ -378,20 +335,8 @@ const MANAGED_TOKENS = [
 ] as const
 
 /**
- * Map a mermaid `themeVariables` object onto the app's shadcn CSS tokens so the
- * whole chrome adopts the diagram's palette. Best-effort and defensive: every
- * token has a sensible fallback chain, and unset tokens fall back to the static
- * palette (because we clear them first). Passing a config with no
- * `themeVariables` resets the site to its default look.
- *
- * **Every token that ends up carrying text is held to WCAG AA against the
- * surface it is painted on** (`legible`, below, over `lib/color.ts`). This is not
- * polish: the source palette describes a *diagram*, where `primaryBorderColor` is
- * a node outline and `lineColor` an edge. Those become `--primary`, which is the
- * editor's keyword and heading colour and the fill behind a primary button — and
- * a stroke colour that reads perfectly well at 1px can be 2.3:1 against the page,
- * which is unreadable as words. A palette that already passes is left exactly as
- * authored, so this only ever moves colours that were unusable.
+ * Map a mermaid `themeVariables` object onto the app's shadcn CSS tokens so the whole chrome adopts
+ * the diagram's palette.
  */
 export function applyThemeToSite(config: MermaidUserConfig | null): void {
   if (typeof document === 'undefined' || !document.body) return
@@ -402,11 +347,9 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   const root = document.body
   for (const token of MANAGED_TOKENS) root.style.removeProperty(token)
 
-  // `color-scheme` goes on <html>, not <body>: it decides how the browser paints
-  // the UI it draws itself — the window scrollbar, form controls, and any
-  // scrollbar in a subtree the app's CSS can't reach — and the window scrollbar
-  // belongs to the root element. Without it a dark palette left the page's own
-  // chrome rendering light, which is where the app's theming visibly stopped.
+  // `color-scheme` goes on <html>, not <body>: it decides how the browser paints the UI it draws
+  // itself — the window scrollbar, form controls, and any scrollbar in a subtree the app's CSS
+  // can't reach — and the window scrollbar belongs to the root element.
   const html = document.documentElement
   const tv = config?.themeVariables
   if (!isPlainObject(tv)) {
@@ -442,25 +385,14 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   }
 
   /**
-   * A token that carries text, lifted until it clears WCAG AA against every
-   * surface it is actually painted on.
-   *
-   * This is the step that makes an arbitrary *diagram* palette safe to read
-   * prose in. `primaryBorderColor` is a node outline and `lineColor` an edge:
-   * colours chosen to be seen as 1px strokes, which is a far weaker requirement
-   * than being read as words. Zinc's `#A1A1AA` on white is 2.6:1 — fine as a
-   * box border, illegible as the editor's keyword colour, and keywords are
-   * exactly where `--primary` ends up. `ensureContrast` leaves a passing colour
-   * completely alone, so a well-chosen palette renders exactly as authored.
+   * A token that carries text, lifted until it clears WCAG AA against every surface it is actually
+   * painted on.
    */
   const legible = (value: string | undefined, ...surfaces: (string | undefined)[]) =>
     value ? ensureContrast(value, surfaces, TEXT_CONTRAST) : value
 
-  // A muted-but-legible text color: the palette's text blended toward the page,
-  // then lifted back to AA if the blend went too far. Blended statically when
-  // both colors are readable — `ensureContrast` needs numbers, and a CSS
-  // `color-mix()` string is opaque to it — with the CSS form kept as the fallback
-  // for a palette written in a notation we can't parse.
+  // A muted-but-legible text color: the palette's text blended toward the page, then lifted back to
+  // AA if the blend went too far.
   const mutedBlend = text && bg ? mixColors(text, bg, 0.4) : undefined
   const mutedText = mutedBlend
     ? ensureContrast(mutedBlend, [bg, surface], TEXT_CONTRAST)
@@ -521,13 +453,7 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
 /** Whether the active palette reads as a light or a dark theme. */
 export type ThemeMode = 'light' | 'dark'
 
-/**
- * Whether `color` reads as a dark surface — i.e. whether light-on-dark is the
- * legible pairing. `null` when the notation isn't statically parseable.
- *
- * The threshold is the WCAG break-even point where white text starts to
- * out-contrast black text against the colour (L ≈ 0.179).
- */
+/** Whether `color` is dark enough to favor light foreground text. */
 export function isDarkColor(color: string): boolean | null {
   const luminance = relativeLuminance(color)
   if (luminance === null) return null
@@ -536,31 +462,16 @@ export function isDarkColor(color: string): boolean | null {
 
 const DARK_LUMINANCE_THRESHOLD = 0.179
 
-/**
- * The active palette's own background color, or undefined when no theme sets one.
- * Both the canvas background and the "Theme" export background read this, so the
- * drawing surface and its exports agree on one color.
- */
+/** The active palette's own background color, or undefined when no theme sets one. */
 export function themeBackgroundColor(config: MermaidUserConfig | null): string | undefined {
   const raw = config?.themeVariables?.background
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
 }
 
 /**
- * The light/dark mode of the active palette — used to pick the matching
- * Excalidraw theme, which (unlike mermaid's `themeVariables`) is a binary
- * light/dark switch rather than an arbitrary palette. Opening a scene while a
- * dark mermaid theme is selected should hand Excalidraw its dark theme, so the
- * canvas doesn't flash white inside dark chrome.
- *
- * Resolution order:
- *  1. A palette matching a built-in preset uses that preset's declared `mode` —
- *     exact by construction, no color math involved.
- *  2. Otherwise (hand-edited `themeVariables`) derive it from the background's
- *     luminance, using the WCAG break-even point where white text starts to
- *     out-contrast black text (L ≈ 0.179).
- *  3. With no readable background at all, `light` — matching the default
- *     `:root` palette in globals.css that applies when no theme is set.
+ * The light/dark mode of the active palette — used to pick the matching Excalidraw theme, which
+ * (unlike mermaid's `themeVariables`) is a binary light/dark switch rather than an arbitrary
+ * palette.
  */
 export function resolveThemeMode(config: MermaidUserConfig | null): ThemeMode {
   const preset = themeFromConfig(config)
@@ -584,24 +495,7 @@ export function resolveThemeMode(config: MermaidUserConfig | null): ThemeMode {
 /* Packet diagrams                                                    */
 /* ------------------------------------------------------------------ */
 
-/**
- * A `packet` block for mermaid's theme, derived from the palette's own tokens.
- *
- * Every other diagram takes its colors from the flat `themeVariables` map, but
- * the packet renderer reads a nested `packet` object off the theme — and
- * `theme-base`, the only theme that honors our overrides at all, is one of the
- * themes that never defines one (`theme-dark` and `theme-forest` do). So the
- * packet styles fall back to the hard-coded defaults in mermaid's own
- * `diagrams/packet/styles.ts`: a black title, black bytes and a `#efefef` block,
- * whatever background the palette chose. The byte numbers are the visible half of
- * that — they are painted *outside* the block, on the diagram background, so on
- * every dark palette they are black on black.
- *
- * Mapped the way mermaid's own dark theme maps it, through the contrast floor,
- * because these tokens hold words: the bytes and the title sit on `background`,
- * the block's label on the block's own fill. The stroke is a stroke and is left
- * alone, same as `--border` in {@link applyThemeToSite}.
- */
+/** A `packet` block for mermaid's theme, derived from the palette's own tokens. */
 export function packetThemeVariables(
   vars: Record<string, unknown>,
 ): Record<string, string> | null {

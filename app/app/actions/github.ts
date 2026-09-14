@@ -16,12 +16,8 @@ import type {
 } from '@/lib/types'
 
 /**
- * All GitHub I/O lives here, server-side only. The access token is read from the
- * encrypted session (never from the client) and used to construct Octokit for
- * the duration of a single request.
- *
- * Every read/write action takes the caller-supplied `branch` to operate on —
- * there is no fixed branch; the client tracks which one is selected.
+ * All GitHub I/O lives here, server-side only. The access token is read from the encrypted session
+ * (never from the client) and used to construct Octokit for the duration of a single request.
  */
 
 function ok<T>(data: T): ActionResult<T> {
@@ -53,11 +49,8 @@ function mapError(error: unknown): ActionError {
     error instanceof Error ? error.message : 'Unexpected GitHub error.'
 
   switch (status) {
-    // 401 covers both "no credentials" and — since the GitHub App migration —
-    // "the refresh token was revoked or already spent, so the session can no
-    // longer be renewed". Either way the only cure is re-authorizing, so surface
-    // it as `unauthenticated` and let the client prompt a clean sign-in rather
-    // than showing a generic failure.
+    // 401 covers both "no credentials" and — since the GitHub App migration — "the refresh token
+    // was revoked or already spent, so the session can no longer be renewed".
     case 401:
       return {
         kind: 'unauthenticated',
@@ -77,17 +70,7 @@ function mapError(error: unknown): ActionError {
   }
 }
 
-/**
- * Did the App lose access to this repo, as opposed to hitting a missing ref inside
- * it? GitHub answers 404 (never 403) for a repo the token cannot see, so
- * "uninstalled / access narrowed / repo deleted or renamed" is indistinguishable
- * from "this branch or path doesn't exist" at the call site. Reading the repo
- * itself separates them, at the cost of one extra request in the error path only.
- *
- * Only a 404 on the probe counts. A 5xx, a rate-limit or a network blip must fall
- * through to the caller's normal handling — misreading one of those as "your repo
- * is gone" would eject the user from a repo that is still perfectly theirs.
- */
+/** Did the App lose access to this repo, as opposed to hitting a missing ref inside it? */
 async function repoAccessLost(octokit: Octokit, owner: string, repo: string): Promise<boolean> {
   try {
     await octokit.repos.get({ owner, repo })
@@ -104,29 +87,7 @@ function decodeBase64(b64: string): string {
   return Buffer.from(b64.replace(/\n/g, ''), 'base64').toString('utf8')
 }
 
-/**
- * Is the GitHub session still usable? Called once when the editor mounts.
- *
- * A session cookie outliving the credentials inside it is the normal shape of
- * this failure, not an edge case: the App's access token lasts 8 hours and the
- * refresh token is spent on every renewal, so a tab opened against a stale one
- * renders a complete, signed-in-looking app whose every button is already broken.
- * The user then finds out at the first thing they try — usually a commit, which
- * is the worst possible moment to be told to sign in again.
- *
- * **No GitHub request.** The answer is already in the session cookie:
- * `getGitHubToken` returns null for a missing token, for one whose refresh failed
- * (`token.error`, stamped by `auth.ts`), and for one whose `expiresAt` has passed
- * — which is every failure a page load can act on. A token GitHub has revoked
- * out from under us still looks valid here and would need a real call to catch,
- * but that call would then be on the critical path of every page load to cover a
- * case the next action reports anyway, through the same
- * `handleExpiredSession` guard.
- *
- * The client's only job is to feed the error to `handleExpiredSession`, which
- * signs out and lands on the page where signing back in is the first thing on
- * screen.
- */
+/** Is the GitHub session still usable? Called once when the editor mounts. */
 export async function checkSession(): Promise<ActionResult<{ valid: true }>> {
   const token = await getGitHubToken()
   if (!token) return err(UNAUTHENTICATED)
@@ -136,31 +97,11 @@ export async function checkSession(): Promise<ActionResult<{ valid: true }>> {
 export interface ReposResult {
   /** The repositories this app can actually read/write, newest activity first. */
   repos: Repo[]
-  /**
-   * How many installations of the GitHub App the signed-in user can see.
-   *
-   * Authorization is not installation: a user can authorize the App and still
-   * have it installed nowhere, in which case `repos` is legitimately empty rather
-   * than broken. The picker uses this to tell those two states apart and show the
-   * "install / configure repository access" onboarding instead.
-   */
+  /** How many installations of the GitHub App the signed-in user can see. */
   installationCount: number
 }
 
-/**
- * Repo picker — the repositories the GitHub App installation grants access to.
- *
- * With a GitHub App, `GET /user/repos` is the wrong primitive: it lists every
- * repo the *user* can reach, most of which the App has no permission on, so the
- * picker would offer repos whose every write 404s. The installation endpoints
- * return exactly the set the user chose at install time ("All repositories" or a
- * hand-picked subset), which is the whole point of the migration.
- *
- * A user may have several installations (their own account plus organizations),
- * so every installation is walked and the results de-duplicated. Neither
- * endpoint supports `sort`, so ordering is done here to keep the previous
- * "recently touched first" feel.
- */
+/** Repo picker — the repositories the GitHub App installation grants access to. */
 export async function listRepos(): Promise<ActionResult<ReposResult>> {
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
@@ -255,22 +196,14 @@ export async function listTree(
       .filter(isDiagramFile)
     return ok({ tree: buildTree(filePaths), truncated: Boolean(data.truncated) })
   } catch (error) {
-    // A repo with no commits yet isn't an error here — it just has no files —
-    // so surface an empty tree instead of failing the sidebar. GitHub reports
-    // that state two different ways: 404 (the branch ref doesn't resolve) and
-    // 409 "Git Repository is empty." A 404 on a *non-default* branch more
-    // likely means the branch was deleted/mistyped, so only swallow that one
-    // for the default branch; the 409 is unambiguous — an empty repo has no
-    // branches at all — and would otherwise surface mapError's write-oriented
-    // "The file changed on GitHub since you loaded it." copy.
+    // A repo with no commits yet isn't an error here — it just has no files — so surface an empty
+    // tree instead of failing the sidebar.
     const mapped = mapError(error)
     if (mapped.status === 409) return ok({ tree: [], truncated: false })
     if (mapped.kind === 'not_found') {
-      // Before treating this as "no commits yet", rule out the case where the
-      // repo is no longer ours to read at all: an empty tree would render as the
-      // ordinary "no files" sidebar, which invites the user to keep working in a
-      // repo that will reject every write. That state needs the repo picker, so
-      // it gets its own kind.
+      // Before treating this as "no commits yet", rule out the case where the repo is no longer
+      // ours to read at all: an empty tree would render as the ordinary "no files" sidebar, which
+      // invites the user to keep working in a repo that will reject every write.
       if (await repoAccessLost(octokit, owner, repo)) {
         return err({
           kind: 'repo_unavailable',
@@ -329,19 +262,7 @@ export async function readFileAtRef(
   }
 }
 
-/**
- * Version history — one page of commits touching `path` on `branch`, newest first.
- *
- * The REST commits API does not follow renames, so a path's history stops dead at
- * the commit that created it under that name. Rather than eagerly walking the whole
- * rename chain (which can mean an unbounded number of `listCommits`/`getCommit` calls
- * for a long-lived, oft-renamed file), each call here only ever fetches one page of
- * one path segment. Only once the *last* page of a segment is reached do we check
- * whether its earliest commit renamed the file in from an older path (GitHub reports
- * `previous_filename`) — the caller decides whether to page into that older path,
- * surfaced as `renamedFrom` so the UI can offer it as an explicit "view history
- * before rename" action instead of silently merging it in.
- */
+/** Version history — one page of commits touching `path` on `branch`, newest first. */
 export async function listFileCommits(
   owner: string,
   repo: string,
@@ -353,11 +274,8 @@ export async function listFileCommits(
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    // The commits API's path filter is a tree-diff, so it also matches the commit
-    // that renamed `path` AWAY to somewhere else (its tree entry at `path` changed
-    // too — to "absent"). That commit only ever shows up as the newest entry of
-    // page 1, dated after everything that actually lived at `path`. Fetch one
-    // extra up front so removing it doesn't cost us the `hasMore` page boundary.
+    // The commits API's path filter is a tree-diff, so it also matches the commit that renamed
+    // `path` AWAY to somewhere else (its tree entry at `path` changed too — to "absent").
     const fetchSize = page === 1 ? perPage + 2 : perPage + 1
     const { data } = await octokit.repos.listCommits({
       owner,
@@ -430,12 +348,8 @@ async function renamedFromPath(
 }
 
 /**
- * Delete = commit a removal. Removes each path from `branch`, one commit per
- * file (the file's current blob sha is fetched immediately before deletion).
- * Used for both a single file (`paths` of length 1) and a directory (every
- * diagram file beneath it). Missing paths are skipped so a partially-stale tree
- * still cleans up. Uses only the high-level contents API — no git-data ref
- * rewriting.
+ * Delete = commit a removal. Removes each path from `branch`, one commit per file (the file's
+ * current blob sha is fetched immediately before deletion).
  */
 export async function deletePaths(
   owner: string,
@@ -467,14 +381,10 @@ export async function deletePaths(
 }
 
 /**
- * Rename (move) a file on `branch`. To keep Git history intact this is done as
- * a single commit that removes the old path and adds the *same blob* at the new
- * path — Git's rename detection then links the two (100% similarity), rather
- * than the orphaned history a delete-then-create (two commits) would produce.
- *
- * This uses the git-data API to build one tree + commit, then fast-forwards the
- * branch ref (force: false). That is a normal ref advance, not the ref-rewrite /
- * force-push that the overwrite-on-conflict flow forbids.
+ * Rename (move) a file on `branch`. To keep Git history intact this is done as a single commit that
+ * removes the old path and adds the *same blob* at the new path — Git's rename detection then links
+ * the two (100% similarity), rather than the orphaned history a delete-then-create (two commits)
+ * would produce.
  */
 export async function renameFile(
   owner: string,
@@ -544,13 +454,7 @@ async function getFileSha(
   return data.sha
 }
 
-/**
- * Save = commit. Writes `content` to `path` on `branch`.
- *  - Pass `sha` when updating an existing file (the blob sha you loaded).
- *  - Omit `sha` when creating a new file.
- * A stale sha yields a 409 (mapped to `kind: 'conflict'`), which the client
- * turns into the overwrite / start-over modal.
- */
+/** Save = commit. Writes `content` to `path` on `branch`. */
 export async function commitFile(
   owner: string,
   repo: string,
@@ -590,24 +494,7 @@ export interface FileWrite {
   sha?: string
 }
 
-/**
- * Save everything at once — one commit containing every changed file.
- *
- * Looping `commitFile` would produce one commit per file, which is not the same
- * thing and is worse in the way that matters: a set of edits that belong together
- * arrives on the branch as N unrelated commits, half of which describe a state the
- * user never had on screen. So this builds a single tree and a single commit, the
- * same way `renameFile` does, and fast-forwards the ref with `force: false` — a
- * normal ref advance, not the ref rewrite rule 6 forbids.
- *
- * Conflict detection is done up front and for the whole set, before anything is
- * written: every path whose current blob sha differs from the one the client
- * loaded is collected, and a non-empty list aborts the commit. An all-or-nothing
- * answer is the only honest one here — the commit is atomic, so "these three
- * landed and that one didn't" is not a state this can produce, and reporting it
- * would be a lie the user then has to untangle. The conflicting paths come back in
- * the error so the client can name them.
- */
+/** Save everything at once — one commit containing every changed file. */
 export async function commitFiles(
   owner: string,
   repo: string,
@@ -728,11 +615,7 @@ export async function listBranches(
   }
 }
 
-/**
- * Create a new branch pointing at the current tip of `fromBranch`. Just a ref
- * create (no commit) — the new branch's tree is identical to its source until
- * the next save.
- */
+/** Create a new branch pointing at the current tip of `fromBranch`. */
 export async function createBranch(
   owner: string,
   repo: string,

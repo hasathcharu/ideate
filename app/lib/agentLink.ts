@@ -28,30 +28,9 @@ import { loadPairingCode, savePairingCode } from './storage'
 import { useDebouncedValue } from './hooks'
 
 /**
- * The tab's half of Agent Link.
- *
- * "Agent Link" is the feature as the user meets it; the *service* below is the
- * transport it runs over — a remote Go service that is both the MCP server the
- * agent talks to and the socket this dials.
- *
- * **The tab is still the WebSocket client, but it no longer dials loopback.** Until
- * protocol 3 the MCP server ran on the user's own machine and listened on
- * `ws://127.0.0.1`, because a web page cannot open a listening socket. That worked
- * until it met Safari, which grants no loopback exemption for mixed content and so
- * blocks the connection outright from an https page — and it confined the whole
- * feature to an agent sitting on the same machine as the browser. Dialling a remote
- * service instead costs the ability to work offline and gains every other agent:
- * containers, Codespaces, SSH boxes, browser-based ones.
- *
- * What joins the two halves is a **pairing code this tab generates**. The service
- * issues nothing and merely buckets by the code's hash, which is why there is no
- * token endpoint any more and nothing here to steal: a hostile page can generate
- * its own code, and pair with itself.
- *
- * One consequence of the inversion survives it: the socket belongs to a service
- * that can restart, and to a tab that stays open for days. So "enabled" still means
- * *keep trying to connect*, and a dropped connection is an ordinary state rather
- * than an error.
+ * The tab's half of Agent Link. "Agent Link" is the feature as the user meets it; the *service*
+ * below is the transport it runs over — a remote Go service that is both the MCP server the agent
+ * talks to and the socket this dials.
  */
 
 export type AgentLinkStatus =
@@ -59,44 +38,25 @@ export type AgentLinkStatus =
   | 'off'
   /** Trying — including the stretches when the service is restarting. */
   | 'connecting'
-  /** The socket is up and this tab holds its pairing code's bucket, but no agent
-   *  has claimed it. Distinct from `attached` on purpose: pairing answers *which*
-   *  tab, and the human answered it by switching this on. Whether to drive it is
-   *  the agent's separate decision, and reporting a live socket as connected would
-   *  make the toolbar claim someone can edit the document when nobody can. */
+  /** The socket is up and this tab holds its pairing code's bucket, but no agent has claimed it. */
   | 'paired'
   /** An agent called `ideate_connect`. Only now can it read or edit. */
   | 'attached'
   /** Refused in a way that retrying cannot fix. */
   | 'blocked'
-  /** The service is at capacity.
-   *
-   *  Its own state rather than a flavour of `blocked`, because the two want
-   *  opposite behaviour: `blocked` means retrying is pointless, and capacity does
-   *  free up, so retrying is not. But hammering a full service is not how to wait
-   *  for it either — so the automatic loop stops and waits for an explicit Retry,
-   *  which has the side benefit of holding the message still long enough to read. */
+  /**
+   * The service is at capacity. Its own state rather than a flavour of `blocked`, because the two
+   * want opposite behaviour: `blocked` means retrying is pointless, and capacity does free up, so
+   * retrying is not.
+   */
   | 'full'
 
-/** What an `applyEdits` produced, plus which document it landed on.
- *
- *  The text is here rather than read back from state because the command handler
- *  needs it *synchronously* to diagnose what was just written — `setText` only
- *  reaches React on the next render, so state would describe the document as it was
- *  before the edit. */
+/** What an `applyEdits` produced, plus which document it landed on. */
 export interface AppliedEdit extends Touched {
   text: string
 }
 
-/**
- * Everything the hook needs from the app to serve a command.
- *
- * Every document capability takes an optional `path`, mirroring `Command`:
- * `undefined` is the open document, a string is a file in the workspace whether or
- * not anybody has opened it. Enforcing that a *mutation* names one is the app's job
- * and not this module's — only the app knows which document is open, and the
- * untitled one has no path to name.
- */
+/** Everything the hook needs from the app to serve a command. */
 export interface AgentLinkCapabilities {
   /** The same snapshot that gets pushed as a `state` event, read on demand so a
    *  `status` call answers with the truth rather than the last debounced push. */
@@ -157,29 +117,13 @@ export interface AgentLink {
 const BACKOFF_MIN_MS = 1_000
 const BACKOFF_MAX_MS = 30_000
 
-/**
- * The fraction of the backoff a retry is *not* allowed to fire before.
- *
- * A restart drops every tab at the same instant, so an undithered backoff has them
- * all return in lockstep — and behind one public address (an office, a campus)
- * that arrives at the service as one spike per round, against a per-IP limiter
- * that answers 429. A refused handshake reaches the tab as an anonymous 1006,
- * indistinguishable from the service being down, so the failure that lockstep
- * produces is also the one nobody can diagnose. Spreading each round over most of
- * its window is what stops the tabs from being synchronized at all.
- *
- * The floor keeps the spread from including "immediately", which would have the
- * first retry land while the service is still coming back up.
- */
+/** The fraction of the backoff a retry is *not* allowed to fire before. */
 const BACKOFF_JITTER_FLOOR = 0.25
 
 /**
- * A fresh pairing code.
- *
- * `b % 32` is exactly uniform rather than approximately so: the alphabet is 32
- * characters and a byte has 256 values, so every character is reachable by the same
- * number of byte values. The usual modulo-bias caveat does not apply, and it is
- * worth saying because the next person to widen the alphabet will reintroduce it.
+ * A fresh pairing code. `b % 32` is exactly uniform rather than approximately so: the alphabet is
+ * 32 characters and a byte has 256 values, so every character is reachable by the same number of
+ * byte values.
  */
 function generateCode(): string {
   const bytes = new Uint8Array(PAIRING_CODE_LENGTH)

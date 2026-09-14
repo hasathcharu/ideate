@@ -16,17 +16,7 @@ export function GithubIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
-/**
- * Mermaid's own mark (mermaid.js.org/favicon.svg), reduced to the silhouette.
- *
- * The favicon's pink rounded badge is dropped and the viewBox tightened onto the
- * glyph, so this sits on whatever surface it's placed on — the same treatment
- * {@link ExcalidrawIcon} and {@link MarkdownIcon} get. All three take
- * `currentColor` rather than their literal brand colors: they are file-type
- * chrome, sitting in a tree and a menu whose palette is driven by the active
- * theme, and three fixed brand hues read as stickers pasted onto it (and can
- * lose contrast outright against a theme that happens to clash).
- */
+/** Mermaid's own mark (mermaid.js.org/favicon.svg), reduced to the silhouette. */
 export function MermaidIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="72 100 346 287" aria-hidden width="1em" height="1em" {...props}>
@@ -39,13 +29,7 @@ export function MermaidIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
-/**
- * Excalidraw's own mark (excalidraw.com/favicon.svg). The favicon's white
- * background square and its unpainted bounding-box path are dropped so the glyph
- * sits on whatever surface it's placed on; the original viewBox and transform are
- * kept so the framing matches upstream. Takes `currentColor` for the reason given
- * on {@link MermaidIcon}.
- */
+/** Excalidraw's own mark (excalidraw.com/favicon.svg). */
 export function ExcalidrawIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 107 101" aria-hidden width="1em" height="1em" {...props}>
@@ -60,21 +44,8 @@ export function ExcalidrawIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 /**
- * The official Markdown mark (github.com/dcurtis/markdown-mark), the same glyph
- * GitHub and CommonMark use, reduced to the filled `M↓` inside it.
- *
- * The mark's enclosing rounded rectangle is dropped rather than kept: it is a
- * hairline stroke, and next to the solid Mermaid and Excalidraw silhouettes it
- * read as a different family of icon — thin and wiry where they are chunky. Bare
- * filled glyphs in `currentColor` is the shared style of all three.
- *
- * The glyph is then stroked in its own fill color to fatten it further, because
- * the `M↓` is a wide mark (~2:1) and so gets scaled to the *width* of a square
- * icon box — leaving it around half the height of the near-square Mermaid and
- * Excalidraw marks, and correspondingly lighter. The viewBox is tight to the
- * stroked bounds (the stroke straddles the path, hence the 5-unit inset on each
- * side at `strokeWidth: 10`) so none of the box is spent on padding. Much past
- * 10 and the M's inner notch starts closing up at 14px.
+ * The official Markdown mark (github.com/dcurtis/markdown-mark), the same glyph GitHub and
+ * CommonMark use, reduced to the filled `M↓` inside it.
  */
 export function MarkdownIcon(props: SVGProps<SVGSVGElement>) {
   return (

@@ -9,18 +9,7 @@ import (
 	"testing"
 )
 
-// The Go half of the cross-language wire guard. See the package comment and
-// testdata/frames/README.md for why it exists at all.
-//
-// Two distinct failures are checked, and only both together catch drift:
-//
-//   - Decoding with DisallowUnknownFields catches a field the fixture has and Go
-//     does not — a rename, a typo, or a field simply never mirrored.
-//   - Re-encoding and comparing catches the opposite: a field Go drops on the way
-//     out (the `omitempty`-on-a-value-type trap), or spells differently, or emits
-//     when it should not.
-//
-// A plain "does it decode" test would pass on all of those.
+// The Go half of the cross-language wire guard.
 
 const framesDir = "../../testdata/frames"
 

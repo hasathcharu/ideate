@@ -2,21 +2,7 @@ import 'server-only'
 import { headers } from 'next/headers'
 import { getToken } from 'next-auth/jwt'
 
-/**
- * Read the GitHub access token from the encrypted session JWT — SERVER SIDE
- * ONLY. The token is stored in the JWT (never in the client-visible session),
- * so we decode it here for server actions to construct Octokit.
- *
- * This is a PURE READER by design. Renewing the GitHub App's 8-hour token
- * happens exclusively in `proxy.ts`, because writing a cookie is impossible
- * from here: `cookies().set()` throws during a Server Component render, so a
- * refreshed token obtained at this point would be dropped by Auth.js while
- * GitHub had already invalidated the refresh token that produced it — locking the
- * user out on the next request. Do not add refresh logic to this file.
- *
- * We try both the secure and non-secure cookie names so it works in local dev
- * (http) and in production (https, `__Secure-` prefixed cookie) alike.
- */
+/** Read the GitHub access token from the encrypted session JWT — SERVER SIDE ONLY. */
 export async function getGitHubToken(): Promise<string | null> {
   const secret = process.env.AUTH_SECRET
   if (!secret) return null

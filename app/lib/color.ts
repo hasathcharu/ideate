@@ -1,26 +1,6 @@
-/**
- * Color arithmetic shared by the theme pipeline.
- *
- * A mermaid `themeVariables` palette is a *diagram* palette: `primaryBorderColor`
- * is a node outline, `lineColor` an edge. `applyThemeToSite`
- * (`lib/mermaidConfig.ts`) maps those onto the app's shadcn tokens, which means
- * colors designed to be seen as 1px strokes end up carrying *text* — editor
- * keywords, comments, line numbers, button labels. A stroke that reads fine at
- * 1px against white can be at 2.3:1, which is unreadable as text.
- *
- * So the mapping runs its text tokens through {@link ensureContrast}, and that
- * needs real numbers rather than CSS `color-mix()` strings. Everything here is
- * static, notation-limited (see {@link parseRgb}) and returns the input
- * unchanged when it can't read a color — the theme pipeline is best-effort by
- * design and a hand-edited `hsl()` must degrade to "leave it alone", not throw.
- */
+/** Color arithmetic shared by the theme pipeline. */
 
-/** `[r, g, b]` in 0–255, or null when the notation isn't statically parseable.
- *
- *  Handles what the theme presets and hand-edited `themeVariables` realistically
- *  use: #rgb / #rgba / #rrggbb / #rrggbbaa and rgb()/rgba(). Anything else
- *  (hsl(), named colors, color-mix(), var()) returns null so the caller can fall
- *  back rather than guess. */
+/** `[r, g, b]` in 0–255, or null when the notation isn't statically parseable. */
 export function parseRgb(color: string): [number, number, number] | null {
   const value = color.trim().toLowerCase()
 
@@ -117,11 +97,7 @@ export function toHex(rgb: readonly [number, number, number]): string {
   )
 }
 
-/**
- * Blend two CSS colors, statically. `ratio` is how much of `b` ends up in the
- * result. Returns null when either color isn't parseable, so the caller can fall
- * back to a CSS `color-mix()` (which the browser can resolve but we can't measure).
- */
+/** Blend two CSS colors, statically. `ratio` is how much of `b` ends up in the result. */
 export function mixColors(a: string, b: string, ratio: number): string | null {
   const ra = parseRgb(a)
   const rb = parseRgb(b)
@@ -134,19 +110,8 @@ export const TEXT_CONTRAST = 4.5
 export const UI_CONTRAST = 3
 
 /**
- * The nearest color to `color` that clears `target` contrast against every one of
- * `surfaces` — by blending it toward white or black, whichever moves it *away*
- * from the surface it fails on.
- *
- * Blending toward the achromatic extremes rather than rotating hue keeps the
- * palette's character: a blue accent stays blue, it just stops being the same
- * lightness as the paper it sits on. The search is over the blend fraction, which
- * contrast is monotonic in once the direction is fixed, so twelve bisections land
- * well inside a rounding error of the minimum viable adjustment — we lift the
- * color exactly as far as legibility requires and no further.
- *
- * Returns `color` untouched when it already passes, or when any color involved
- * isn't statically parseable.
+ * The nearest color to `color` that clears `target` contrast against every one of `surfaces` — by
+ * blending it toward white or black, whichever moves it *away* from the surface it fails on.
  */
 export function ensureContrast(
   color: string,

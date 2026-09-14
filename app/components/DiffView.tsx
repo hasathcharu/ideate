@@ -6,14 +6,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 /**
- * A diff between two revisions of a text document — side by side, or unified,
- * laid out the way GitHub lays one out: `@@` hunk headers, line numbers on both
- * sides, and tinted rows.
- *
- * Both sides arrive as plain strings, so this has nothing to fetch and nothing to
- * know about where they came from. The editor compares the committed file with the
- * working copy; version history compares two commits; neither difference reaches
- * this component.
+ * A diff between two revisions of a text document — side by side, or unified, laid out the way
+ * GitHub lays one out: `@@` hunk headers, line numbers on both sides, and tinted rows.
  */
 
 export type DiffMode = 'split' | 'unified'
@@ -144,9 +138,8 @@ function LineNumber({ value }: { value: number | null }) {
 /* ------------------------------------------------------------------ */
 
 /**
- * A four-column grid — number, content, number, content — so the two sides stay
- * aligned even when a long line wraps. A table would do the same job but not
- * survive `break-all` on one side without the rows drifting.
+ * A four-column grid — number, content, number, content — so the two sides stay aligned even when a
+ * long line wraps.
  */
 function SplitDiff({
   hunks,

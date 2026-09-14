@@ -8,28 +8,9 @@ import type { ActionError } from './types'
 let signingOut = false
 
 /**
- * A dead GitHub session is not a per-surface error — it invalidates the whole
- * signed-in app at once, so it is handled globally rather than rendered wherever
- * the unlucky call happened to originate. Any action can return
- * `kind: 'unauthenticated'` (see `mapError` in `app/actions/github.ts`), and it
- * means exactly one thing: the credentials in the session cookie can no longer be
- * renewed, so every *other* repo action is equally doomed. Showing that as a
- * message inside a dialog or the history panel left the user in an app whose
- * every control was silently broken.
- *
- * Instead: drop the session cookie and land on the marketing page, where signing
- * in again is the primary action. `logout()` (`signOut({ redirectTo: '/' })`) is
- * the same server action the account menu uses, so there is one sign-out path,
- * and clearing the cookie server-side is what actually ends the session — a
- * client-side redirect alone would leave the stale cookie to fail the next call.
- *
- * Nothing is lost: localStorage holds the uncommitted draft and the app config,
- * this navigation stays on the same origin, and the draft is restored when the
- * user signs back in.
- *
- * @returns `true` if the error was a dead session and sign-out is under way — the
- *   caller must return without reporting the error, since the app is leaving.
- *   `false` for every other error kind, which callers surface as before.
+ * A dead GitHub session is not a per-surface error — it invalidates the whole signed-in app at
+ * once, so it is handled globally rather than rendered wherever the unlucky call happened to
+ * originate.
  */
 export function handleExpiredSession(error: ActionError): boolean {
   if (error.kind !== 'unauthenticated') return false

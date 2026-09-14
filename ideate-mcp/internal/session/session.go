@@ -13,16 +13,7 @@ import (
 	"github.com/hasathcharu/ideate/ideate-mcp/internal/protocol"
 )
 
-// Session is one pairing bucket: at most one browser tab, and at most one agent
-// attached to it.
-//
-// **Paired is not attached, and conflating the two makes the toolbar lie.** A tab
-// holding a bucket has answered the question "which tab" — the human answered it
-// by switching Agent Link on there. Whether to drive that tab is a separate
-// question, answered by the agent calling ideate_connect, and until it does,
-// nothing here can read or change the document. The reason for the split is that
-// this process is not started by anybody's decision: an agent session starting is
-// not a human choosing to hand over their open document.
+// Session is one pairing bucket: at most one browser tab, and at most one agent attached to it.
 type Session struct {
 	reg      *Registry
 	codeHash string
@@ -110,10 +101,6 @@ func (s *Session) Attached() (bool, string) {
 }
 
 // State is the tab's last pushed BridgeState, or nil.
-//
-// Readable while merely paired: it is metadata about *which* document is open,
-// never its content, and it is exactly what an agent needs in order to say what
-// attaching would give it before attaching. Content stays behind Attach.
 func (s *Session) State() *protocol.BridgeState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -131,13 +118,8 @@ func (s *Session) SetState(state protocol.BridgeState) {
 	s.lastState = &state
 }
 
-// Attach claims the tab for an agent.
-//
-// Re-attaching under the same name is idempotent, and a different name is refused.
-// The refusal is not a security boundary — anyone holding the code could have
-// attached first — it is there so two agents cannot quietly fight over one
-// document. Idempotence is what lets an agent that restarted, or lost track of its
-// own state, pick up where it was instead of waiting out the idle timeout.
+// Attach claims the tab for an agent. Re-attaching under the same name is idempotent, and a
+// different name is refused.
 func (s *Session) Attach(agent string) (*protocol.BridgeState, error) {
 	s.mu.Lock()
 	if s.conn == nil {
@@ -202,12 +184,6 @@ func (s *Session) Touch() {
 }
 
 // Call sends one command to the tab and waits for its answer.
-//
-// Every failure here is written to be read by an agent rather than by an operator,
-// because every one of them is something the agent can act on: reconnect, wait,
-// ask the human to switch something on. A timeout in particular is a tool error,
-// not a transport error — the agent should be told the tab did not answer, not
-// handed a broken pipe.
 func (s *Session) Call(ctx context.Context, cmd protocol.Command) (json.RawMessage, error) {
 	s.mu.Lock()
 	if !s.attached {

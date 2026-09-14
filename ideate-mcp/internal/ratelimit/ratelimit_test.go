@@ -7,12 +7,6 @@ import (
 )
 
 // The precedence rule, and the bypass it exists to close.
-//
-// Cloudflare *appends* the client address to an X-Forwarded-For the caller sent
-// rather than replacing the header, so the left-most entry belongs to whoever sent
-// the request. Taking it while a CF header was present let one caller present a
-// fresh key on every request, which turns the per-IP bucket on /mcp — the thing
-// that makes an 8-character code a credential — into no limit at all.
 func TestClientIPPrefersCloudflareHeader(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -85,11 +79,6 @@ func TestClientIPPrefersCloudflareHeader(t *testing.T) {
 }
 
 // Repeats of one subject are free, distinct subjects are not.
-//
-// The scenario that forced this: an office shares one public address, so it shares
-// one bucket. An agent holding a code the human regenerated re-presents that same
-// code forever, and charging it drained the burst everyone else's first attempt
-// needed.
 func TestAllowDistinctChargesOnlyNewSubjects(t *testing.T) {
 	// No refill worth speaking of, so every allowance below comes from the burst.
 	l := New(0.0001, 4)

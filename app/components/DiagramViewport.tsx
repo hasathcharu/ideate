@@ -8,18 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useInnerHtml } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 
-/**
- * A zoomable, pannable box around one rendered mermaid SVG.
- *
- * Extracted from `Preview` so the diagram pane and the diagrams embedded in a
- * markdown document share one implementation of the interaction — two copies of
- * the fit/zoom/drag math would inevitably drift.
- *
- * The two call sites differ in exactly two ways, both parameterized below:
- * a full-pane preview fills its parent and zooms on a bare wheel, while an
- * embedded figure is sized from the diagram and only zooms on Ctrl/⌘+wheel —
- * otherwise scrolling the document would get trapped by every diagram in it.
- */
+/** A zoomable, pannable box around one rendered mermaid SVG. */
 
 interface View {
   scale: number
@@ -62,18 +51,17 @@ export interface DiagramViewportProps {
    *  height from the diagram and sits inline in a document. */
   variant?: 'pane' | 'embedded'
   className?: string
-  /** For a diagram embedded in a markdown document: the 1-based source line its
-   *  ```mermaid fence opens on, published as `data-md-line` so the editor ↔
-   *  preview scroll sync can find it alongside the prose blocks, which carry the
-   *  same attribute (`lib/markdown.ts`). A figure is a block of the document like
-   *  any other; being a React component rather than a run of HTML shouldn't make
-   *  it invisible to the sync. */
+  /**
+   * For a diagram embedded in a markdown document: the 1-based source line its ```mermaid fence
+   * opens on, published as `data-md-line` so the editor ↔ preview scroll sync can find it alongside
+   * the prose blocks, which carry the same attribute (`lib/markdown.ts`).
+   */
   sourceLine?: number | null
-  /** The mermaid text that produced `svg`. Given one, the toolbar offers to copy
-   *  it — the source is the half of the pair that can be pasted back into a
-   *  document, and it is what a reader who wants "this diagram" actually wants.
-   *  Omitted by the standalone preview pane, where the source is already the
-   *  other half of the screen. */
+  /**
+   * The mermaid text that produced `svg`. Given one, the toolbar offers to copy it — the source is
+   * the half of the pair that can be pasted back into a document, and it is what a reader who wants
+   * "this diagram" actually wants.
+   */
   source?: string | null
 }
 
@@ -112,13 +100,10 @@ export default function DiagramViewport({
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
-  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read
-  // and mirrored into state so the host box is sized in React-controlled px —
-  // this must not depend on mutating the mermaid <svg> node, whose attributes are
-  // wiped whenever React re-inserts the dangerouslySetInnerHTML subtree.
-  // Stable, so a zoom or a pan does not rewrite the SVG subtree — see
-  // `useInnerHtml`. This is what makes the note above a belt rather than a fix:
-  // the subtree is now re-inserted only when the diagram itself changes.
+  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read and mirrored into
+  // state so the host box is sized in React-controlled px — this must not depend on mutating the
+  // mermaid <svg> node, whose attributes are wiped whenever React re-inserts the
+  // dangerouslySetInnerHTML subtree.
   const svgHtml = useInnerHtml(svg)
   const naturalRef = useRef({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
@@ -227,11 +212,8 @@ export default function DiagramViewport({
     const vp = viewportRef.current
     if (!vp) return
     const onWheel = (e: WheelEvent) => {
-      // An embedded diagram sits in the middle of a scrolling document, so a bare
-      // wheel has to keep scrolling the page — trapping it would make every
-      // diagram a scroll dead-zone. Ctrl/⌘ is the platform's zoom modifier (and
-      // is what a trackpad pinch reports), so that is the opt-in. Maximized, the
-      // figure owns the screen and behaves like the full pane again.
+      // An embedded diagram sits in the middle of a scrolling document, so a bare wheel has to keep
+      // scrolling the page — trapping it would make every diagram a scroll dead-zone.
       if (isEmbedded && !isMaximized && !e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = vp.getBoundingClientRect()

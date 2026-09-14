@@ -15,19 +15,11 @@ declare module 'next-auth/jwt' {
      * SERVER-SIDE ONLY — never exposed to the client.
      */
     accessToken?: string
-    /**
-     * GitHub App refresh token (6-month lifetime, rotated on every use).
-     * SERVER-SIDE ONLY — as secret as the access token, and subject to the same
-     * rule: never put it on the object returned by the `session` callback.
-     */
+    /** GitHub App refresh token (6-month lifetime, rotated on every use). */
     refreshToken?: string
     /** Unix seconds at which `accessToken` expires; absent if expiry is off. */
     expiresAt?: number
-    /**
-     * Set when the refresh token is spent/revoked and the session can no longer
-     * be renewed. The credentials are cleared alongside it, so the user is
-     * treated as signed out and prompted to re-authorize.
-     */
+    /** Set when the refresh token is spent/revoked and the session can no longer be renewed. */
     error?: 'RefreshTokenError'
     githubLogin?: string
   }

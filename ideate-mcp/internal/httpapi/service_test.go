@@ -724,13 +724,7 @@ func TestStatsRequiresCredentials(t *testing.T) {
 	}
 }
 
-// What the instance is costing the box, alongside what it is holding. An operator
-// reading this route is usually deciding whether to raise MAX_WS_SESSIONS or to add
-// memory, and the counts alone cannot answer that.
-//
-// The CPU percentage covers one sweep interval and is advanced by the sweeper, not
-// by this request — so it is absent until a sweep has happened, which is the state
-// this asserts first.
+// What the instance is costing the box, alongside what it is holding.
 func TestStatsReportsProcessCost(t *testing.T) {
 	h := newHarness(t, withStatsAuth)
 
@@ -785,16 +779,8 @@ func TestStatsAbsentWithoutCredentials(t *testing.T) {
 /* The tool list                                                       */
 /* ------------------------------------------------------------------ */
 
-// The bug this fixes: the service is redeployed with a new tool, and an agent that
-// listed the tools against the previous build never hears about it. Nothing in a
-// request/response flow tells it, and a fresh process has no idea its own list is
-// news to anybody — the only observable that says "somebody may be holding an older
-// list" is a client subscribing.
-//
-// So a subscription has to be answered with a notification, and that is what this
-// asserts. It also asserts the channel underneath it: a stateless server answers
-// GET /mcp with 405, and subscriptions/listen is the only way a notification
-// reaches a client here at all.
+// The bug this fixes: the service is redeployed with a new tool, and an agent that listed the tools
+// against the previous build never hears about it.
 func TestSubscribingProvokesAToolListRefresh(t *testing.T) {
 	h := newHarness(t, nil)
 	_, changed := h.agentWatchingTools()
