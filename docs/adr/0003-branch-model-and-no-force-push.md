@@ -27,8 +27,9 @@ same bytes on the branch as a run of unrelated commits, most of them describing 
 state the user never had on screen and none of them revertable as the one change
 it actually was.
 
-Because the commit is atomic, its conflict answer has to be too: every path's
-current blob sha is checked **before** anything is written, and any mismatch
+Because the commit is atomic, its conflict answer has to be too: capture the
+branch head first, then check every path's current blob sha at that immutable
+commit **before** anything is written. Any mismatch
 refuses the whole batch and names the paths. "These three landed and that one
 didn't" is not a state this can produce, so reporting it would be a lie the user
 then has to untangle. It is deliberately not routed to `ConflictModal`, whose two
@@ -38,8 +39,18 @@ The client supplies each file's sha, and holds only one of them: the open file's
 For every other dirty path it reads the saved file immediately before committing,
 which is exactly the read `openFile` would do if the user had clicked it — the app
 genuinely has no record of what a background edit was based on, so this is no
-weaker than the path it replaces. Anything landing between that read and the
-commit is still caught server-side.
+weaker than the path it replaces. A competing branch update after the head is
+captured makes the non-forced ref advance fail; it cannot silently become the
+parent of stale content.
+
+Rename uses the same snapshot and commit path. It reads the source blob and
+checks that the destination is absent at the captured commit. Any destination
+entry is a conflict; a rejected rename leaves both paths untouched.
+
+A branch without an initial commit has no Git tree to use as a base. Save All
+and rename return a conflict explaining that the branch must first be
+initialized on GitHub. The same answer applies if the selected branch ref has
+disappeared; these actions do not create an initial branch or commit.
 
 ## Rule 6
 

@@ -87,6 +87,50 @@ function decodeBase64(b64: string): string {
   return Buffer.from(b64.replace(/\n/g, ''), 'base64').toString('utf8')
 }
 
+interface BranchSnapshot {
+  parentSha: string
+  treeSha: string
+}
+
+/** Resolve the mutable branch name once; every validation in a transaction uses this commit. */
+async function captureBranchSnapshot(
+  octokit: Octokit, owner: string, repo: string, branch: string,
+): Promise<ActionResult<BranchSnapshot>> {
+  let parentSha: string
+  try {
+    const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` })
+    parentSha = ref.data.object.sha
+  } catch (error) {
+    if ([404, 409].includes(mapError(error).status ?? 0)) {
+      return err({
+        kind: 'conflict',
+        message: 'This branch has no initial commit or no longer exists. Initialize it on GitHub before saving.',
+        status: 409,
+      })
+    }
+    throw error
+  }
+  const parent = await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })
+  return ok({ parentSha, treeSha: parent.data.tree.sha })
+}
+
+type TreeChange = { path: string; mode: '100644'; type: 'blob'; sha?: string | null; content?: string }
+
+/** Build on the captured tree and advance only when it is still a fast-forward. */
+async function commitSnapshot(
+  octokit: Octokit, owner: string, repo: string, branch: string,
+  snapshot: BranchSnapshot, message: string, changes: TreeChange[],
+) {
+  const tree = await octokit.git.createTree({ owner, repo, base_tree: snapshot.treeSha, tree: changes })
+  const commit = await octokit.git.createCommit({
+    owner, repo, message, tree: tree.data.sha, parents: [snapshot.parentSha],
+  })
+  await octokit.git.updateRef({
+    owner, repo, ref: `heads/${branch}`, sha: commit.data.sha, force: false,
+  })
+  return { tree: tree.data, commitSha: commit.data.sha }
+}
+
 /** Is the GitHub session still usable? Called once when the editor mounts. */
 export async function checkSession(): Promise<ActionResult<{ valid: true }>> {
   const token = await getGitHubToken()
@@ -397,43 +441,30 @@ export async function renameFile(
   if (!octokit) return err(UNAUTHENTICATED)
   if (oldPath === newPath) return err({ kind: 'unknown', message: 'The path is unchanged.' })
   try {
+    const captured = await captureBranchSnapshot(octokit, owner, repo, branch)
+    if (!captured.ok) return captured
+    const snapshot = captured.data
     // Old file blob (sha + content) — reused verbatim at the new path.
-    const current = await octokit.repos.getContent({ owner, repo, path: oldPath, ref: branch })
+    const current = await octokit.repos.getContent({ owner, repo, path: oldPath, ref: snapshot.parentSha })
     if (Array.isArray(current.data) || current.data.type !== 'file' || typeof current.data.content !== 'string') {
       return err({ kind: 'not_found', message: 'That path is not a file.', status: 404 })
     }
     const blobSha = current.data.sha
     const content = decodeBase64(current.data.content)
 
-    const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` })
-    const parentSha = ref.data.object.sha
-    const parentCommit = await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })
+    // Any entry at the destination, including a directory, is a collision.
+    try {
+      await octokit.repos.getContent({ owner, repo, path: newPath, ref: snapshot.parentSha })
+      return err({ kind: 'conflict', message: `${newPath} already exists on GitHub.`, status: 409 })
+    } catch (error) {
+      if (mapError(error).kind !== 'not_found') throw error
+    }
 
-    const tree = await octokit.git.createTree({
-      owner,
-      repo,
-      base_tree: parentCommit.data.tree.sha,
-      tree: [
-        { path: oldPath, mode: '100644', type: 'blob', sha: null }, // remove old
-        { path: newPath, mode: '100644', type: 'blob', sha: blobSha }, // add same blob
-      ],
-    })
-
-    const commit = await octokit.git.createCommit({
-      owner,
-      repo,
-      message: `Rename ${oldPath} → ${newPath} via ${APP_NAME}`,
-      tree: tree.data.sha,
-      parents: [parentSha],
-    })
-
-    await octokit.git.updateRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-      sha: commit.data.sha,
-      force: false,
-    })
+    await commitSnapshot(octokit, owner, repo, branch, snapshot,
+      `Rename ${oldPath} → ${newPath} via ${APP_NAME}`, [
+        { path: oldPath, mode: '100644', type: 'blob', sha: null },
+        { path: newPath, mode: '100644', type: 'blob', sha: blobSha },
+      ])
 
     return ok({ path: newPath, content, sha: blobSha })
   } catch (error) {
@@ -506,6 +537,9 @@ export async function commitFiles(
   if (!octokit) return err(UNAUTHENTICATED)
   if (files.length === 0) return err({ kind: 'unknown', message: 'Nothing to commit.' })
   try {
+    const captured = await captureBranchSnapshot(octokit, owner, repo, branch)
+    if (!captured.ok) return captured
+    const snapshot = captured.data
     // Whoever else has been pushing to this branch, a stale sha means the file
     // changed underneath this tab — the same 409 `commitFile` would have raised,
     // raised here before any of the set is written rather than partway through.
@@ -515,7 +549,13 @@ export async function commitFiles(
       // for a file being created. Every other failure is the caller's problem and
       // has to keep its own meaning — swallowing a 401 would read as "absent" and
       // let the commit proceed to fail confusingly further down.
-      const current = await getFileSha(octokit, owner, repo, file.path, branch).catch(
+      const current = await octokit.repos.getContent({
+        owner, repo, path: file.path, ref: snapshot.parentSha,
+      }).then(({ data }) => {
+        // A directory or other non-file entry still occupies the destination.
+        if (Array.isArray(data) || data.type !== 'file') return '(non-file entry)'
+        return data.sha
+      }).catch(
         (error: unknown) => {
           if (mapError(error).kind === 'not_found') return null
           throw error
@@ -538,50 +578,28 @@ export async function commitFiles(
       })
     }
 
-    const ref = await octokit.git.getRef({ owner, repo, ref: `heads/${branch}` })
-    const parentSha = ref.data.object.sha
-    const parentCommit = await octokit.git.getCommit({ owner, repo, commit_sha: parentSha })
-
     // `content` on a tree entry has GitHub create the blob, so this is one request
     // rather than one `createBlob` per file. Text only, which every kind here is.
-    const tree = await octokit.git.createTree({
-      owner,
-      repo,
-      base_tree: parentCommit.data.tree.sha,
-      tree: files.map((file) => ({
+    const { tree, commitSha } = await commitSnapshot(
+      octokit, owner, repo, branch, snapshot, message,
+      files.map((file) => ({
         path: file.path,
         mode: '100644' as const,
         type: 'blob' as const,
         content: file.content,
       })),
-    })
-
-    const commit = await octokit.git.createCommit({
-      owner,
-      repo,
-      message,
-      tree: tree.data.sha,
-      parents: [parentSha],
-    })
-
-    await octokit.git.updateRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-      sha: commit.data.sha,
-      force: false,
-    })
+    )
 
     // The new blob shas, so the client can update each file's baseline without a
     // round trip per file. Read back off the created tree, which already lists
     // every entry it holds.
     const written = new Map(
-      tree.data.tree
+      tree.tree
         .filter((entry) => typeof entry.path === 'string' && typeof entry.sha === 'string')
         .map((entry) => [entry.path as string, entry.sha as string]),
     )
     return ok({
-      commitSha: commit.data.sha,
+      commitSha,
       files: files.map((file) => ({
         path: file.path,
         content: file.content,
