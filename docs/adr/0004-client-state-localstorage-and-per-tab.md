@@ -28,3 +28,10 @@ that matters twice over, since coming back under a different one would strand
 an agent holding a code that reaches nothing. **`AppConfig.mcpOrigin` is the
 opposite case and belongs in config**: *where the service is* is a property of
 the deployment, not of one tab, and it is a URL rather than a credential.
+
+Content storage has explicit read outcomes: present, missing, invalid data, or
+unavailable storage. Draft and local-file writes report quota/access failure.
+Moves check the destination and write it before deleting the source. A failed
+copy leaves the source in place; a failed source deletion may leave two copies,
+which is recoverable and reported to the caller. The per-tab Agent Link state
+remains separate from these document records.

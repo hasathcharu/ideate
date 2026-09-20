@@ -74,8 +74,9 @@ Rule numbers remain stable because source comments and ADRs refer to them.
   installations. Preserve the access-loss probe and mount-time session check in ADR 0002.
 - Gate file operations with `hasWorkspace`. Local mode has files even when `repo` is null.
   Resolve scratch slots through `scratchDocIdFor`.
-- Persist drafts only while dirty, and clear them when clean. New files need an immediate
-  draft. Preserve newer edits and the current document when an earlier save completes.
+- Persist drafts while dirty or while a named file awaits its first save, even if
+  empty; clear clean saved-document drafts. New files need an immediate draft.
+  Preserve newer edits and the current document when an earlier save completes.
 - Key debounce state by document identity. Keep its key and value in one snapshot.
   Reuse one CodeMirror instance and switch document settings through compartments.
 - Keep Mermaid theme and layout in `AppConfig.mermaidConfig`. Inject config during

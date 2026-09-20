@@ -87,25 +87,27 @@ import {
 } from '@/lib/mermaidConfig'
 import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
+import { canConsumeScratchDraft, needsDraft } from '@/lib/draftLifecycle'
+import { saveLocalBatch } from '@/lib/localBatch'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
 import {
   loadAgentLink,
   loadConfig,
   saveAgentLink,
   saveConfig,
-  loadDraft,
-  saveDraft,
   clearDraft,
+  readDraftResult,
+  writeDraftResult,
   docIdForFile,
   docIdForLocalFile,
   scratchDocIdFor,
-  listDraftPaths,
-  listLocalDraftPaths,
-  listLocalFiles,
-  readLocalFile,
-  writeLocalFile,
+  listDraftPathsResult,
+  listLocalDraftPathsResult,
+  listLocalFilesResult,
+  readLocalFileResult,
+  writeLocalFileResult,
+  moveLocalFile,
   deleteLocalFile,
-  renameLocalFile,
 } from '@/lib/storage'
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
@@ -341,7 +343,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Live sidebar width in pixels (persisted to config on drag end).
   const [sidebarWidth, setSidebarWidth] = useState(256)
 
-  const [text, setText] = useState(SAMPLE)
+  const [text, setTextState] = useState(SAMPLE)
+  const liveTextRef = useRef(text)
+  const workingRevisionRef = useRef(0)
+  const setText = useCallback((next: string) => {
+    liveTextRef.current = next
+    workingRevisionRef.current += 1
+    setTextState(next)
+  }, [])
   const [baseline, setBaseline] = useState(SAMPLE)
   const [openPath, setOpenPath] = useState<string | null>(null)
   const [loadedSha, setLoadedSha] = useState<string | null>(null)
@@ -464,7 +473,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
    *  file system in local mode — there is nothing to fetch and nothing to be stale
    *  against. */
   const refreshLocalFiles = useCallback(() => {
-    setLocalPaths(listLocalFiles())
+    const result = listLocalFilesResult()
+    if (result.status === 'ok') setLocalPaths(result.value)
+    else toast.error('Could not list files in browser storage.')
   }, [])
 
   // Which editor the current document gets. For a repo file the extension decides; with nothing
@@ -486,7 +497,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // the app chrome around it. Imposed for display only — never written to the file.
   const canvasBackground = useMemo(() => themeBackgroundColor(appliedConfig), [appliedConfig])
 
-  const dirty = contentDiffers(text, baseline, kind)
+  const dirty = needsDraft(contentDiffers(text, baseline, kind), openPath !== null && loadedSha === null)
   // Each scratch kind gets its own draft slot, so toggling between diagram,
   // document and canvas with nothing open parks the current work rather than
   // overwriting it with content the other surface can't read.
@@ -502,6 +513,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const docId = openPath && hasWorkspace ? docIdForPath(openPath) : scratchDocId
+
+  // The editor callback updates liveTextRef before React renders. Navigation can
+  // therefore persist the outgoing document even in the same event as an edit.
+  const activeDraftRef = useRef({ docId, baseline, kind, pending: openPath !== null && loadedSha === null })
+  activeDraftRef.current = { docId, baseline, kind, pending: openPath !== null && loadedSha === null }
+  const flushOutgoingDraft = useCallback((): boolean => {
+    const active = activeDraftRef.current
+    const content = liveTextRef.current
+    if (!needsDraft(contentDiffers(content, active.baseline, active.kind), active.pending)) return true
+    const result = writeDraftResult(active.docId, content)
+    if (result.ok) return true
+    toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
+    return false
+  }, [])
 
   // Keyed on the open document: edits within a file debounce, but switching files
   // takes effect at once so nothing downstream ever sees the outgoing file's text.
@@ -671,7 +696,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // editor — otherwise a leftover canvas choice would try to parse it as a scene.
       updateConfig({ scratchKind: 'mermaid' })
     },
-    [updateConfig],
+    [updateConfig, setText],
   )
 
   // Invalidate everything scoped to the previously-selected repo/branch — called
@@ -692,7 +717,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setTree(null)
     setTreeError(null)
     updateConfig({ scratchKind: 'mermaid' })
-  }, [updateConfig])
+  }, [updateConfig, setText])
 
   useEffect(() => {
     // `loginWithGitHub` redirects here with `?connect=1`, which marks this arrival as a fresh
@@ -716,13 +741,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // The local store is the file system in local mode, so read it now rather than
     // leave `localPaths` null — every "does this file exist" question below waits on
     // it, the agent's included.
-    if (!githubEnabled) setLocalPaths(listLocalFiles())
+    if (!githubEnabled) {
+      const local = listLocalFilesResult()
+      if (local.status === 'ok') setLocalPaths(local.value)
+      else toast.error('Could not list files in browser storage.')
+    }
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
     // reloads rather than clobbering it with the start state. Which slot to read
     // depends on the scratch surface the user last had open.
-    const draft = loadDraft(scratchDocIdFor(stored.scratchKind))
-    const restorable = draft && draft.content.trim().length > 0 ? draft.content : null
+    const draft = readDraftResult(scratchDocIdFor(stored.scratchKind))
+    if (draft.status === 'invalid' || draft.status === 'unavailable') {
+      toast.error(`Could not restore the scratch draft: ${draft.status}.`)
+    }
+    const restorable = draft.status === 'ok' && draft.value.content.trim().length > 0
+      ? draft.value.content : null
 
     if (githubEnabled && stored.repo) {
       void refreshTree(stored.repo).then((data) => {
@@ -743,7 +776,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setText(restorable)
       setBaseline(SAMPLE)
     }
-  }, [githubEnabled, refreshTree, showRepoStartState])
+  }, [githubEnabled, refreshTree, showRepoStartState, setText])
 
   /**
    * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths` is persisted,
@@ -756,11 +789,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (!hasWorkspace || !savedPaths) return
     const key = repo ? docIdForFile(repo.owner, repo.name, repo.branch, '') : 'local'
     if (recoveredFor.current === key) return
-    recoveredFor.current = key
     const committed = savedPaths
-    const drafts = repo
-      ? listDraftPaths(repo.owner, repo.name, repo.branch)
-      : listLocalDraftPaths()
+    const listing = repo
+      ? listDraftPathsResult(repo.owner, repo.name, repo.branch)
+      : listLocalDraftPathsResult()
+    if (listing.status !== 'ok') {
+      toast.error('Could not list unsaved drafts in browser storage.')
+      return
+    }
+    recoveredFor.current = key
+    const drafts = listing.value
     if (drafts.length === 0) return
     // A draft is only ever written while a document is dirty and is cleared the moment it isn't, so
     // a draft under this branch *is* a file with uncommitted edits — light its marker in the
@@ -800,13 +838,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setRepoPickerOpen(true)
   }, [hydrated, githubEnabled, config.repo])
 
-  // The draft slot holds *divergence from the committed/starter state*, so it is written only while
-  // the document is dirty and cleared as soon as it isn't.
+  // Persist live content, independently of the preview debounce. A pending file
+  // keeps its existence record even when its content is empty.
   useEffect(() => {
     if (!hydrated) return
-    if (dirty) saveDraft(docId, debouncedText)
-    else clearDraft(docId)
-  }, [debouncedText, docId, hydrated, dirty])
+    if (dirty) {
+      const result = writeDraftResult(docId, text)
+      if (!result.ok) toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
+    }
+    else {
+      const stored = readDraftResult(docId)
+      if (stored.status === 'ok') clearDraft(docId)
+      else if (stored.status === 'invalid') toast.error('A damaged draft remains in browser storage; it was not deleted.')
+    }
+  }, [text, docId, hydrated, dirty])
 
   useEffect(() => {
     if (!dirty) return
@@ -918,16 +963,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const switchScratchKind = useCallback(
     (nextKind: FileKind) => {
       if (openPath || nextKind === config.scratchKind) return
-      saveDraft(scratchDocId, text)
-      const parked = loadDraft(scratchDocIdFor(nextKind))
+      if (!flushOutgoingDraft()) return
+      const parked = readDraftResult(scratchDocIdFor(nextKind))
+      if (parked.status === 'invalid' || parked.status === 'unavailable') {
+        toast.error(`Could not open the parked ${nextKind} draft: ${parked.status}.`)
+        return
+      }
       const fresh = templateFor(nextKind)
       updateConfig({ scratchKind: nextKind })
-      setText(parked && parked.content.trim().length > 0 ? parked.content : fresh)
+      setText(parked.status === 'ok' ? parked.value.content : fresh)
       // Baseline is the pristine template, so a restored draft correctly reads as
       // unsaved work while a fresh switch reads as clean.
       setBaseline(fresh)
     },
-    [openPath, config.scratchKind, scratchDocId, text, updateConfig],
+    [openPath, config.scratchKind, flushOutgoingDraft, updateConfig, setText],
   )
 
   const openPrompt = useCallback((spec: PromptSpec) => {
@@ -937,6 +986,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onSelectRepo = useCallback(
     (r: Repo) => {
+      if (!flushOutgoingDraft()) return
       const next: RepoRef = {
         owner: r.owner,
         name: r.name,
@@ -950,12 +1000,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
         if (data) showRepoStartState(data)
       })
     },
-    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
+    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft],
   )
 
   const onSelectBranch = useCallback(
     (branch: string) => {
       if (!repo) return
+      if (!flushOutgoingDraft()) return
       const next: RepoRef = { ...repo, branch }
       updateConfig({ repo: next })
       setBranchPickerOpen(false)
@@ -964,7 +1015,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         if (data) showRepoStartState(data)
       })
     },
-    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
+    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft],
   )
 
   const onCreateBranch = useCallback(
@@ -993,11 +1044,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
       | { ok: false; message: string; expired: boolean }
     > => {
       if (!repo) {
-        const file = readLocalFile(path)
-        if (!file) {
-          return { ok: false, message: `${path} is not saved in this browser.`, expired: false }
+        const file = readLocalFileResult(path)
+        if (file.status !== 'ok') {
+          return { ok: false, message: `${path} is ${file.status} in this browser.`, expired: false }
         }
-        return { ok: true, content: file.content, sha: LOCAL_SAVED }
+        return { ok: true, content: file.value.content, sha: LOCAL_SAVED }
       }
       const res = await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
@@ -1015,15 +1066,21 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const openFile = useCallback(
     async (path: string) => {
       if (!hasWorkspace) return
+      if (path === openPath) return
+      if (!flushOutgoingDraft()) return
       // A never-committed file has nothing on GitHub under its path, so reading it
       // would 404. Its draft *is* the file: reopen it exactly as it was created —
       // no sha, empty baseline, so it still reads as unsaved.
       if (pendingPaths.has(path)) {
-        const draft = loadDraft(docIdForPath(path))
+        const draft = readDraftResult(docIdForPath(path))
+        if (draft.status !== 'ok') {
+          toast.error(`Could not open ${path}: its unsaved draft is ${draft.status}.`)
+          return
+        }
         setBaseline('')
         setLoadedSha(null)
         setOpenPath(path)
-        setText(draft?.content ?? templateFor(fileKind(path)))
+        setText(draft.value.content)
         return
       }
       const res = await readSaved(path)
@@ -1031,16 +1088,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
         if (!res.expired) toast.error(res.message)
         return
       }
-      const draft = loadDraft(docIdForPath(path))
+      if (!flushOutgoingDraft()) return
+      const draft = readDraftResult(docIdForPath(path))
+      if (draft.status === 'invalid' || draft.status === 'unavailable') {
+        toast.error(`Could not open ${path}: its draft is ${draft.status}.`)
+        return
+      }
       setBaseline(res.content)
       setLoadedSha(res.sha)
       setOpenPath(path)
       // Only prefer the draft when it actually differs from what's saved.
-      const draftDiffers =
-        draft !== null && contentDiffers(draft.content, res.content, fileKind(path))
-      setText(draftDiffers && draft ? draft.content : res.content)
+      const draftDiffers = draft.status === 'ok' && contentDiffers(draft.value.content, res.content, fileKind(path))
+      setText(draftDiffers && draft.status === 'ok' ? draft.value.content : res.content)
     },
-    [hasWorkspace, pendingPaths, docIdForPath, readSaved],
+    [hasWorkspace, openPath, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setText],
   )
 
   /** Open a file the user picked from the tree — the start of a new trail. */
@@ -1177,7 +1238,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
       throw new Error('The file list has not loaded yet. Try again in a moment.')
     }
     const targetKind = fileKind(path)
-    const draft = loadDraft(docIdForPath(path))
+    const draftResult = readDraftResult(docIdForPath(path))
+    if (draftResult.status === 'invalid' || draftResult.status === 'unavailable') {
+      throw new Error(`${path}'s draft is ${draftResult.status}; it was not replaced.`)
+    }
+    const draft = draftResult.status === 'ok' ? draftResult.value : null
     if (savedPaths.has(path)) {
       const res = await readSaved(path)
       if (!res.ok) {
@@ -1240,8 +1305,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (path === null) return
     const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
     const id = docIdForPath(path)
-    if (isDirty) saveDraft(id, next)
-    else clearDraft(id)
+    const persisted = isDirty ? writeDraftResult(id, next) : clearDraft(id)
+    if (!persisted.ok) throw new Error(`Could not update ${path}'s draft: ${persisted.reason}.`)
     if (target.created) setCreatedPaths((prev) => withPath(prev, path))
     setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
   }
@@ -1343,7 +1408,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
             'same call.',
         )
       }
-      if (repoFilePaths.includes(path)) {
+      if (repoFilePaths.includes(path) || pendingPaths.has(path) ||
+        (localMode && readLocalFileResult(path).status !== 'missing') ||
+        readDraftResult(docIdForPath(path)).status !== 'missing') {
         // `edit`/`write`, not `open`: the path is all either of them needs, and sending the agent
         // through `open` would drag the human's editor to this file as a side effect of a collision
         // they never asked about.
@@ -1357,13 +1424,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // committing stays a human action, which is what keeps an agent from writing
       // to the user's repository.
       const body = content ?? templateFor(fileKind(path))
+      if (!flushOutgoingDraft()) throw new Error('Could not preserve the open document before creating a file.')
+      const written = writeDraftResult(docIdForPath(path), body)
+      if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
       setLinkTrail([])
       setCreatedPaths((prev) => withPath(prev, path))
       // Written here rather than left to the autosave effect: for a file with
       // nothing saved behind it the draft is the only copy, and an agent creating
       // two files in quick succession must not depend on a render landing in
       // between.
-      saveDraft(docIdForPath(path), body)
       setOpenPath(path)
       setLoadedSha(null)
       setBaseline('')
@@ -1386,7 +1455,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
             'in .excalidraw. For a diagram or a document, use ideate_create_file.',
         )
       }
-      if (repoFilePaths.includes(path)) {
+      if (repoFilePaths.includes(path) || pendingPaths.has(path) ||
+        (localMode && readLocalFileResult(path).status !== 'missing') ||
+        readDraftResult(docIdForPath(path)).status !== 'missing') {
         throw new Error(`${path} already exists. Use ideate_scene_edit to draw on it.`)
       }
       // Drawn once before anything is written, so a bad op leaves no half-made file behind — the
@@ -1394,11 +1465,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const drawn = ops.length
         ? await applySceneOps(EMPTY_SCENE, ops)
         : { text: EMPTY_SCENE, elementCount: 0, warnings: [] }
+      if (!flushOutgoingDraft()) throw new Error('Could not preserve the open document before creating a canvas.')
+      const written = writeDraftResult(docIdForPath(path), drawn.text)
+      if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
       setLinkTrail([])
       setCreatedPaths((prev) => withPath(prev, path))
       // Written straight away rather than left to the autosave effect: nothing is
       // saved behind this file, so its draft is the only copy of the drawing.
-      saveDraft(docIdForPath(path), drawn.text)
       setOpenPath(path)
       setLoadedSha(null)
       setBaseline('')
@@ -1528,6 +1601,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // Signed in with no repo picked: there is nowhere to put a named file, so
       // this is the untitled scratch document and nothing else.
       if (!hasWorkspace) {
+        if (!flushOutgoingDraft()) return
         setOpenPath(null)
         setLoadedSha(null)
         setBaseline(NEW_TEMPLATE)
@@ -1557,12 +1631,27 @@ export default function AppShell({ user, mode }: AppShellProps) {
         submitLabel: 'Start editing',
         validate: validateNewFilePath(extension),
         onSubmit: (path) => {
-          setPromptOpen(false)
-          setCreatedPaths((prev) => withPath(prev, path))
+          if (!savedPaths) {
+            toast.error('The file list has not loaded yet. Try again in a moment.')
+            return
+          }
+          if (savedPaths.has(path) || pendingPaths.has(path) ||
+            (localMode && readLocalFileResult(path).status !== 'missing') ||
+            readDraftResult(docIdForPath(path)).status !== 'missing') {
+            toast.error(`${path} already exists or its draft cannot be checked.`)
+            return
+          }
+          if (!flushOutgoingDraft()) return
           const body = templateFor(fileKind(path))
           // The draft is this file's only copy until it's saved — see the agent's
           // `createFile` for why it's written here and not by the effect.
-          saveDraft(docIdForPath(path), body)
+          const written = writeDraftResult(docIdForPath(path), body)
+          if (!written.ok) {
+            toast.error(`Could not create ${path}: browser storage is ${written.reason}.`)
+            return
+          }
+          setPromptOpen(false)
+          setCreatedPaths((prev) => withPath(prev, path))
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
@@ -1570,7 +1659,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         },
       })
     },
-    [hasWorkspace, localMode, repo, docIdForPath, openPrompt],
+    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths, flushOutgoingDraft, setText],
   )
 
   const requestRename = useCallback(
@@ -1604,13 +1693,41 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setPromptOpen(false)
             return
           }
+          if (!savedPaths || savedPaths.has(newPath) || pendingPaths.has(newPath) ||
+            (localMode && readLocalFileResult(newPath).status !== 'missing') ||
+            readDraftResult(docIdForPath(newPath)).status !== 'missing') {
+            toast.error(`${newPath} already exists or its draft cannot be checked.`)
+            return
+          }
+          if (!flushOutgoingDraft()) return
+          const oldId = docIdForPath(node.path)
+          const newId = docIdForPath(newPath)
+          const draft = readDraftResult(oldId)
+          if (draft.status === 'invalid' || draft.status === 'unavailable' ||
+            (local && draft.status === 'missing')) {
+            toast.error(`Could not move ${node.path}'s draft: ${draft.status}.`)
+            return
+          }
+          // Keep the source until both the draft copy and saved rename succeed.
+          if (draft.status === 'ok') {
+            const copied = writeDraftResult(newId, draft.value.content)
+            if (!copied.ok) {
+              toast.error(`Could not move ${node.path}'s draft: ${copied.reason}.`)
+              return
+            }
+          }
           // The saved case has to land on the store first: everything below moves
           // local bookkeeping to match, and doing that before the write would
           // leave the app pointing at a path the store never got.
           if (!local) {
             if (localMode) {
-              if (!renameLocalFile(node.path, newPath)) {
-                toast.error(`Could not rename ${node.path} — this browser's storage is full.`)
+              const moved = moveLocalFile(node.path, newPath)
+              if (!moved.ok) {
+                if (draft.status === 'ok' && !clearDraft(newId).ok) {
+                  toast.error(`Could not remove the extra draft at ${newPath}; the original remains safe.`)
+                }
+                refreshLocalFiles()
+                toast.error(`Could not rename ${node.path}: ${moved.reason}.`)
                 return
               }
               refreshLocalFiles()
@@ -1624,6 +1741,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 repo.branch,
               )
               if (!res.ok) {
+                if (draft.status === 'ok' && !clearDraft(newId).ok) {
+                  toast.error(`Could not remove the extra draft at ${newPath}; the original remains safe.`)
+                }
                 if (handleExpiredSession(res.error)) return
                 toast.error(res.error.message)
                 return
@@ -1632,13 +1752,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
             }
           }
           setPromptOpen(false)
-          // Carry any unsaved draft over to the new path. For a never-saved file
-          // this *is* the rename — the draft is the only copy of the file.
-          const oldId = docIdForPath(node.path)
-          const newId = docIdForPath(newPath)
-          const draft = loadDraft(oldId)
-          if (draft) saveDraft(newId, draft.content)
-          clearDraft(oldId)
+          if (draft.status === 'ok') {
+            const removed = clearDraft(oldId)
+            if (!removed.ok) toast.error(`Renamed ${node.path}, but its old draft could not be cleared (${removed.reason}).`)
+          }
           // A never-saved rename moves the only copy there is, so the pending set
           // has to follow it or the file drops out of the sidebar under both names.
           if (local) {
@@ -1666,7 +1783,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
       openPrompt,
       openPath,
       pendingPaths,
+      savedPaths,
       docIdForPath,
+      flushOutgoingDraft,
       refreshLocalFiles,
       refreshTree,
     ],
@@ -1685,7 +1804,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setText(NEW_TEMPLATE)
     setLinkTrail([])
     updateConfig({ scratchKind: 'mermaid' })
-  }, [docId, updateConfig])
+  }, [docId, updateConfig, setText])
 
   const requestDelete = useCallback((node: TreeNode) => {
     setDeleteTarget(node)
@@ -1761,10 +1880,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
   /** Bookkeeping for a path that was committed while the user was looking at something else. */
   const settleCommitted = useCallback(
     (path: string, content: string) => {
-      const draft = loadDraft(docIdForPath(path))
-      const outstanding = draft !== null && contentDiffers(draft.content, content, fileKind(path))
+      const draft = readDraftResult(docIdForPath(path))
+      if (draft.status === 'invalid' || draft.status === 'unavailable') {
+        toast.error(`Could not settle ${path}'s draft: ${draft.status}.`)
+        return
+      }
+      const outstanding = draft.status === 'ok' && contentDiffers(draft.value.content, content, fileKind(path))
       if (outstanding) return
-      clearDraft(docIdForPath(path))
+      if (draft.status === 'ok' && !clearDraft(docIdForPath(path)).ok) {
+        toast.error(`Could not clear ${path}'s saved draft.`)
+        return
+      }
       setDirtyPaths((prev) => withoutPaths(prev, [path]))
     },
     [docIdForPath],
@@ -1784,6 +1910,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // untitled document *gives* it a path, so `origin` is null there and the
       // adoption below is exactly what promotes it.
       const origin = openPathRef.current
+      const submittedRevision = workingRevisionRef.current
       setSaving(true)
       const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
       setSaving(false)
@@ -1797,7 +1924,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
         // Committing an untitled scratch document promotes it to a real file, so
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
-        clearDraft(scratchDocId)
+        if (origin === null) {
+          const parked = readDraftResult(scratchDocId)
+          if (canConsumeScratchDraft(true, content, parked.status === 'ok' ? parked.value.content : null,
+            submittedRevision, workingRevisionRef.current)) {
+            clearDraft(scratchDocId)
+          }
+        }
         if (openPathRef.current === origin) {
           setBaseline(content)
           setLoadedSha(res.data.sha)
@@ -1822,10 +1955,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   /** Save to the local store — local mode's whole of `commitCurrent`. */
   const saveLocal = useCallback(
-    (path: string, content: string) => {
-      if (!writeLocalFile(path, content)) {
+    (path: string, content: string, fromScratch = false) => {
+      if (fromScratch && readLocalFileResult(path).status !== 'missing') {
+        toast.error(`${path} already exists or cannot be checked in browser storage.`)
+        return
+      }
+      const written = writeLocalFileResult(path, content)
+      if (!written.ok) {
         toast.error(
-          `Could not save ${path} — this browser's storage is full. ` +
+          `Could not save ${path} — browser storage is ${written.reason}. ` +
             'Export what you need, or delete a file you are done with.',
         )
         return
@@ -1837,7 +1975,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
       refreshLocalFiles()
       // The scratch slot is spent: this document has a name now. Clear the slot for
       // the kind it came from, not just the mermaid one.
-      clearDraft(scratchDocId)
+      if (fromScratch) {
+        const parked = readDraftResult(scratchDocId)
+        if (canConsumeScratchDraft(true, content, parked.status === 'ok' ? parked.value.content : null,
+          workingRevisionRef.current, workingRevisionRef.current)) {
+          clearDraft(scratchDocId)
+        }
+      }
       toast.success(`Saved ${path}`)
     },
     [refreshLocalFiles, scratchDocId],
@@ -1856,8 +2000,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
         submitLabel: 'Save',
         validate: validatePathForKind(kind),
         onSubmit: (path) => {
+          if (!savedPaths || savedPaths.has(path) || pendingPaths.has(path) ||
+            (localMode && readLocalFileResult(path).status !== 'missing') ||
+            readDraftResult(docIdForPath(path)).status !== 'missing') {
+            toast.error(`${path} already exists or its draft cannot be checked.`)
+            return
+          }
           setPromptOpen(false)
-          if (localMode) saveLocal(path, text)
+          if (localMode) saveLocal(path, text, true)
           else void commitCurrent(path, undefined, text)
         },
       })
@@ -1878,6 +2028,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     commitCurrent,
     saveLocal,
     openPrompt,
+    savedPaths,
+    pendingPaths,
+    docIdForPath,
   ])
 
   /* ---------------------------------------------------------------- */
@@ -1891,7 +2044,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const workingCopy = useCallback(
     (path: string): string | null => {
       if (path === openPath) return text
-      return loadDraft(docIdForPath(path))?.content ?? null
+      const draft = readDraftResult(docIdForPath(path))
+      return draft.status === 'ok' ? draft.value.content : null
     },
     [openPath, text, docIdForPath],
   )
@@ -1901,16 +2055,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (!hasWorkspace || saving || saveAllPaths.length === 0) return
 
     if (localMode) {
-      const failed: string[] = []
-      let saved = 0
-      for (const path of saveAllPaths) {
-        const content = workingCopy(path)
-        if (content === null) continue
-        if (!writeLocalFile(path, content)) {
-          failed.push(path)
-          continue
-        }
-        saved += 1
+      const { saved, failed } = saveLocalBatch(saveAllPaths, workingCopy)
+      const savedPathsThisRun = saved.map(({ path }) => path)
+      for (const { path, content } of saved) {
         if (path === openPath) {
           setBaseline(content)
           setLoadedSha(LOCAL_SAVED)
@@ -1918,15 +2065,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
           settleCommitted(path, content)
         }
       }
-      setCreatedPaths((prev) => withoutPaths(prev, saveAllPaths))
+      setCreatedPaths((prev) => withoutPaths(prev, savedPathsThisRun))
       refreshLocalFiles()
       if (failed.length > 0) {
         toast.error(
-          `Could not save ${failed.join(', ')} — this browser's storage is full. ` +
+          `Could not save ${failed.join(', ')} in browser storage. ` +
             'Export what you need, or delete a file you are done with.',
         )
       }
-      if (saved > 0) toast.success(saved === 1 ? `Saved ${saveAllPaths[0]}` : `Saved ${saved} files`)
+      if (savedPathsThisRun.length > 0) toast.success(savedPathsThisRun.length === 1 ? `Saved ${savedPathsThisRun[0]}` : `Saved ${savedPathsThisRun.length} files`)
       return
     }
 
@@ -1936,7 +2083,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const alreadySaved: string[] = []
     for (const path of saveAllPaths) {
       const content = workingCopy(path)
-      if (content === null) continue
+      if (content === null) {
+        setSaving(false)
+        toast.error(`Could not read the unsaved copy of ${path}. Nothing was committed.`)
+        return
+      }
       // Never committed: nothing on the branch to be stale against.
       if (pendingPaths.has(path)) {
         writes.push({ path, content })
@@ -2000,7 +2151,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const committed = res.data.files.map((f) => f.path)
     setCreatedPaths((prev) => withoutPaths(prev, committed))
     setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
-    clearDraft(scratchDocId)
     toast.success(
       committed.length === 1
         ? `Committed ${committed[0]}`
@@ -2021,7 +2171,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     settleCommitted,
     refreshLocalFiles,
     refreshTree,
-    scratchDocId,
   ])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
@@ -2032,7 +2181,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (!canRestore) return
     setText(baseline)
     clearDraft(docId)
-  }, [canRestore, baseline, docId])
+  }, [canRestore, baseline, docId, setText])
 
   // Detect the platform for the correct modifier label (⌘ vs Ctrl).
   useEffect(() => {
@@ -2099,7 +2248,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setLoadedSha(fresh.data.sha)
     setConflictOpen(false)
     clearDraft(docId)
-  }, [repo, openPath, docId])
+  }, [repo, openPath, docId, setText])
 
   const selectVersion = useCallback(
     async (commit: FileCommit) => {
@@ -2272,7 +2421,7 @@ const MAX_LISTED_UNSAVED = 6
     setText(versionContent)
     setHistoryOpen(false)
     toast.info('Version loaded into working tree (unsaved)')
-  }, [versionContent])
+  }, [versionContent, setText])
 
   const onFork = useCallback(() => {
     if (versionContent === null || !repo) return
@@ -2293,9 +2442,10 @@ const MAX_LISTED_UNSAVED = 6
         setText(content)
       },
     })
-  }, [versionContent, repo, kind, openPrompt])
+  }, [versionContent, repo, kind, openPrompt, setText])
 
-  const canSave = hasWorkspace && dirty && text.trim().length > 0 && !saving
+  const canSave =
+    hasWorkspace && dirty && ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving
   /**
    * Whether the save control splits. Not simply "more than one file is dirty": the condition is
    * that there is unsaved work the primary button would *not* reach.

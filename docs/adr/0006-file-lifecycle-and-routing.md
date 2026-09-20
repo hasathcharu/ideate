@@ -97,8 +97,12 @@ together:
 - **Creating a file writes its draft immediately**, rather than leaving it to the
   autosave effect. For a file with no commit behind it the draft is the only copy,
   so it must not depend on a render landing between two creates.
+- **Existence is independent of content.** An empty never-saved named file stays
+  pending and keeps an empty draft. Create and rename reject known saved and
+  pending destinations, and local operations check browser storage itself before
+  replacing a destination. A failed move keeps the source copy.
 - **The draft is the only record such a file leaves**, which is what makes it
-  recoverable after a reload (`listDraftPaths`): a draft under a path the branch
+  recoverable after a reload (`listDraftPathsResult`): a draft under a path the branch
   doesn't have can only be a file created here and never committed. That recovery
   runs **once per repo/branch**, on the first tree load — a rename or a commit
   moves a draft before the updated tree arrives. Re-deriving against a stale tree
@@ -117,6 +121,10 @@ together:
   committed**: a user who kept typing between the click and the switch has newer text
   in there, and that text is the only copy of those keystrokes, so the file stays
   dirty.
+- **A scratch slot is spent only by its own successful promotion.** Saving an
+  already-named file or using Save All leaves parked scratch work untouched. A
+  delayed scratch save clears its draft only if the submitted working revision
+  is still current and the stored draft still contains the submitted content.
 - **A commit hands the path straight to the tree** (`treeWithPath`), in the same
   batch that drops it from `createdPaths`. Membership is what puts the file in the
   sidebar, and committing is exactly what ends it — so waiting for `refreshTree` to

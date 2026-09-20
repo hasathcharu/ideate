@@ -8,7 +8,7 @@ import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { fileKind } from '@/lib/tree'
 import { sceneSummary } from '@/lib/excalidraw'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
-import { docIdForFile, loadDraft } from '@/lib/storage'
+import { docIdForFile, readDraftResult } from '@/lib/storage'
 import { useInnerHtml } from '@/lib/hooks'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
@@ -79,12 +79,13 @@ export default function FileHoverCard({
       // here, in the sidebar and one click away, and its draft is the only copy.
       const draft = res.ok
         ? null
-        : loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        : readDraftResult(docIdForFile(repo.owner, repo.name, repo.branch, path))
       const result: Loaded = res.ok
         ? { ok: true, content: res.data.content }
-        : draft
-          ? { ok: true, content: draft.content }
-          : { ok: false, message: res.error.message }
+        : draft?.status === 'ok'
+          ? { ok: true, content: draft.value.content }
+          : { ok: false, message: draft?.status === 'invalid' || draft?.status === 'unavailable'
+            ? `Draft is ${draft.status} in browser storage.` : res.error.message }
       // A dead session is global, not local to this preview — the shared handler
       // signs out and navigates, so there is nothing to show here.
       if (!res.ok && handleExpiredSession(res.error)) return

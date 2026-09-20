@@ -14,6 +14,7 @@ export class FakeStorage implements Storage {
   private readonly items = new Map<string, string>()
   failGet = false
   failSet = false
+  readonly failSetFor = new Set<string>()
   failRemove = false
 
   get length() { return this.items.size }
@@ -24,7 +25,7 @@ export class FakeStorage implements Storage {
     return this.items.get(key) ?? null
   }
   setItem(key: string, value: string) {
-    if (this.failSet) throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    if (this.failSet || this.failSetFor.has(key)) throw new DOMException('Quota exceeded', 'QuotaExceededError')
     this.items.set(key, value)
   }
   removeItem(key: string) {

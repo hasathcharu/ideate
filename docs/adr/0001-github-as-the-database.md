@@ -43,10 +43,11 @@ connected.
 Two consequences worth naming:
 
 - **localStorage has a quota** (~5MB for everything, drafts included), and a local
-  file has no copy anywhere else. `writeLocalFile` is therefore the one storage
-  function that *reports* failure instead of swallowing it, and the caller says so
-  in a toast. Drafts can hold the only copy of unsaved edits and never-saved
-  files. They are not necessarily redundant copies.
+  file has no copy anywhere else. Content reads distinguish missing, invalid and
+  unavailable storage; writes, moves and deletes report failure. A failed draft
+  write blocks navigation rather than claiming the working copy is durable.
+  Drafts can hold the only copy of unsaved edits and never-saved files. They are
+  not necessarily redundant copies.
 - **`repo === null` no longer means "there are no files."** Anything asking that
   question — including `ideate_status`'s `fileCount` — has to ask about the
   workspace, not about the repository.

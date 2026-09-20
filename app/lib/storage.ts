@@ -53,7 +53,20 @@ export function docIdForLocalFile(path: string): string {
 }
 
 function hasStorage(): boolean {
-  return typeof window !== 'undefined' && !!window.localStorage
+  try {
+    return typeof window !== 'undefined' && !!window.localStorage
+  } catch {
+    return false
+  }
+}
+
+export type StorageRead<T> =
+  | { status: 'ok'; value: T }
+  | { status: 'missing' | 'invalid' | 'unavailable' }
+export type StorageWrite = { ok: true } | { ok: false; reason: 'unavailable' | 'quota' | 'collision' | 'invalid' | 'missing' }
+
+function storageFailure(error: unknown): StorageWrite {
+  return { ok: false, reason: error instanceof Error && error.name === 'QuotaExceededError' ? 'quota' : 'unavailable' }
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -200,8 +213,8 @@ export interface LocalFile {
 
 /** Every saved local file's path. The store is the whole file system in local
  *  mode, so this is what the sidebar lists. */
-export function listLocalFiles(): string[] {
-  if (!hasStorage()) return []
+export function listLocalFilesResult(): StorageRead<string[]> {
+  if (!hasStorage()) return { status: 'unavailable' }
   const paths: string[] = []
   try {
     for (let i = 0; i < window.localStorage.length; i += 1) {
@@ -211,56 +224,70 @@ export function listLocalFiles(): string[] {
       if (path) paths.push(path)
     }
   } catch {
-    return []
+    return { status: 'unavailable' }
   }
-  return paths.sort()
+  return { status: 'ok', value: paths.sort() }
 }
 
-/** A saved local file, or null when the path holds nothing. */
-export function readLocalFile(path: string): LocalFile | null {
-  if (!hasStorage()) return null
+/** A saved local file, or an explicit absence/corruption/access result. */
+export function readLocalFileResult(path: string): StorageRead<LocalFile> {
+  if (!hasStorage()) return { status: 'unavailable' }
+  let raw: string | null
   try {
-    const raw = window.localStorage.getItem(LOCAL_FILE_PREFIX + path)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as { content?: string; updatedAt?: number }
-    if (typeof parsed.content !== 'string') return null
-    return { path, content: parsed.content, updatedAt: parsed.updatedAt ?? 0 }
+    raw = window.localStorage.getItem(LOCAL_FILE_PREFIX + path)
   } catch {
-    return null
+    return { status: 'unavailable' }
+  }
+  if (raw === null) return { status: 'missing' }
+  try {
+    const parsed = JSON.parse(raw) as { content?: string; updatedAt?: number }
+    if (typeof parsed?.content !== 'string' ||
+      (parsed.updatedAt !== undefined && (typeof parsed.updatedAt !== 'number' || !Number.isFinite(parsed.updatedAt)))) {
+      return { status: 'invalid' }
+    }
+    return { status: 'ok', value: { path, content: parsed.content, updatedAt: parsed.updatedAt ?? 0 } }
+  } catch {
+    return { status: 'invalid' }
   }
 }
 
 /** Save a local file. Returns false when the browser refused to store it. */
 export function writeLocalFile(path: string, content: string): boolean {
-  if (!hasStorage()) return false
+  return writeLocalFileResult(path, content).ok
+}
+
+export function writeLocalFileResult(path: string, content: string): StorageWrite {
+  if (!hasStorage()) return { ok: false, reason: 'unavailable' }
   try {
     window.localStorage.setItem(
       LOCAL_FILE_PREFIX + path,
       JSON.stringify({ content, updatedAt: Date.now() }),
     )
-    return true
-  } catch {
-    return false
+    return { ok: true }
+  } catch (error) {
+    return storageFailure(error)
   }
 }
 
-export function deleteLocalFile(path: string): void {
-  if (!hasStorage()) return
+export function deleteLocalFile(path: string): StorageWrite {
+  if (!hasStorage()) return { ok: false, reason: 'unavailable' }
   try {
     window.localStorage.removeItem(LOCAL_FILE_PREFIX + path)
-  } catch {
-    /* ignore */
+    return { ok: true }
+  } catch (error) {
+    return storageFailure(error)
   }
 }
 
-/** Move a saved local file. A no-op when `from` holds nothing, which is the
- *  never-saved case the caller handles by moving the draft alone. */
-export function renameLocalFile(from: string, to: string): boolean {
-  const existing = readLocalFile(from)
-  if (!existing) return true
-  if (!writeLocalFile(to, existing.content)) return false
-  deleteLocalFile(from)
-  return true
+/** Move a saved local file after checking that its destination is absent. */
+export function moveLocalFile(from: string, to: string): StorageWrite {
+  const source = readLocalFileResult(from)
+  if (source.status !== 'ok') return { ok: false, reason: source.status }
+  const destination = readLocalFileResult(to)
+  if (destination.status !== 'missing') return { ok: false, reason: destination.status === 'ok' ? 'collision' : destination.status }
+  const written = writeLocalFileResult(to, source.value.content)
+  if (!written.ok) return written
+  return deleteLocalFile(from)
 }
 
 export interface Draft {
@@ -268,47 +295,68 @@ export interface Draft {
   updatedAt: number
 }
 
-export function loadDraft(docId: string): Draft | null {
-  if (!hasStorage()) return null
+export function readDraftResult(docId: string): StorageRead<Draft> {
+  if (!hasStorage()) return { status: 'unavailable' }
+  let raw: string | null
   try {
-    const raw = window.localStorage.getItem(DRAFT_PREFIX + docId)
-    return raw ? (JSON.parse(raw) as Draft) : null
+    raw = window.localStorage.getItem(DRAFT_PREFIX + docId)
   } catch {
-    return null
+    return { status: 'unavailable' }
+  }
+  if (raw === null) return { status: 'missing' }
+  try {
+    const parsed = JSON.parse(raw) as Draft
+    if (typeof parsed?.content !== 'string' || typeof parsed?.updatedAt !== 'number' ||
+      !Number.isFinite(parsed.updatedAt)) return { status: 'invalid' }
+    return { status: 'ok', value: parsed }
+  } catch {
+    return { status: 'invalid' }
   }
 }
 
-export function saveDraft(docId: string, content: string): void {
-  if (!hasStorage()) return
+export function writeDraftResult(docId: string, content: string): StorageWrite {
+  if (!hasStorage()) return { ok: false, reason: 'unavailable' }
   try {
     const draft: Draft = { content, updatedAt: Date.now() }
     window.localStorage.setItem(DRAFT_PREFIX + docId, JSON.stringify(draft))
-  } catch {
-    /* ignore */
+    return { ok: true }
+  } catch (error) {
+    return storageFailure(error)
   }
 }
 
-export function clearDraft(docId: string): void {
-  if (!hasStorage()) return
+export function clearDraft(docId: string): StorageWrite {
+  if (!hasStorage()) return { ok: false, reason: 'unavailable' }
   try {
     window.localStorage.removeItem(DRAFT_PREFIX + docId)
-  } catch {
-    /* ignore */
+    return { ok: true }
+  } catch (error) {
+    return storageFailure(error)
   }
+}
+
+export function moveDraft(from: string, to: string): StorageWrite {
+  const source = readDraftResult(from)
+  if (source.status !== 'ok') return { ok: false, reason: source.status }
+  const destination = readDraftResult(to)
+  if (destination.status !== 'missing') return { ok: false, reason: destination.status === 'ok' ? 'collision' : destination.status }
+  const written = writeDraftResult(to, source.value.content)
+  if (!written.ok) return written
+  return clearDraft(from)
 }
 
 /** Every path under `owner/repo@branch` that currently has a draft. */
-export function listDraftPaths(owner: string, repo: string, branch: string): string[] {
-  return draftPathsUnder(DRAFT_PREFIX + docIdForFile(owner, repo, branch, ''))
+export function listDraftPathsResult(owner: string, repo: string, branch: string): StorageRead<string[]> {
+  return draftPathsUnderResult(DRAFT_PREFIX + docIdForFile(owner, repo, branch, ''))
 }
 
 /** The same, for local mode. */
-export function listLocalDraftPaths(): string[] {
-  return draftPathsUnder(DRAFT_PREFIX + docIdForLocalFile(''))
+export function listLocalDraftPathsResult(): StorageRead<string[]> {
+  return draftPathsUnderResult(DRAFT_PREFIX + docIdForLocalFile(''))
 }
 
-function draftPathsUnder(prefix: string): string[] {
-  if (!hasStorage()) return []
+function draftPathsUnderResult(prefix: string): StorageRead<string[]> {
+  if (!hasStorage()) return { status: 'unavailable' }
   // The empty path yields the id's own prefix, and slicing by its length keeps
   // paths that contain a colon of their own intact.
   const paths: string[] = []
@@ -320,7 +368,7 @@ function draftPathsUnder(prefix: string): string[] {
       if (path) paths.push(path)
     }
   } catch {
-    return []
+    return { status: 'unavailable' }
   }
-  return paths
+  return { status: 'ok', value: paths }
 }

@@ -16,18 +16,20 @@
 - **`useDebouncedValue` must stay keyed on the open document** (`docId`). It takes a
   `resetKey` that adopts the incoming value immediately when it changes; a delay
   only makes sense while editing *one* document. Unkeyed, everything downstream
-  (preview, export, the draft autosave) sees the *outgoing* document for a full
-  delay window. That can render scene JSON as a Mermaid parse error or write the
-  previous file's text into the new file's draft slot. Keep the key and value in
+  (preview and export) sees the *outgoing* document for a full delay window.
+  That can render scene JSON as a Mermaid parse error. Keep the key and value in
   one `{key, value}` snapshot. On a key mismatch, return the incoming value directly. Do not replace
   this with two state setters during render: a pass can commit with the outgoing
   value and mount a preview for the wrong document. The effect updates the snapshot
   after the delay while the document identity stays the same.
-- **The scratch/file draft is written only while the document is dirty**, and
-  cleared the moment it isn't (the autosave effect in `AppShell`). Saving
+- **The scratch/file draft is written only while the document is dirty**, or
+  while a named file is pending its first save. Persistence uses live text,
+  independently of preview debounce. Navigation flushes an outgoing draft and
+  stays on the document if the write fails. A clean saved document clears its
+  draft (the autosave effect in `AppShell`). Saving
   unconditionally would persist the starter template as a draft and prevent later
-  updates to `templateFor` from reaching untouched documents. Keep the `dirty`
-  gate on any new autosave path.
+  updates to `templateFor` from reaching untouched documents. Keep the dirty or
+  pending gate on any new autosave path.
 - **`refreshTree` never blanks the list.** Discarding the stale list is the caller's
   decision, and only the first load and a repo/branch switch
   (`resetForRepoSwitch`) want it; the incidental refreshes after a

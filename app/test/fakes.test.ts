@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { deferred, FakeGitHubApi, FakeStorage } from './fakes'
-import { readLocalFile, writeLocalFile } from '../lib/storage'
+import { readLocalFileResult, writeLocalFile } from '../lib/storage'
 
 describe('test boundary fakes', () => {
   it('settles competing requests in reverse order', async () => {
@@ -35,7 +35,7 @@ describe('test boundary fakes', () => {
       expect(writeLocalFile('diagram.mmd', 'original')).toBe(true)
       storage.failSet = true
       expect(writeLocalFile('diagram.mmd', 'replacement')).toBe(false)
-      expect(readLocalFile('diagram.mmd')?.content).toBe('original')
+      expect(readLocalFileResult('diagram.mmd')).toMatchObject({ status: 'ok', value: { content: 'original' } })
     } finally {
       Object.defineProperty(globalThis, 'window', {
         configurable: true,
