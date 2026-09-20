@@ -17,20 +17,17 @@
   `resetKey` that adopts the incoming value immediately when it changes; a delay
   only makes sense while editing *one* document. Unkeyed, everything downstream
   (preview, export, the draft autosave) sees the *outgoing* document for a full
-  delay window — which rendered mermaid's parse-error dump for the scene JSON on
-  every canvas→diagram switch, and wrote the previous file's text into the new
-  file's localStorage draft slot. Keep the key and value in one `{key, value}`
-  snapshot. On a key mismatch, return the incoming value directly. Do not replace
+  delay window. That can render scene JSON as a Mermaid parse error or write the
+  previous file's text into the new file's draft slot. Keep the key and value in
+  one `{key, value}` snapshot. On a key mismatch, return the incoming value directly. Do not replace
   this with two state setters during render: a pass can commit with the outgoing
   value and mount a preview for the wrong document. The effect updates the snapshot
   after the delay while the document identity stays the same.
 - **The scratch/file draft is written only while the document is dirty**, and
   cleared the moment it isn't (the autosave effect in `AppShell`). Saving
-  unconditionally persisted the auto-inserted starter template as a draft as soon
-  as it was displayed; that draft then won on every later load, so anyone who had
-  merely *opened* a scratch document was pinned to the template text of that day
-  and edits to `templateFor` never reached them. Keep the `dirty` gate on any new
-  autosave path.
+  unconditionally would persist the starter template as a draft and prevent later
+  updates to `templateFor` from reaching untouched documents. Keep the `dirty`
+  gate on any new autosave path.
 - **`refreshTree` never blanks the list.** Discarding the stale list is the caller's
   decision, and only the first load and a repo/branch switch
   (`resetForRepoSwitch`) want it; the incidental refreshes after a

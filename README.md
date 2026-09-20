@@ -163,11 +163,6 @@ second App for that origin, e.g.
 >   session length separately at 10 idle days, so tokens on the wire stay
 >   short-lived. Turning expiry off to get permanent tokens is a downgrade, not a
 >   simplification.
->
-> **Migrating from the old OAuth App?** Existing sessions are not portable: every
-> signed-in user is signed out once and has to authorize the GitHub App and
-> install it on the repositories they want. Uncommitted drafts live in
-> localStorage and survive. The old OAuth App can then be deleted.
 
 ### 3. Configure environment
 
@@ -204,31 +199,6 @@ it needs a code only your tab knows.
 ```bash
 npm run dev
 ```
-
-Open <http://localhost:3000>. You land on a start page with two choices:
-
-- **Local mode** — start drawing immediately; everything stays in your browser
-  (localStorage). No account needed. Editor, canvas, live themed preview and
-  export all work offline. You get a **file tree** here too: create, save,
-  rename and delete as many diagrams, documents and canvases as you like, with
-  the same unsaved markers and diff gutter as a repo. What local mode does not
-  have is what belongs to git rather than to a file — version history,
-  conflicts, branches and pull requests. A Diagram/Markdown/Canvas toggle picks
-  the surface before you have saved anything, and each keeps its own draft, so
-  flipping between them never overwrites your work.
-
-  Browser storage has a size limit of a few megabytes, and a local file exists
-  nowhere else — export anything you would be sorry to lose.
-- **GitHub repo mode** — sign in with GitHub, install the App on the
-  repositories you want to share (the repo picker links you there if you haven't
-  yet), connect one, pick or create a branch, and commit diagrams there; every
-  commit is a version.
-
-The whole UI recolors to match the selected diagram theme (built with Tailwind v4
-+ shadcn/ui). The file-tree sidebar is collapsible and marks each file with its
-kind; the **+** buttons (at the root or on any folder) let you start a mermaid
-diagram, a markdown document or a canvas. Exports can be downloaded or copied to
-the clipboard, and any surface can be expanded to fill the browser window.
 
 ## Agent Link — let a coding agent edit the open document
 
@@ -282,8 +252,7 @@ A client that only speaks stdio can front it with
 
 **2. Give your agent this tab's pairing code.** In the app, click **Connect Agent**
 in the toolbar, switch it on, and a code like `K7QM-4XZP` appears. Hand it to your
-agent when you ask for something. Case and the dash are ignored, and the alphabet
-omits I, L, O and U so it survives being read aloud.
+agent when you ask for something.
 
 The code is an argument on every tool rather than a header, which is what makes the
 useful thing possible: **naming a different tab's code is how you point the agent at

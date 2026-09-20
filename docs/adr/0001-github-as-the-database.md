@@ -18,10 +18,8 @@ is currently selected. Save = commit; open old version = checkout.
 The rule above concerns durable storage. Agent Link can relay working documents
 through the service, but it does not provide a document database.
 
-What changed is that **local mode has a file system of its own** (`km:file:` in
-`lib/storage.ts`). It used to have one scratch document per kind and no way to keep
-two diagrams at once, which made the signed-out product a demo rather than a tool —
-and made the whole file lifecycle unreachable without a GitHub account.
+**Local mode has its own file system** (`km:file:` in `lib/storage.ts`). Users can
+create and save multiple files without a GitHub account.
 
 The shape is deliberately *the same relationship*, not a second concept:
 
@@ -32,15 +30,13 @@ The shape is deliberately *the same relationship*, not a second concept:
 | Save means       | commit                     | write the local file    |
 | `loadedSha`      | the blob sha               | `'local'` (a sentinel)  |
 
-Because it is the same relationship, the dirty markers, the diff gutter, DiffView,
-Restore, draft recovery across a reload, and the agent's own path resolution work
-in local mode through the code paths they already used. `AppShell` centralizes
+The dirty markers, diff gutter, DiffView, Restore, draft recovery across a reload,
+and agent path resolution work in both modes. `AppShell` centralizes
 document identity and saved-content reads in `docIdForPath` and `readSaved`.
 Writes and tree construction also distinguish the stores.
 
-**What local mode still does not have**, because these are properties of git and
-not of a file: history, conflicts, branches, Open PR, and the hover previews on
-in-repo markdown links. A markdown link to another local file is also not
+Local mode has no Git history, conflicts, branches, Open PR, or hover previews on
+in-repo Markdown links. A Markdown link to another local file is also not
 clickable yet — `lib/markdown.ts` tags in-repo links only when a repo is
 connected.
 
@@ -66,9 +62,8 @@ Three kinds of document, decided purely by file extension (`fileKind` in
   fence inside it renders as a themed diagram (`lib/markdown.ts`).
 - **Excalidraw** (`.excalidraw`) — a JSON scene, edited on a full-bleed canvas.
 
-`.md` is **markdown, not mermaid**. A `.md` file holding bare mermaid source
-(how this app treated the extension before markdown support) now renders as a
-paragraph of text — wrap it in a ```mermaid fence or rename it to `.mmd`.
+`.md` is **Markdown**. Bare Mermaid source in a `.md` file renders as text. Wrap
+it in a ```mermaid fence or use `.mmd`.
 
 All three are plain text on disk, which is why they share *every* GitHub path
 (read/commit/rename/delete/history/conflicts) with no branching. Only the editing

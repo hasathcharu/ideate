@@ -30,7 +30,7 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
 
 ## Non-obvious file facts
 
-- `proxy.ts` — Next 16 request hook (the old `middleware.ts` convention);
+- `proxy.ts` — Next 16 request hook;
   `export { auth as proxy }`. Never redirects; local mode passes straight through.
 - `components/Canvas.tsx` — sets `window.EXCALIDRAW_ASSET_PATH` *before* the
   lazy chunk loads; ordering matters.
@@ -51,8 +51,7 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
   `ensureContrast`). No DOM: it must work on a color *before* it becomes a CSS
   string, which is why `applyThemeToSite` blends numerically instead of emitting
   `color-mix()` for anything it then has to measure.
-- `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. It no
-  longer has to compile under two tsconfigs (the old constraint), but every frame
+- `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. Every frame
   it declares needs a fixture in `ideate-mcp/testdata/frames/`.
 - `lib/sceneLint.ts` — the layout checks an agent's drawing is answered with. Pure
   geometry over finished elements: no React, no I/O, and no value import of
@@ -75,7 +74,6 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
   half of the cross-language wire guard. Its frames must stay hand-written
   literals: deriving one from the fixture it is compared against would assert that
   a file equals itself.
-- `ideate-mcp/` — a separate Go module, not part of any tsconfig. Unlike the Node
-  server it replaced it may log freely, since stdout is no longer a JSON-RPC
-  channel; it logs structured JSON to stderr anyway.
+- `ideate-mcp/` — a separate Go module, not part of any tsconfig. It logs
+  structured JSON to stderr.
 - `types/markdown-it-emoji.d.ts` — the plugin ships no types.

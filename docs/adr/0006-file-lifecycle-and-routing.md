@@ -92,11 +92,8 @@ instead of GitHub (which would 404 on a path the branch doesn't have), and it is
 the flag rename and delete branch on to skip the API. Three rules hold it
 together:
 
-- **It is a set, and it outlives the file being open.** Derived from `openPath`
-  alone — which it was — creating a second file or opening any other file dropped
-  the first one out of the sidebar with its draft still in localStorage and nothing
-  able to reach it: the file appeared to vanish. An agent creating two files in a
-  row hit this every time.
+- **It is a set, and it outlives the file being open.** Deriving pending files
+  from `openPath` would lose files from the sidebar as soon as another file opens.
 - **Creating a file writes its draft immediately**, rather than leaving it to the
   autosave effect. For a file with no commit behind it the draft is the only copy,
   so it must not depend on a render landing between two creates.
@@ -104,8 +101,8 @@ together:
   recoverable after a reload (`listDraftPaths`): a draft under a path the branch
   doesn't have can only be a file created here and never committed. That recovery
   runs **once per repo/branch**, on the first tree load — a rename or a commit
-  moves a draft before the tree proving where the path now lives has arrived, and
-  re-deriving against a stale tree would re-flag a committed path as pending, which
+  moves a draft before the updated tree arrives. Re-deriving against a stale tree
+  would re-flag a committed path as pending, which
   would send its next rename or delete down the local-only branch and skip GitHub.
   For the same reason `confirmDelete` clears the drafts of everything it deletes:
   a leftover draft *is* a pending file to the recovery pass.
@@ -119,13 +116,11 @@ together:
   and its dirty marker. It clears them **only if the draft still matches what was
   committed**: a user who kept typing between the click and the switch has newer text
   in there, and that text is the only copy of those keystrokes, so the file stays
-  dirty. Without the guard the editor was yanked back to the file that had just been
-  saved, and the marker for it never went out.
+  dirty.
 - **A commit hands the path straight to the tree** (`treeWithPath`), in the same
   batch that drops it from `createdPaths`. Membership is what puts the file in the
   sidebar, and committing is exactly what ends it — so waiting for `refreshTree` to
-  prove the path is on the branch left one round trip in which the file belonged to
-  neither set, and it blinked out of the tree and back for that long. It is
+  prove the path is on the branch would briefly remove it from the tree. It is
   recorded as **committed**, not left pending: a pending path reads from a draft
   the commit just spent, and sends rename and delete down the local-only branch
   that skips GitHub.

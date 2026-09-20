@@ -9,11 +9,10 @@
 ## Rule 12
 
 **Agent Link: the pairing code is the credential, and TLS is not optional.**
-Protocol 3 deleted the old token route along with the property that used to
-guard it (its *absence* of CORS headers). The service now issues nothing: the
-tab generates its own code client-side and the service buckets by
-`sha256(code)`, so a hostile page can generate a code and pair with itself,
-which is harmless — it cannot guess the user's. What replaces the old rule:
+The tab generates its pairing code, and the service groups connections by
+`sha256(code)`. The service issues no credential. A page can pair with its own
+code, but cannot guess another tab's code. The security requirements are:
+
 - **The service URL must be `https:`, or `http:` on `localhost`/`127.0.0.1`
   port 7391.** Enforced on *both* sides, in one implementation each —
   `validateMcpOrigin` (`lib/mcpOrigin.ts`) and
@@ -36,13 +35,8 @@ commits. An agent's blast radius is the uncommitted working copy.
 
 ## Agent Link — an agent drives the live editor
 
-**The beta label is gone from the UI** (it was a badge on `AgentLinkModal`'s title
-and a word in every toolbar tooltip), so the licence it carried — change
-`PROTOCOL_VERSION` and the tool surface with no migration path — is gone with it.
-What has not changed is the mechanism: the two sides refuse to talk on a mismatch
-(`CLOSE_PROTOCOL_MISMATCH`), so a bump is a loud, diagnosable break rather than a
-silent one. Which means **ship both ends of a bump together** — a version skew now
-strands a user who has no label telling them to expect it.
+**Ship both ends of a protocol change together.** The tab and service refuse to
+talk when `PROTOCOL_VERSION` differs (`CLOSE_PROTOCOL_MISMATCH`).
 
 `ideate-mcp/` is a Model Context Protocol server that hands a coding agent **a
 document in the browser right now**, not a file on disk. That is the whole point:
@@ -50,44 +44,26 @@ the agent edits, mermaid renders, and the renderer's verdict comes back in the
 result of the agent's own tool call, so a broken diagram gets fixed in the same
 turn. An agent editing files finds out when a human next opens them.
 
-Since protocol 4 that document need not be the one on screen — see "Every document
-tool takes a path" below — but it is still a document *in the tab*, which is what
-keeps the renderer in the loop.
+The document can be open or in the tab's background working copy. The browser
+renderer remains in the feedback loop for either case.
 
-### One remote service, and why the socket turned around
+### One remote service
 
 ```
 agent ──MCP Streamable HTTP──► ideate-mcp (Go) ──WebSocket──► browser tab
 ```
 
-Until protocol 3 this was inverted: the MCP server was a Node process on the user's
-own machine that **listened** on `ws://127.0.0.1:7391-7395`, and the tab dialled out
-to it. That was forced rather than chosen — a web page cannot open a listening
-socket — and it had to go, for reasons no amount of care would have fixed:
+The tab opens a WebSocket to the service. The human gives the tab's pairing code
+to the agent, which connects through MCP Streamable HTTP. This works with remote
+agents and HTTPS pages, including Safari. Agent Link needs a reachable service
+and does not work offline.
 
-- **Safari could not use it at all.** No loopback exemption for mixed content, so
-  `ws://127.0.0.1` from an `https://` page is blocked outright. Chrome's Local
-  Network Access work is heading the same way.
-- **Only an agent on the same machine could reach the tab.** Containers,
-  Codespaces, SSH boxes and browser-based agents were all impossible.
-- Everything awkward about the old design — the port walk, the `Origin` allowlist
-  doing security work, the whole JWT/JWKS apparatus — existed *only* to make a
-  loopback listener safe. Inverting the socket deleted all of it in one go.
-
-The tab is still the WebSocket client; it just dials a service instead of loopback.
-**A pairing code the tab generates, and the human hands to their agent, joins the
-two halves.** The honest cost, and it belongs in the README: **Agent Link no longer
-works offline.**
-
-`lib/agentProtocol.ts` is the wire contract. It has lost its old "must compile under
-two tsconfigs" rule — the app is its only TypeScript consumer now — and gained a
-cross-language mirror in its place; see below.
+`lib/agentProtocol.ts` defines the browser wire contract. The Go service mirrors
+it; see "The wire contract is written twice" below.
 
 ### Which tab, and whose decision
 
-Two deliberate steps gate this, one on each side, and they answer different
-questions. This is unchanged by the transport, and it is the part most worth not
-breaking.
+Two steps gate access, one on each side.
 
 **Which tab** is the human's answer, given by switching Agent Link on there and
 handing over that tab's code — hence the per-tab `sessionStorage` scoping in rule 3.
@@ -114,14 +90,8 @@ which also holds the message still long enough to read.
 
 ### Security: the code is the credential
 
-WebSockets have **no CORS and no same-origin policy**, and that fact used to drive
-the whole design. It no longer does, because there is nothing on the socket worth
-claiming: the service issues nothing, holds nothing durable, and buckets purely by
-`sha256(code)`. A hostile page can generate its own code and pair with itself, which
-is harmless. It cannot guess the user's.
-
-So the old "the security is the absence of CORS headers on the token route" property
-did not move — it **disappeared**, along with the route. What carries the weight now:
+WebSockets have no CORS or same-origin policy. The service holds no durable
+credential and groups connections by `sha256(code)`. Access depends on:
 
 1. **The pairing code**, 8 characters of Crockford base32 (2^40), which only holds up
    because guesses are rationed: a per-IP token bucket on `/mcp` and `/v1/tab`, plus a
@@ -181,17 +151,12 @@ the surface of the build it met. Nothing in the request/response flow corrects t
 the agent simply never learns the tool exists, which is indistinguishable from the
 tool not existing.
 
-`tools: {listChanged: true}` was always advertised (the SDK infers it from a server
-having tools; `tools.Capabilities` now states it instead, because a mechanism resting
-on an inference is a mechanism that can be switched off by an upstream refactor). But
-until SEP-2575 it was undeliverable **here**: stateless mode answers `GET /mcp` with
-405 and every POST's session dies with its request, so there was no channel for a
-server-initiated notification. SEP-2575 adds one and adds it *only* for stateless
-servers — `subscriptions/listen` is a long-lived POST whose SSE stream is the channel.
-That is exactly this transport.
+`tools.Capabilities` explicitly advertises `listChanged`. Stateless MCP uses a
+long-lived `subscriptions/listen` POST and its SSE stream to deliver the
+notification (SEP-2575).
 
-The capability was never the missing piece, though; the **trigger** was. There is one
-observable that says somebody may be holding an older list: a client subscribing. It
+The notification fires when a client subscribes. A subscription indicates that
+the client may hold an older tool list. It
 arrives either because the client is new — it just listed the tools, so a notification
 costs it one redundant `tools/list` — or because its stream died and it came back,
 which after a deploy is precisely the client holding the stale list. So a subscription
@@ -227,9 +192,8 @@ serves, because a wrong list is worse than no list.
 
 ### The wire contract is written twice
 
-`lib/agentProtocol.ts` and `ideate-mcp/internal/protocol` are hand-mirrored, and the
-compiler that used to hold them together is gone. `ideate-mcp/testdata/frames/` is
-the replacement, and it only works if all three locks are held:
+`lib/agentProtocol.ts` and `ideate-mcp/internal/protocol` are hand-mirrored.
+`ideate-mcp/testdata/frames/` checks their agreement if all three rules hold:
 
 1. `lib/agentFrames.test.ts` builds each frame as a **typed TypeScript literal** and
    asserts it deep-equals the fixture. `tsc` checks the literal, so moving the TS types
@@ -246,10 +210,8 @@ bare `string`/`bool` with `omitempty` round-trips both of them wrong.
 
 ### Every document tool takes a path, and the mutating ones require one
 
-Protocol 4. Until then every tool meant "whatever the human is looking at", which made the
-common case free and everything else impossible: an agent asked to fix six diagrams had to
-`ideate_open` each one, dragging the human's editor to a different file six times and
-losing their cursor each time. A `path` argument makes that work invisible to them.
+Each document tool accepts a `path`, so an agent can work on background files
+without moving the human's editor or cursor.
 
 The interesting part is *where the field is optional*, and the two answers are opposite:
 
@@ -305,7 +267,7 @@ shared with a fallback that goes through `setText` for when no editor is mounted
 (a canvas is open, or the diff view has the pane) — refusing there instead would
 make the tools mysteriously unavailable whenever the human was reading a diff.
 
-Two things here were bugs found by running it, not by typechecking:
+Two safeguards are required:
 
 - **`emittedRef` — the echo guard.** The reconcile effect cannot tell an *external*
   `value` change (open a file, restore, `ideate_write`) from an *echo* of the
@@ -320,11 +282,10 @@ Two things here were bugs found by running it, not by typechecking:
   next render — reading state back here reported on the document as it was *before*
   the edit, so breaking a diagram looked clean and fixing it looked broken.
 
-**Known, unfixed:** `ideate_write` immediately followed by `ideate_edit` can race.
+**Known limitation:** `ideate_write` immediately followed by `ideate_edit` can race.
 `writeText` goes through React state while `applyEdits` resolves anchors against the
 *live* CodeMirror document, so the edit can look for text the editor has not received
-yet and fail with "oldText not found". It predates protocol 3 and the remote
-transport makes it *less* likely, not more. The fix, if it is wanted, is to route
+yet and fail with "oldText not found". The fix is to route
 `writeText` through the editor handle when one is mounted.
 
 ### Scene edits go through `setText`, and route their own arrows
@@ -352,30 +313,13 @@ failing. Excalifont is handwriting and ~20% wider than that substitute
 generated box came out sized for a font it would not be drawn in, and clipped its
 own label. Double-clicking the shape appeared to fix it because opening the text
 editor puts the font on screen, which loads it, and Excalidraw re-measures on blur.
-So `applySceneOps` awaits `awaitTextFonts` before it converts anything. Two things
-that helper depends on: the faces are registered on `document.fonts` by the
-*mounted* editor and not by importing the library (hence the bounded wait, not a
-bare `load`), and each face is a per-glyph-range subset (hence passing the text, so
-`load` fetches the subsets those characters need).
-
-**Which is exactly the wrong dependency, because `scene_edit` exists to work on a
-file nobody is looking at.** Waiting for a mounted editor could not serve its main
-use, and `create_canvas` drew before it opened, so the commonest way to reach either
-tool — an agent drawing while the human reads a markdown file — measured every label
-against the substitute face. Verified in the browser: with no canvas mounted,
-`Excalifont` is absent from `document.fonts` after six seconds of polling, and
-`measureText` returns 184px for "Authentication Service" where a mounted editor
-returns 220px.
-
-So **the app registers the faces itself, at page load** (`lib/excalidrawFonts.ts`),
-and the measurement stopped depending on what is on screen. Getting there needed the
-declarations, which live in the bundle rather than in any stylesheet, so
-`scripts/vendor-excalidraw-assets.mjs` — already copying the woff2 files — now also
-lifts out the `@font-face` descriptors beside them. That is a real coupling to
-minified internals, so every assumption it makes is asserted: an unresolvable
-`unicode-range`, or a vendored file no descriptor accounts for, **fails the build**
-with a message naming what it could not find. Shipping an app that measures text
-wrong is the failure mode being designed against, and it is silent.
+`applySceneOps` awaits `awaitTextFonts` before conversion. The app registers
+font faces at page load (`lib/excalidrawFonts.ts`), so background scene edits
+do not depend on a mounted canvas. Font subsets load for the text being
+measured. The font declarations live in the Excalidraw bundle, so
+`scripts/vendor-excalidraw-assets.mjs` extracts them alongside the woff2 files.
+The script asserts each assumption about the bundle and fails the build if
+a descriptor or vendored file cannot be matched.
 
 Three things fell out of the shape of the data:
 
@@ -395,23 +339,13 @@ Three things fell out of the shape of the data:
   against its own `FontFace` objects. Measured with all 14 Excalifont faces
   registered: still 220px, and a real scene renders identically.
 
-`awaitTextFonts` is a plain load again as a result — no poll, no timeout — and it
-still **returns whether it succeeded**, which the caller turns into a
-`font_unavailable` warning. Silence was the original defect: the drawing came back
-looking fine to the agent and clipped to the human. The warning now means the app
-failed to fetch its own assets rather than "no canvas was open", which is a bug
-report rather than a workaround. `create_canvas` went back to drawing once. Note that
-`document.fonts.check` cannot stand in for knowing the faces are registered: it
-answers **true** for a family with no faces at all, because an unmatched family falls
-through to a system font and a system font is always ready.
+`awaitTextFonts` returns whether loading succeeded. The caller reports
+`font_unavailable` when the app cannot fetch its assets, so the agent knows
+that text geometry may be wrong. `document.fonts.check` cannot replace face
+registration: it returns true when a family has no registered faces because
+a system font can satisfy the request.
 
-An earlier version of this fix had `create_canvas` draw twice — once to validate,
-then again on the canvas it had just opened. It is worth recording why that was
-abandoned rather than kept as a belt: it only ever helped the one tool that opens
-something, and the mount it waited for took 3.7s in dev against the 3s budget it was
-given, so it was a slow fix that was also flaky.
-
-Which is also why **a text change re-measures the box around it** (`refit`), rather
+**A text change re-measures the box around it** (`refit`), rather
 than writing the new string in beside the old string's geometry. It runs the same
 skeleton conversion the add path uses, because `measureText`, `wrapText` and
 `redrawTextBoundingBox` are all unexported and re-deriving the wrap, the container
@@ -484,14 +418,9 @@ grid snapping and relative placement are all still open.
 
 ### `align` and `distribute`, and the binding bug they uncovered
 
-Protocol 6. The two ops are the answer to a finding the linter was already making:
-`misaligned` reports edges that nearly line up, which is the tell of coordinates
-worked out by hand, and the only way an agent could act on it was to work out more
-coordinates by hand. Worse ones, in fact — every number it holds came from a
-`scene_get` several edits ago, and the *widths* in it were never chosen by anyone,
-since a shape holding a label is sized by a text measurement against a font the agent
-has never seen. `align` and `distribute` move the arithmetic to the side holding
-current geometry. That is the whole justification, and it is why the list stops there:
+`misaligned` reports edges that nearly line up. `align` and `distribute` use the
+current scene geometry, including measured label widths, so the agent does not
+have to calculate new coordinates from an earlier `scene_get`. The list stops there:
 `duplicate` is another `add`, and `group`/`ungroup`/`lock` change nothing an agent can
 observe, since `scene_get` reports neither `groupIds` nor `locked`.
 
@@ -523,10 +452,8 @@ route through them rather than writing coordinates:
 
 ### `scene_render`, because the linter was always an approximation of looking
 
-Protocol 6. `lib/sceneLint.ts` is a list of the defects somebody thought to write a
-rule for; the section above says as much when it admits the router causes two of the
-findings it reports. The agent still cannot *see* the drawing, and no number of rules
-turns into looking at it.
+`lib/sceneLint.ts` catches only the defects it knows to check. The agent also
+needs to see the drawing to judge its layout.
 
 So `ideate_scene_render` hands back a picture, and every decision about it follows from
 the two costs it carries — a shared relay serving every paired tab, and a context
@@ -535,11 +462,7 @@ window charged by the pixel:
 - **1024px on the longest edge, WebP at q0.85, opaque.** About a thousand image
   tokens, near enough what a medium `scene_get` costs, which keeps it cheap enough to
   call after every edit — and that it *gets* called is the only thing that makes it
-  worth having. It started at 768/q0.7 on the theory that layout was the whole job and
-  labels could be read elsewhere. That was the wrong trade: an agent looking at a
-  picture it cannot read the labels in cannot tell which box is which, so it goes and
-  calls `scene_get` anyway and the render was pure cost. Legible is the floor, and
-  1024 is where 20px label text survives the encode.
+  worth having. At 1024px, 20px label text remains readable after encoding.
 - **The cap is a ceiling, not a target.** The scale never exceeds 1. Upscaling adds
   pixels and no information — 20px of text is 20px of detail however large it is
   drawn — so a small drawing arrives at its natural size and only a large one is
@@ -593,14 +516,11 @@ the only reason to convert one.
 
 ### The agent is told the theme, because the theme is not in the document
 
-Protocol 5. An agent asked to color a node used to have exactly one way to do it —
-write the color into the file — and that is the one thing it should not do. A mermaid
-theme lives in `AppConfig.mermaidConfig` and is **injected at render time**; the file
-on the branch holds bare ```mermaid fences. So `style A fill:#f00` does not color a
-node, it opts that node out of every theme the human picks afterwards, and there was
-nothing anywhere in the tool surface to say so. Adding `theme` to `BridgeState` and
-the reasoning to `ideate_edit`'s description is the whole fix: the agent can see there
-is a palette, and it is told the palette is applied later.
+A Mermaid theme lives in `AppConfig.mermaidConfig` and is **injected at render
+time**; the file on the branch holds bare ```mermaid fences. A hardcoded
+`style A fill:#f00` opts that node out of later theme choices. `BridgeState`
+reports `theme`, and the `ideate_edit` description tells the agent that the
+palette applies at render time.
 
 **A canvas is the opposite case, and the same field carries it.** Excalidraw stores a
 literal `strokeColor` on every element — there is no token layer to re-resolve, so
@@ -612,10 +532,8 @@ draw in light colors — produces a drawing that inverts to dark-on-dark. Hence
 and the display handles the rest. The mermaid theme only ever contributes the canvas
 *mode* and the background painted behind it, never an element color.
 
-`SceneElementSummary` grew `strokeColor`/`backgroundColor` for the consequence of all
-that: a scene *is* its colors, so matching the neighbours means having seen them, and
-the only way to see them before was `full` — the entire scene JSON, to answer a
-question about two hex strings.
+`SceneElementSummary` reports `strokeColor` and `backgroundColor`, so an agent
+can match nearby elements without requesting the full scene JSON.
 
 Both are nullable, and neither is defaulted. A theme `name` is null when no theme is
 set and mermaid's own look applies; an element color is null when the file does not
@@ -624,13 +542,9 @@ does not have, which is worse than reporting nothing.
 
 ### `ideate_create_canvas` exists because `scene_edit` deliberately will not open a file
 
-Both halves already existed and neither did the job. `create_file` could once make a
-`.excalidraw` file, but its `content` is raw scene JSON — element records with ids,
-bindings, seeds and measured text boxes — which is not something to ask a model to
-author, and omitting it only opens an empty canvas nobody asked to look at. `scene_edit`
-creates the file its path names and draws into it properly, but **leaves the editor
-where it is**, because it exists to work on files the human is not looking at, and
-yanking their editor around is the cost that buys.
+`scene_edit` can create a canvas file and draw into it, but **leaves the editor
+where it is** so an agent can work in the background. `create_file` accepts text
+documents only; authoring raw Excalidraw scene JSON is not a useful tool surface.
 
 A brand-new canvas is the one case where that trade inverts: there is nothing to yank
 them away from, and a drawing nobody is shown may as well not have been drawn. So
@@ -644,10 +558,8 @@ so a failure leaves no half-made file. Same all-or-nothing rule `edit` follows. 
 extension check is also on both sides, because the tab is the side that would otherwise
 open a markdown document in response to a request to draw.
 
-**`create_file` refuses `.excalidraw` for the mirror-image reason**, on both sides too.
-Once `create_canvas` exists, the only thing the old path bought was an empty canvas or a
-hand-authored scene file, and both are worse than the retry the refusal costs. So the
-two creating tools now partition the extensions between them rather than overlapping on
+**`create_file` refuses `.excalidraw`** on both sides. The two creating tools
+partition the extensions rather than overlapping on
 one: `create_file` takes `.mmd`/`.mermaid`/`.md`/`.markdown`, `create_canvas` takes
 `.excalidraw`, and each refusal names the other tool. This needs no `PROTOCOL_VERSION`
 bump — the `create_file` frame is unchanged and the refusal is an ordinary tool error.
@@ -683,8 +595,7 @@ tab at the result — the docs link there is for the environment variables, not 
 the one line that gets you running.
 
 Then point the tab at it in **Agent Link → Advanced options**. `http://localhost:7391`
-and `http://127.0.0.1:7391` are the plaintext origins both sides accept (rule 12); 7391 is the old bridge
-port, kept because it is the number in everyone's muscle memory.
+and `http://127.0.0.1:7391` are the plaintext origins both sides accept (rule 12).
 
 
 
