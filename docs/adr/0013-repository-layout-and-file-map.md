@@ -70,10 +70,13 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
 - `lib/mcpOrigin.ts` — the TLS rule for the Agent Link service origin, and the
   `ws://`/`wss://` derivation. Mirrored by `internal/config.ValidateMCPOrigin`,
   whose test carries the same cases.
-- `lib/agentFrames.test.ts` — the only vitest file in the app, and the TypeScript
+- `lib/agentFrames.test.ts` — the TypeScript
   half of the cross-language wire guard. Its frames must stay hand-written
   literals: deriving one from the fixture it is compared against would assert that
   a file equals itself.
+- `test/fakes.ts` — controlled promises, browser storage, and GitHub API responses
+  for deterministic lifecycle tests. The app workflow runs typecheck, build, lint,
+  and Vitest on pull requests and pushes to `main`.
 - `ideate-mcp/` — a separate Go module, not part of any tsconfig. It logs
   structured JSON to stderr.
 - `types/markdown-it-emoji.d.ts` — the plugin ships no types.
