@@ -1,4 +1,4 @@
-# 0004. What may live in localStorage, and what must be per-tab
+# 0004. Browser persistence and per-tab state
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/types.ts, app/lib/agentLink.ts, app/lib/mcpOrigin.ts`
 
@@ -8,7 +8,7 @@
 
 ## Rule 3
 
-**localStorage stores only** local-mode saved files (`km:file:`), uncommitted editor drafts, and app config
+**IndexedDB stores document content**: local-mode saved files in `local-files` and uncommitted drafts in `drafts`. **localStorage stores only app config**
 (selected repo, active theme, export prefs, scratch-document kind, editor
 line-wrap and viewfinder, **and the Agent Link service origin**). Never
 tokens/secrets. Two pieces of Agent Link state are deliberately *not* in
@@ -31,13 +31,15 @@ the deployment, not of one tab, and it is a URL rather than a credential.
 
 Content storage has explicit read outcomes: present, missing, invalid data, or
 unavailable storage. Draft and local-file writes report quota/access failure.
-Moves check the destination and write it before deleting the source. A failed
-copy leaves the source in place; a failed source deletion may leave two copies,
-which is recoverable and reported to the caller. The per-tab Agent Link state
+Moves check the destination and change source and destination in one transaction. Local
+saves, renames, and deletes update related saved-file and draft records atomically. A
+transaction reports success only after completion; abort, quota, blocked-open, and upgrade
+failures are unavailable or quota outcomes, never an empty workspace. The per-tab Agent Link state
 remains separate from these document records.
 
 `WorkspaceStore` is the in-memory owner for working document revisions and save
 settlement. Its keys include full workspace identity so equal paths in two
-repositories or branches are separate records. Storage is still synchronous
-localStorage in this stage; the asynchronous IndexedDB migration is planned after
-shared document commands are in place.
+repositories or branches are separate records. Document storage is asynchronous. Writes enter an ordered queue, and navigation awaits
+the outgoing dirty draft before changing the active document. Legacy `km:file:` and
+`km:draft:` localStorage records are deliberately neither imported, read through, nor
+deleted: this storage generation starts empty.

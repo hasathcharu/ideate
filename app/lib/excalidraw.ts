@@ -4,7 +4,7 @@ import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 /**
  * Excalidraw scene files, as plain text. A `.excalidraw` file is JSON, so it rides the *entire*
  * existing GitHub path unchanged — `readFile`/`commitFile` base64 it like any other text blob,
- * drafts go to localStorage as strings, and conflict detection stays blob-sha based.
+ * drafts go to IndexedDB as strings, and conflict detection stays blob-sha based.
  */
 
 /** The shape of a `.excalidraw` file. `appState`/`files` are optional because

@@ -8,7 +8,7 @@ when a decision changes.
 
 This diagram editor uses the user's GitHub repository as committed storage. There is
 no app database. GitHub Save creates a commit on the selected branch. Local mode saves
-files in localStorage under `km:file:` and has no history, conflicts, branches, or PRs.
+files in IndexedDB and has no history, conflicts, branches, or PRs.
 Both modes layer uncommitted drafts over saved files.
 
 `fileKind` in `app/lib/tree.ts` selects the document kind by extension:
@@ -30,8 +30,8 @@ Rule numbers remain stable because source comments and ADRs refer to them.
 2. **Never expose GitHub access or refresh tokens to client code.** Keep them out of
    session callback results, client props, and browser storage. Read credentials
    server-side through `getGitHubToken()`.
-3. **localStorage holds only drafts, app config, and local-mode saved files.** Report
-   `writeLocalFile` failures. Store Agent Link's switch and pairing code in per-tab
+3. **IndexedDB holds drafts and local-mode saved files; localStorage holds only app config.** Report
+   document-storage failures. Store Agent Link's switch and pairing code in per-tab
    sessionStorage. Keep `AppConfig.mcpOrigin` in shared config.
 4. **Current-content operations take the caller's branch.** History reads take an
    explicit ref. Metadata operations need no artificial branch argument. GitHub

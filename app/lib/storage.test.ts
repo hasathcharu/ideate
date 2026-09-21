@@ -1,83 +1,137 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { FakeStorage } from '../test/fakes'
-import {
-  moveDraft, moveLocalFile, readDraftResult, readLocalFileResult,
-  listLocalFilesResult, listLocalDraftPathsResult, writeDraftResult, writeLocalFileResult,
-} from './storage'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { indexedDB, IDBKeyRange, IDBObjectStore } from 'fake-indexeddb'
 
-let storage: FakeStorage
-const originalWindow = globalThis.window
+type StorageModule = typeof import('./storage')
+let storage: StorageModule
 
-beforeEach(() => {
-  storage = new FakeStorage()
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: storage } })
+beforeEach(async () => {
+  vi.resetModules()
+  vi.stubGlobal('indexedDB', indexedDB)
+  vi.stubGlobal('IDBKeyRange', IDBKeyRange)
+  await new Promise<void>((resolve) => {
+    const request = indexedDB.deleteDatabase('ideate-documents')
+    request.onsuccess = request.onerror = request.onblocked = () => resolve()
+  })
+  storage = await import('./storage')
 })
-afterEach(() => Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow }))
+afterEach(() => vi.unstubAllGlobals())
 
-describe('storage boundaries', () => {
-  it('distinguishes absent, corrupt, and unavailable drafts', () => {
-    expect(readDraftResult('a')).toEqual({ status: 'missing' })
-    storage.setItem('km:draft:a', '{bad')
-    expect(readDraftResult('a')).toEqual({ status: 'invalid' })
-    storage.failGet = true
-    expect(readDraftResult('a')).toEqual({ status: 'unavailable' })
+describe('document storage boundary', () => {
+  it('keeps full workspace identity in draft keys', () => {
+    expect(storage.docIdForFile('owner', 'repo', 'main', 'docs/a.mmd')).toBe('owner/repo@main:docs/a.mmd')
+    expect(storage.docIdForLocalFile('docs/a.mmd')).toBe('local:file:docs/a.mmd')
+    expect(storage.scratchDocIdFor('markdown')).not.toBe(storage.scratchDocIdFor('mermaid'))
   })
 
-  it('does not treat a corrupt saved file as an absent destination', () => {
-    storage.setItem('km:file:b.mmd', '{bad')
-    writeLocalFileResult('a.mmd', 'source')
-    expect(readLocalFileResult('b.mmd')).toEqual({ status: 'invalid' })
-    expect(moveLocalFile('a.mmd', 'b.mmd')).toEqual({ ok: false, reason: 'invalid' })
-    expect(readLocalFileResult('a.mmd')).toMatchObject({ status: 'ok', value: { content: 'source' } })
+  it('starts empty without reading legacy localStorage document records', async () => {
+    const legacy = { length: 2, key: (i: number) => ['km:file:old.mmd', 'km:draft:local:file:old.mmd'][i],
+      getItem: vi.fn(() => { throw new Error('legacy content must not be read') }) }
+    vi.stubGlobal('window', { localStorage: legacy })
+    await expect(storage.listLocalFilesResult()).resolves.toEqual({ status: 'ok', value: [] })
+    expect(legacy.getItem).not.toHaveBeenCalled()
   })
 
-  it('does not discard a draft when the destination write fails', () => {
-    expect(writeDraftResult('a', 'only copy').ok).toBe(true)
-    storage.failSet = true
-    expect(moveDraft('a', 'b')).toEqual({ ok: false, reason: 'quota' })
-    expect(readDraftResult('a')).toMatchObject({ status: 'ok', value: { content: 'only copy' } })
-    expect(readDraftResult('b')).toEqual({ status: 'missing' })
-  })
-
-  it('does not discard a saved local file when its move cannot write', () => {
-    writeLocalFileResult('a.mmd', 'only saved copy')
-    storage.failSet = true
-    expect(moveLocalFile('a.mmd', 'b.mmd')).toEqual({ ok: false, reason: 'quota' })
-    expect(readLocalFileResult('a.mmd')).toMatchObject({ status: 'ok', value: { content: 'only saved copy' } })
-    expect(readLocalFileResult('b.mmd')).toEqual({ status: 'missing' })
-  })
-
-  it('rejects local and draft destination collisions', () => {
-    writeLocalFileResult('a.mmd', 'a')
-    writeLocalFileResult('b.mmd', 'b')
-    writeDraftResult('a', 'a')
-    writeDraftResult('b', 'b')
-    expect(moveLocalFile('a.mmd', 'b.mmd')).toEqual({ ok: false, reason: 'collision' })
-    expect(moveDraft('a', 'b')).toEqual({ ok: false, reason: 'collision' })
-    expect(readLocalFileResult('a.mmd')).toMatchObject({ status: 'ok', value: { content: 'a' } })
-    expect(readLocalFileResult('b.mmd')).toMatchObject({ status: 'ok', value: { content: 'b' } })
-  })
-
-  it('leaves the source available if deletion fails after a successful copy', () => {
-    writeDraftResult('a', 'only copy')
-    storage.failRemove = true
-    expect(moveDraft('a', 'b')).toEqual({ ok: false, reason: 'unavailable' })
-    expect(readDraftResult('a')).toMatchObject({ status: 'ok', value: { content: 'only copy' } })
-    expect(readDraftResult('b')).toMatchObject({ status: 'ok', value: { content: 'only copy' } })
-  })
-
-  it('treats an inaccessible storage property as unavailable', () => {
-    Object.defineProperty(globalThis, 'window', {
-      configurable: true,
-      value: { get localStorage() { throw new DOMException('blocked', 'SecurityError') } },
+  it('restores local files and drafts after the storage module reloads', async () => {
+    await storage.writeLocalFileResult('a.mmd', 'saved')
+    await storage.writeDraftResult('local:file:a.mmd', 'working')
+    vi.resetModules()
+    const reloaded = await import('./storage')
+    await expect(reloaded.readLocalFileResult('a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'saved' },
     })
-    expect(writeLocalFileResult('a.mmd', 'a')).toEqual({ ok: false, reason: 'unavailable' })
-    expect(readLocalFileResult('a.mmd')).toEqual({ status: 'unavailable' })
-    expect(listLocalFilesResult()).toEqual({ status: 'unavailable' })
+    await expect(reloaded.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'working' },
+    })
   })
 
-  it('lists an empty never-saved file as a draft', () => {
-    writeDraftResult('local:file:empty.mmd', '')
-    expect(listLocalDraftPathsResult()).toEqual({ status: 'ok', value: ['empty.mmd'] })
+  it('persists local files and lists paths without loading their bodies', async () => {
+    await expect(storage.writeLocalFileResult('b.mmd', 'B')).resolves.toEqual({ ok: true })
+    await expect(storage.writeLocalFileResult('a.mmd', 'A')).resolves.toEqual({ ok: true })
+    await expect(storage.listLocalFilesResult()).resolves.toEqual({ status: 'ok', value: ['a.mmd', 'b.mmd'] })
+    await expect(storage.readLocalFileResult('a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { path: 'a.mmd', content: 'A' },
+    })
+  })
+
+  it('creates a draft only when its full document key is absent', async () => {
+    await expect(storage.createDraftResult('local:file:a.mmd', 'first')).resolves.toEqual({ ok: true })
+    await expect(storage.createDraftResult('local:file:a.mmd', 'replacement')).resolves.toEqual({
+      ok: false, reason: 'collision',
+    })
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'first' },
+    })
+  })
+
+  it('keeps the newest concurrent draft write', async () => {
+    const first = storage.writeDraftResult('local:file:a.mmd', 'first')
+    const second = storage.writeDraftResult('local:file:a.mmd', 'second')
+    await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true }, { ok: true }])
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'second' },
+    })
+  })
+
+  it('moves a saved file and draft atomically and rejects collisions', async () => {
+    await storage.writeLocalFileResult('a.mmd', 'saved')
+    await storage.writeDraftResult('local:file:a.mmd', 'working')
+    await storage.writeLocalFileResult('occupied.mmd', 'occupied')
+    await expect(storage.moveLocalFileAndDraft('a.mmd', 'occupied.mmd',
+      'local:file:a.mmd', 'local:file:occupied.mmd', true)).resolves.toEqual({ ok: false, reason: 'collision' })
+    await expect(storage.readLocalFileResult('a.mmd')).resolves.toMatchObject({ status: 'ok' })
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({ status: 'ok' })
+
+    await expect(storage.moveLocalFileAndDraft('a.mmd', 'renamed.mmd',
+      'local:file:a.mmd', 'local:file:renamed.mmd', true)).resolves.toEqual({ ok: true })
+    await expect(storage.readLocalFileResult('a.mmd')).resolves.toEqual({ status: 'missing' })
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toEqual({ status: 'missing' })
+    await expect(storage.readLocalFileResult('renamed.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'saved' },
+    })
+    await expect(storage.readDraftResult('local:file:renamed.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'working' },
+    })
+  })
+
+  it('reports quota failure and leaves the prior durable copy intact', async () => {
+    await storage.writeDraftResult('local:file:a.mmd', 'original')
+    const put = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementationOnce(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    await expect(storage.writeDraftResult('local:file:a.mmd', 'replacement')).resolves.toEqual({
+      ok: false, reason: 'quota',
+    })
+    put.mockRestore()
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'original' },
+    })
+  })
+
+  it('does not promote scratch over a concurrently created named draft', async () => {
+    await storage.writeDraftResult('local:scratch', 'scratch')
+    await storage.createDraftResult('local:file:a.mmd', 'other work')
+    await expect(storage.saveLocalFileAndClearDraft('a.mmd', 'scratch', 'local:scratch', true,
+      'local:file:a.mmd')).resolves.toEqual({ ok: false, reason: 'collision' })
+    await expect(storage.readLocalFileResult('a.mmd')).resolves.toEqual({ status: 'missing' })
+    await expect(storage.readDraftResult('local:scratch')).resolves.toMatchObject({ status: 'ok' })
+  })
+
+  it('saves a local file and clears its matching draft in one completed transaction', async () => {
+    await storage.writeDraftResult('local:file:a.mmd', 'working')
+    await expect(storage.saveLocalFileAndClearDraft('a.mmd', 'working', 'local:file:a.mmd')).resolves.toEqual({ ok: true })
+    await expect(storage.readLocalFileResult('a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'working' },
+    })
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toEqual({ status: 'missing' })
+  })
+
+  it('reports an unavailable database instead of an empty workspace', async () => {
+    vi.resetModules()
+    vi.stubGlobal('indexedDB', undefined)
+    const unavailable = await import('./storage')
+    await expect(unavailable.openDocumentStorage()).resolves.toEqual({ ok: false, reason: 'unavailable' })
+    await expect(unavailable.listLocalFilesResult()).resolves.toEqual({ status: 'unavailable' })
+    await expect(unavailable.readDraftResult('a')).resolves.toEqual({ status: 'unavailable' })
+    await expect(unavailable.writeDraftResult('a', 'only copy')).resolves.toEqual({ ok: false, reason: 'unavailable' })
   })
 })

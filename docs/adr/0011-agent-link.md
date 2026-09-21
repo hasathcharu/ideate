@@ -241,7 +241,7 @@ says "required" in prose and `targetPathArgs` explains why the Go side does not 
 too.
 
 `resolveTarget` is where a path becomes a document, and there are three places one can be
-living: React state (the open one), a localStorage draft (never saved), or the saved store.
+living: React state (the open one), an IndexedDB draft (never saved), or the saved store.
 A draft is layered over the saved content whenever it differs, because the draft is what
 the human would see if they opened it — answering with saved bytes is how an agent talks
 itself into re-doing an edit it made one call earlier. It reads the draft *straight from
@@ -662,7 +662,7 @@ which typechecking can see:
 - **a path that matches no file** — created by `edit`/`write`/`scene_edit`, and *not*
   created when the edit's anchor fails
 - **local mode with files**: create, save, rename, delete, and the same agent matrix
-  against `km:file:` instead of a branch
+  against the local IndexedDB file store instead of a branch
 - **`ideate_status` after changing the Theme dropdown** — the reported `name` follows
   it through preset → Custom (a hand-edited palette) → None, and `mode` flips with a
   dark preset

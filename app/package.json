@@ -57,6 +57,7 @@
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.2.11",
+    "fake-indexeddb": "^6.2.5",
     "puppeteer-core": "^25.3.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",

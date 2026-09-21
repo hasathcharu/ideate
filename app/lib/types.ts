@@ -1,4 +1,4 @@
-/** Identifies which document a localStorage draft belongs to. */
+/** Identifies which document a persisted draft belongs to. */
 export type DocId = string
 
 /** Safe, non-secret session fields passed to the client. Never a token. */

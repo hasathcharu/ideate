@@ -17,6 +17,11 @@
   state. The shell still has presentation state while commands are moved to the
   shared owner in the next stage.
 
+- IndexedDB document writes are asynchronous and ordered. A caller reports durability only
+  after the transaction completes. Navigation awaits the outgoing dirty draft and remains on
+  the current document when persistence fails. Key listings do not load document bodies.
+  Related local saved-file and draft changes share one transaction.
+
 - TypeScript strict; server actions return `ActionResult<T>` so the client can
   branch on errors (especially `kind: 'conflict'` for 409/422, and
   `kind: 'unauthenticated'` for 401 / a dead session) without try/catch.

@@ -74,12 +74,12 @@ export default function FileHoverCard({
     }
     let cancelled = false
     setLoaded(null)
-    void readFile(repo.owner, repo.name, path, repo.branch).then((res) => {
+    void readFile(repo.owner, repo.name, path, repo.branch).then(async (res) => {
       // A never-committed file isn't on the branch, so the read 404s — but the file does exist
       // here, in the sidebar and one click away, and its draft is the only copy.
       const draft = res.ok
         ? null
-        : readDraftResult(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        : await readDraftResult(docIdForFile(repo.owner, repo.name, repo.branch, path))
       const result: Loaded = res.ok
         ? { ok: true, content: res.data.content }
         : draft?.status === 'ok'

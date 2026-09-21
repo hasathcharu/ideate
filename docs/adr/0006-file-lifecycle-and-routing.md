@@ -22,7 +22,7 @@ without a selected repository has neither workspace.
 With a file open, its extension picks the editing surface. With nothing open,
 there is no extension to read, so the user
 chooses via a Diagram/Markdown/Canvas toggle backed by `AppConfig.scratchKind`.
-**Each kind gets its own localStorage draft slot** (`SCRATCH_DOC_ID` /
+**Each kind gets its own IndexedDB draft slot** (`SCRATCH_DOC_ID` /
 `SCRATCH_MARKDOWN_DOC_ID` / `SCRATCH_SCENE_DOC_ID`, resolved through
 `scratchDocIdFor`), so toggling parks the current work instead of overwriting it
 with content the other surface can't read. Route every scratch-slot lookup through
@@ -75,10 +75,10 @@ returns to. The filter itself is in memory only: one left on across a reload is 
 sidebar that looks like a repo with three files in it.
 
 **Renaming a never-committed file is local only.** Such a file is spliced into the
-sidebar from `pendingPaths` and its content is a localStorage draft; GitHub has
+sidebar from `pendingPaths` and its content is an IndexedDB draft; GitHub has
 nothing under either name, so `renameFile` would ask git to move a path that isn't
 in the tree and get a 404 back. `requestRename` branches on
-`pendingPaths.has(node.path)` and moves the draft slot instead — which is the same
+`pendingPaths.has(node.path)` and moves the draft record in one IndexedDB transaction instead — which is the same
 thing creating it under the new name would have done — skipping both the API call
 and the tree refresh, since the branch didn't change. The committed path still
 lands on GitHub *first*: reordering that would leave the app pointing at a path the

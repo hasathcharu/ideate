@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { deferred, FakeGitHubApi, FakeStorage } from './fakes'
-import { readLocalFileResult, writeLocalFile } from '../lib/storage'
 
 describe('test boundary fakes', () => {
   it('settles competing requests in reverse order', async () => {
@@ -22,26 +21,6 @@ describe('test boundary fakes', () => {
     storage.failSet = true
     expect(() => storage.setItem('draft', 'replacement')).toThrow()
     expect(storage.getItem('draft')).toBe('original')
-  })
-
-  it('reports a refused local file write without replacing saved content', () => {
-    const storage = new FakeStorage()
-    const previousWindow = globalThis.window
-    Object.defineProperty(globalThis, 'window', {
-      configurable: true,
-      value: { localStorage: storage },
-    })
-    try {
-      expect(writeLocalFile('diagram.mmd', 'original')).toBe(true)
-      storage.failSet = true
-      expect(writeLocalFile('diagram.mmd', 'replacement')).toBe(false)
-      expect(readLocalFileResult('diagram.mmd')).toMatchObject({ status: 'ok', value: { content: 'original' } })
-    } finally {
-      Object.defineProperty(globalThis, 'window', {
-        configurable: true,
-        value: previousWindow,
-      })
-    }
   })
 
   it('records GitHub call order and waits for a controlled response', async () => {
