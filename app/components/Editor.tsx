@@ -16,6 +16,7 @@ import {
   lineNumbers,
   rectangularSelection,
   type Panel,
+  type ViewUpdate,
 } from '@codemirror/view'
 import {
   autocompletion,
@@ -320,6 +321,59 @@ const baseSetup = [
     ...completionKeymap,
   ]),
 ]
+
+interface EditorExtensionOptions {
+  kind: FileKind
+  wrap: boolean
+  dark: boolean
+  language: Compartment
+  wrapping: Compartment
+  theme: Compartment
+  highlighting: Compartment
+  onDoubleClick: (event: MouseEvent, view: EditorView) => boolean
+  onUpdate: (update: ViewUpdate) => void
+}
+
+/**
+ * The cohesive CodeMirror extension groups for one editor state. Keeping this
+ * assembly outside the React mount effect makes the gutter order and the single
+ * autocompletion/search setup explicit without moving document ownership into an
+ * effect.
+ */
+function createEditorExtensions({
+  kind,
+  wrap,
+  dark,
+  language,
+  wrapping,
+  theme,
+  highlighting,
+  onDoubleClick,
+  onUpdate,
+}: EditorExtensionOptions): Extension[] {
+  const documentExtensions: Extension[] = [
+    language.of(languageFor(kind)),
+    wrapping.of(wrap ? EditorView.lineWrapping : []),
+    theme.of(editorTheme(dark)),
+    highlighting.of(syntaxHighlighting(highlightStyle())),
+  ]
+  const interactionExtensions: Extension[] = [
+    search({ top: true, createPanel: createSearchPanel }),
+    keymap.of([indentWithTab, { key: 'Mod-/', run: toggleComment }]),
+    EditorView.domEventHandlers({ dblclick: onDoubleClick }),
+    EditorView.updateListener.of(onUpdate),
+  ]
+
+  return [
+    baseSetup,
+    // Gutters render in extension order: changes sit beside line numbers and
+    // fold arrows stay outside the change bar.
+    lineChangeGutter,
+    foldGutter({ markerDOM: foldMarker }),
+    documentExtensions,
+    interactionExtensions,
+  ]
+}
 
 /* ------------------------------------------------------------------ */
 /* Dirty gutter (uncommitted changes, VS Code style)                   */
@@ -899,42 +953,31 @@ export default function Editor({
   // Mount once.
   useEffect(() => {
     if (!hostRef.current) return
-    const extensions: Extension[] = [
-          baseSetup,
-          // Order matters: gutters render in extension order, so this puts the
-          // change bar immediately right of the line numbers and the fold arrows
-          // outside it — the arrangement VS Code uses.
-          lineChangeGutter,
-          foldGutter({ markerDOM: foldMarker }),
-          search({ top: true, createPanel: createSearchPanel }),
-          keymap.of([indentWithTab, { key: 'Mod-/', run: toggleComment }]),
-          languageCompartment.current.of(languageFor(kind)),
-          wrapCompartment.current.of(wrap ? EditorView.lineWrapping : []),
-          themeCompartment.current.of(editorTheme(dark)),
-          highlightCompartment.current.of(syntaxHighlighting(highlightStyle())),
-          EditorView.domEventHandlers({
-            dblclick(event, view) {
-              const reveal = onRevealPreviewRef.current
-              if (!reveal) return false
-              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
-              if (pos !== null) reveal(view.state.doc.lineAt(pos).number)
-              // Not handled: the double-click must still select the word under the
-              // pointer, which is what a double-click in a text editor is for.
-              return false
-            },
-          }),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              if (applyingExternalRef.current) return
-              const doc = update.state.doc.toString()
-              emittedRef.current = [...emittedRef.current, doc].slice(-EMITTED_HISTORY)
-              onChangeRef.current(doc)
-              // The document's height just changed, so the viewfinder's idea of
-              // the scroll range is stale.
-              measureScrollRef.current()
-            }
-          }),
-        ]
+    const documentStates = statesRef.current
+    const extensions = createEditorExtensions({
+      kind,
+      wrap,
+      dark,
+      language: languageCompartment.current,
+      wrapping: wrapCompartment.current,
+      theme: themeCompartment.current,
+      highlighting: highlightCompartment.current,
+      onDoubleClick(event, view) {
+        const reveal = onRevealPreviewRef.current
+        if (!reveal) return false
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
+        if (pos !== null) reveal(view.state.doc.lineAt(pos).number)
+        // Preserve CodeMirror's ordinary word-selection behavior.
+        return false
+      },
+      onUpdate(update) {
+        if (!update.docChanged || applyingExternalRef.current) return
+        const doc = update.state.doc.toString()
+        emittedRef.current = [...emittedRef.current, doc].slice(-EMITTED_HISTORY)
+        onChangeRef.current(doc)
+        measureScrollRef.current()
+      },
+    })
     extensionsRef.current = extensions
     const view = new EditorView({
       parent: hostRef.current,
@@ -944,7 +987,7 @@ export default function Editor({
     return () => {
       view.destroy()
       viewRef.current = null
-      statesRef.current.clear()
+      documentStates.clear()
     }
     // Mount-only; `value`/`dark` changes handled by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps

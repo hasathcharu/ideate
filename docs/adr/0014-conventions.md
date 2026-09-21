@@ -14,8 +14,16 @@
   write settles into its originating document record even if the user navigated
   away. The sidebar's dirty and pending sets combine recovered draft metadata
   with current workspace records, so a settled record wins over stale marker
-  state. The shell still has presentation state while commands are moved to the
-  shared owner in the next stage.
+  state. `AppShell` orchestrates these commands and owns page-level state, while
+  `AppLayout`, `AppHeader`, `WorkspaceSidebar`, `DocumentToolbar`,
+  `DocumentSurface`, and `AppDialogs` are presentation boundaries that receive
+  display data and intent callbacks. They do not read storage or mutate
+  `WorkspaceStore` directly. Version-history request state and pagination live in
+  `useHistoryController`, keyed by the settled workspace and path identity. The
+  Agent Link capability adapter, sidebar derivation, appearance derivation, and
+  pane geometry live in `useAgentLinkController`, `useWorkspaceTree`,
+  `useAppearanceController`, and `useResizableLayout`; these hooks remain narrow
+  clients of the same document owner rather than alternate state owners.
 
 - IndexedDB document writes are asynchronous and ordered. A caller reports durability only
   after the transaction completes. Navigation awaits the outgoing dirty draft and remains on

@@ -24,7 +24,7 @@ export function useDebouncedValue<T>(value: T, delayMs: number, resetKey?: unkno
 
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 1000px)'
 
-/** Tracks whether the viewport is at or below Tailwind's `md` breakpoint. */
+/** Tracks the app's minimum comfortable two-pane editor width. */
 export function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState(false)
   useEffect(() => {

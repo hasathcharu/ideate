@@ -34,6 +34,13 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
   `export { auth as proxy }`. Never redirects; local mode passes straight through.
 - `components/Canvas.tsx` — sets `window.EXCALIDRAW_ASSET_PATH` *before* the
   lazy chunk loads; ordering matters.
+- `components/AppShell.tsx` — workspace/document orchestration. Page chrome is
+  split across `AppLayout`, `AppHeader`, `WorkspaceSidebar`, `DocumentToolbar`,
+  `DocumentSurface`, and `AppDialogs`; `useHistoryController` owns version-history
+  request state. `useAgentLinkController`, `useWorkspaceTree`,
+  `useAppearanceController`, and `useResizableLayout` own their corresponding
+  integration/derived-state concerns. Presentation modules receive state and intent
+  callbacks and do not access durable storage directly.
 - `components/icons.tsx` — ships the Mermaid, Markdown and Excalidraw brand
   marks taken from each project's own favicon, normalized to bare filled glyphs
   in `currentColor`: no badge, no brand hue, so the three read as one family and

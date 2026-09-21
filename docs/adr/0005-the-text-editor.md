@@ -44,6 +44,11 @@ three of its pieces need configuring rather than accepting.
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
 
+`createEditorExtensions` groups the stable base setup, ordered gutters,
+document-specific compartments, and interaction listeners. It only assembles
+extensions; React still owns the single view lifecycle and `WorkspaceStore` remains
+the working-content owner.
+
 ### Find/replace floats over the top-right
 
 It stays a real CodeMirror **panel** (`search({ top: true, createPanel })`) rather

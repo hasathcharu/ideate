@@ -229,7 +229,7 @@ The interesting part is *where the field is optional*, and the two answers are o
 - **`edit`, `write`, `scene_edit` — required.** The open document is not a stable address.
   The human keeps browsing while the agent works, so "the open document" means whichever
   file they clicked last, and an edit that lands on the wrong one is not something reading
-  it again can undo. `AppShell.requirePath` refuses those.
+  it again can undo. `useAgentLinkController.requirePath` refuses those.
 
 The exemption is the **untitled** document, which has no path to name. Keying the refusal
 on `openPath === null` rather than on "is a repo connected" is what makes the rule hold in
@@ -240,7 +240,7 @@ the field optional for these commands because only the tab knows which case it i
 says "required" in prose and `targetPathArgs` explains why the Go side does not enforce it
 too.
 
-`resolveTarget` is where a path becomes a document, and there are three places one can be
+`useAgentLinkController`'s `resolveTarget` is where a path becomes a document, and there are three places one can be
 living: React state (the open one), an IndexedDB draft (never saved), or the saved store.
 A draft is layered over the saved content whenever it differs, because the draft is what
 the human would see if they opened it — answering with saved bytes is how an agent talks

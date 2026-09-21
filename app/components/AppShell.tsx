@@ -1,91 +1,28 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import Link from 'next/link'
-import {
-  ArrowLeft,
-  ChevronDown,
-  Command,
-  FileDiff,
-  FolderGit2,
-  GitBranch,
-  GitPullRequestArrow,
-  History,
-  PanelLeft,
-  Map,
-  Plug,
-  PlugZap,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Settings2,
-  SquareArrowOutUpRight,
-  WrapText,
-  X,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import Editor, { type EditorHandle } from './Editor'
-import Preview from './Preview'
-import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
-import Canvas from './Canvas'
-import ExportMenu from './ExportMenu'
-import AuthButton from './AuthButton'
-import RepoPicker from './RepoPicker'
-import BranchPicker from './BranchPicker'
-import FileTree, { FileTreeSkeleton } from './FileTree'
-import ConflictModal from './ConflictModal'
-import DeleteModal from './DeleteModal'
-import PromptModal, { type PromptModalProps } from './PromptModal'
-import HistoryPanel, { type HistoryCompare, type HistoryView } from './HistoryPanel'
-import DiffView from './DiffView'
-import NewFileMenu from './NewFileMenu'
-import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
-import ConfigModal from './ConfigModal'
-import AgentLinkModal from './AgentLinkModal'
-import MobileWarningModal from './MobileWarningModal'
-import { Button } from '@/components/ui/button'
+import type { PromptModalProps } from './PromptModal'
+import { useHistoryController } from './useHistoryController'
+import { useAgentLinkController } from './useAgentLinkController'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
+  CUSTOM_THEME,
+  NONE_THEME,
+  useAppearanceController,
+} from './useAppearanceController'
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
-import { useAgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
-import { normalizeMcpOrigin } from '@/lib/mcpOrigin'
-import type { BridgeState } from '@/lib/agentProtocol'
-import { collectDiagnostics } from '@/lib/diagnostics'
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  useResizableLayout,
+} from './useResizableLayout'
+import AppDialogs from './AppDialogs'
+import AppHeader from './AppHeader'
+import AppLayout from './AppLayout'
+import DocumentSurface from './DocumentSurface'
+import DocumentToolbar from './DocumentToolbar'
+import WorkspaceSidebar from './WorkspaceSidebar'
+import { useWorkspaceTree } from './useWorkspaceTree'
 import { ensureExcalidrawFonts } from '@/lib/excalidrawFonts'
-import { renderSceneThumbnail } from '@/lib/exportScene'
-import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
-import { applyResolved, resolveEdits } from '@/lib/textEdit'
-import {
-  parseMermaidConfig,
-  applyThemeToSite,
-  layoutFromConfig,
-  resolveThemeMode,
-  setLayoutInYaml,
-  setThemeInYaml,
-  themeBackgroundColor,
-  themeFromConfig,
-  type MermaidUserConfig,
-} from '@/lib/mermaidConfig'
-import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
 import { canConsumeScratchDraft, draftBaseFor, draftNeedsReconciliation, needsDraft } from '@/lib/draftLifecycle'
 import { saveLocalBatch } from '@/lib/localBatch'
@@ -115,25 +52,20 @@ import {
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
   buildTree,
-  collectDirPaths,
   collectFilePaths,
   fileExtension,
   fileKind,
   isDiagramFile,
-  pathMatchesQuery,
   DIAGRAM_EXTENSIONS_LABEL,
   EXCALIDRAW_EXTENSION,
   type FileKind,
 } from '@/lib/tree'
 import { EMPTY_SCENE, scenesEqual } from '@/lib/excalidraw'
-import { cn } from '@/lib/utils'
 import {
   checkSession,
   commitFiles,
   listTree,
   readFile,
-  readFileAtRef,
-  listFileCommits,
   commitFile,
   deletePaths,
   renameFile,
@@ -141,7 +73,7 @@ import {
   type FileWrite,
   type TreeResult,
 } from '@/app/actions/github'
-import type { AppConfig, FileCommit, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
+import type { AppConfig, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
 
 export interface AppShellProps {
   user: SessionUser | null
@@ -239,18 +171,6 @@ function defaultFileName(kind: FileKind, base: string): string {
   return `${base}${extensionFor(kind)}`
 }
 
-// Sentinel Select values for the theme dropdown: "None" strips the theme (revert
-// to the default look), "Custom" is the read-only display state when the config's
-// palette matches no preset (e.g. hand-edited themeVariables).
-const NONE_THEME = '__none__'
-const CUSTOM_THEME = '__custom__'
-const HISTORY_PAGE_SIZE = 30
-
-/** How many unsaved paths the save menu names before it starts counting. Enough
- *  to recognize the set at a glance; a list long enough to scroll would be a file
- *  tree, and there is one of those on the left. */
-const MAX_LISTED_UNSAVED = 6
-
 /** Whether two versions of the same document differ. */
 function contentDiffers(a: string, b: string, kind: FileKind): boolean {
   return kind === 'excalidraw' ? !scenesEqual(a, b) : a !== b
@@ -258,10 +178,6 @@ function contentDiffers(a: string, b: string, kind: FileKind): boolean {
 
 /** What `loadedSha` holds for a saved *local* file. */
 const LOCAL_SAVED = 'local'
-
-/** Shared empty path set, so resetting one to "nothing" is not a new object (and
- *  so not a render) every time. */
-const EMPTY_PATHS: ReadonlySet<string> = new Set()
 
 /** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
 function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
@@ -364,12 +280,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
     void ensureExcalidrawFonts()
   }, [])
 
-  // Live editor/preview split ratio (persisted to config on drag end).
-  const [editorRatio, setEditorRatio] = useState(0.5)
-  const paneRowRef = useRef<HTMLDivElement>(null)
-
-  // Live sidebar width in pixels (persisted to config on drag end).
-  const [sidebarWidth, setSidebarWidth] = useState(256)
+  const {
+    editorRatio,
+    setEditorRatio,
+    sidebarWidth,
+    setSidebarWidth,
+    paneRowRef,
+    startDividerDrag,
+    onDividerKeyDown,
+    startSidebarDrag,
+    onSidebarDividerKeyDown,
+  } = useResizableLayout(updateConfig)
 
   const [text, setTextState] = useState(SAMPLE)
   const liveTextRef = useRef(text)
@@ -421,7 +342,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [branchBusy, setBranchBusy] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
-
+  const openPrompt = useCallback((spec: PromptSpec) => {
+    setPrompt(spec)
+    setPromptOpen(true)
+  }, [])
   const [configOpen, setConfigOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   // Swaps the editor/preview split for a diff of the committed file against the
@@ -429,75 +353,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // *rendered* where there is a committed side to compare with — see `canDiff`.
   const [showDiff, setShowDiff] = useState(false)
 
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const versionRequestRef = useRef(new RequestGate())
-  const historyRequestRef = useRef(new RequestGate())
-  const historyTargetRef = useRef<string | null>(null)
-  // Path segment currently displayed — starts at the open file's path, but moves
-  // to an older path once the user chooses to view history before a rename.
-  const [historyPath, setHistoryPath] = useState<string | null>(null)
-  const [historyPathStack, setHistoryPathStack] = useState<string[]>([])
-  const [commits, setCommits] = useState<FileCommit[] | null>(null)
-  const [historyPage, setHistoryPage] = useState(1)
-  const [hasMoreCommits, setHasMoreCommits] = useState(false)
-  const [loadingMoreCommits, setLoadingMoreCommits] = useState(false)
-  const [renamedFrom, setRenamedFrom] = useState<string | null>(null)
-  const [historyError, setHistoryError] = useState<string | null>(null)
-  const [selectedSha, setSelectedSha] = useState<string | null>(null)
-  const [versionContent, setVersionContent] = useState<string | null>(null)
-  const [versionLoading, setVersionLoading] = useState(false)
-  // How the selected version is shown, and — in diff mode — what it is compared
-  // against. Both are sticky across selections: someone reading a file's history
-  // as a series of diffs wants the next version to open the same way.
-  const [historyView, setHistoryView] = useState<HistoryView>('preview')
-  const [historyCompare, setHistoryCompare] = useState<HistoryCompare>('previous')
-  /** Content of the version *before* the selected one, for the default diff. */
-  const [previousContent, setPreviousContent] = useState<string | null>(null)
-  const [previousLoading, setPreviousLoading] = useState(false)
-  const [compareNote, setCompareNote] = useState<string | null>(null)
-
-  // Parse the user's YAML config. The memo keeps a stable object reference until
-  // the raw text changes, so it's safe to feed into the Preview render effect's
-  // deps. `appliedConfig` holds the last *valid* parse — a half-typed config
-  // (parse error) leaves the previous theme in place rather than blanking it.
-  const parsedConfig = useMemo(() => parseMermaidConfig(config.mermaidConfig), [config.mermaidConfig])
-  const [appliedConfig, setAppliedConfig] = useState<MermaidUserConfig | null>(null)
-  useEffect(() => {
-    if (parsedConfig.error) return
-    setAppliedConfig(parsedConfig.config)
-    // themeVariables recolor the whole app chrome (empty config resets it).
-    applyThemeToSite(parsedConfig.config)
-  }, [parsedConfig])
-
-  // The layout dropdown reflects — and writes back into — the YAML config, which
-  // is the single source of truth. Selecting an engine rewrites the `layout` key
-  // (see the Select's onValueChange, which calls setLayoutInYaml).
-  const layoutValues = useMemo(() => LAYOUT_ENGINES.map((e) => e.value), [])
-  const currentLayout = layoutFromConfig(appliedConfig, layoutValues, DEFAULT_LAYOUT)
-
-  // The theme dropdown, like layout, reflects and writes back the YAML config.
-  // Show the matching preset if the config's palette matches one; "Custom" if it
-  // has a palette matching none (hand-tuned); "None" if it sets no theme at all.
-  const currentTheme = useMemo(() => {
-    const matched = themeFromConfig(appliedConfig)
-    if (matched) return matched.value
-    const tv = appliedConfig?.themeVariables
-    const hasVars = !!tv && typeof tv === 'object' && Object.keys(tv).length > 0
-    return hasVars ? CUSTOM_THEME : NONE_THEME
-  }, [appliedConfig])
-
-  // Shared by the Select's onValueChange (commit) and each item's onFocus (live
-  // preview as arrow keys/hover move the highlight), so navigating the dropdown
-  // re-themes the diagram before the user settles on a choice.
-  const applyTheme = useCallback(
-    (v: string) => {
-      if (v === CUSTOM_THEME) return
-      const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
-      if (v !== NONE_THEME && !preset) return
-      updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
-    },
-    [config.mermaidConfig, updateConfig],
-  )
+  const {
+    parsedConfig,
+    appliedConfig,
+    currentLayout,
+    currentTheme,
+    applyTheme,
+    canvasTheme,
+    canvasBackground,
+    editorDark,
+  } = useAppearanceController(config, updateConfig)
 
   const repo = githubEnabled ? config.repo : null
 
@@ -526,21 +391,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // open (local mode, or before picking a file) it's the user's scratch choice.
   const kind: FileKind = openPath ? fileKind(openPath) : config.scratchKind
 
-  // Excalidraw's theme is a binary light/dark switch, not an arbitrary palette,
-  // so the canvas follows the *mode* of whichever diagram theme is active. That
-  // keeps a scene from flashing a white canvas inside dark chrome when the user
-  // opens it while a dark theme is selected.
-  const canvasTheme = useMemo(() => resolveThemeMode(appliedConfig), [appliedConfig])
-  /** CodeMirror carries its own binary `dark` flag, which decides the defaults for
-   *  every surface `editorTheme` doesn't name. It follows the same resolved mode
-   *  as the canvas — pinned to `false`, a dark palette got CodeMirror's
-   *  light-theme defaults underneath it. */
-  const editorDark = canvasTheme === 'dark'
-
-  // The canvas paints the active theme's background, so the drawing surface matches
-  // the app chrome around it. Imposed for display only — never written to the file.
-  const canvasBackground = useMemo(() => themeBackgroundColor(appliedConfig), [appliedConfig])
-
   const dirty = needsDraft(contentDiffers(text, baseline, kind), openPath !== null && loadedSha === null)
   // Each scratch kind gets its own draft slot, so toggling between diagram,
   // document and canvas with nothing open parks the current work rather than
@@ -557,6 +407,40 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const docId = openPath && hasWorkspace ? docIdForPath(openPath) : scratchDocId
+
+  const recoverHistoryVersion = useCallback((content: string) => {
+    setText(content)
+    toast.info('Version loaded into working tree (unsaved)')
+  }, [setText])
+
+  const forkHistoryVersion = useCallback((content: string) => {
+    if (!repo) return
+    openPrompt({
+      title: 'Create new diagram from this version',
+      description: 'Save this version’s content as a separate new file.',
+      label: 'New file path',
+      defaultValue: defaultFileName(kind, 'copy'),
+      submitLabel: 'Start editing',
+      validate: validatePathForKind(kind),
+      onSubmit: (path) => {
+        setPromptOpen(false)
+        setOpenPath(path)
+        setLoadedSha(null)
+        setBaseline('')
+        setText(content)
+      },
+    })
+  }, [repo, kind, openPrompt, setOpenPath, setText])
+
+  const history = useHistoryController({
+    repo,
+    openPath,
+    workspaceIdentity: workspaceSelectionRef.current,
+    workingContent: text,
+    onRecover: recoverHistoryVersion,
+    onFork: forkHistoryVersion,
+  })
+  const resetHistory = history.reset
 
   // The editor callback updates liveTextRef before React renders. Navigation can
   // therefore persist the outgoing document even in the same event as an edit.
@@ -589,132 +473,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
    * Files that exist only in this browser: created here, never committed, so the fetched tree has
    * no entry for them and GitHub has nothing under the path.
    */
-  const [createdPaths, setCreatedPaths] = useState<ReadonlySet<string>>(new Set())
-  const storeRecords = useSyncExternalStore(
-    workspaceStore.subscribe, workspaceStore.snapshot, workspaceStore.snapshot,
-  )
-  const selectedWorkspaceKey = workspaceKey(currentWorkspace())
-
-  // Every never-committed path, as the rest of the app should see it: anything in `createdPaths`
-  // the branch still doesn't have, plus the open file whenever it has no sha behind it.
-  /**
-   * Every path that genuinely exists in the saved store: on the branch in GitHub mode, in
-   * IndexedDB in local mode.
-   */
-  const savedPaths = useMemo<ReadonlySet<string> | null>(() => {
-    if (localMode) return localPaths === null ? null : new Set(localPaths)
-    return tree ? new Set(tree.tree.flatMap(collectFilePaths)) : null
-  }, [localMode, localPaths, tree])
-
-  const pendingPaths = useMemo<ReadonlySet<string>>(() => {
-    const next = new Set<string>()
-    for (const path of createdPaths) if (!savedPaths?.has(path)) next.add(path)
-    if (hasWorkspace && openPath && loadedSha === null) next.add(openPath)
-    for (const record of storeRecords) {
-      if (workspaceKey(record.identity.workspace) !== selectedWorkspaceKey) continue
-      if (record.identity.path && record.exists && record.savedRevision === null &&
-          !savedPaths?.has(record.identity.path)) next.add(record.identity.path)
-    }
-    return next
-  }, [savedPaths, createdPaths, hasWorkspace, openPath, loadedSha, storeRecords, selectedWorkspaceKey])
-
-  // Every path with unsaved edits made *this session*, not just the open one —
-  // so switching files without saving still shows the earlier file as dirty in
-  // the tree. Keyed off the open file's live dirty state; committing, reverting,
-  // deleting, or renaming a path removes it below.
-  const [legacyDirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
-  const dirtyPaths = useMemo<ReadonlySet<string>>(() => {
-    const next = new Set(legacyDirtyPaths)
-    for (const record of storeRecords) {
-      if (!record.identity.path || workspaceKey(record.identity.workspace) !== selectedWorkspaceKey) continue
-      if (record.persistence === 'clean') next.delete(record.identity.path)
-      else next.add(record.identity.path)
-    }
-    return next
-  }, [legacyDirtyPaths, storeRecords, selectedWorkspaceKey])
-  useEffect(() => {
-    if (!openPath) return
-    setDirtyPaths((prev) => {
-      if (dirty === prev.has(openPath)) return prev
-      const next = new Set(prev)
-      if (dirty) next.add(openPath)
-      else next.delete(openPath)
-      return next
-    })
-  }, [openPath, dirty])
-
-  // Which directories are expanded in the file tree — kept in memory only (not
-  // persisted), reset whenever the selected repo/branch changes so a stale
-  // expand/collapse layout from the previous repo can't bleed into the next one.
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set())
-  const onToggleDir = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
-
-  const displayNodes = useMemo(() => {
-    const base = localMode ? buildTree([...(localPaths ?? [])]) : (tree?.tree ?? [])
-    if (pendingPaths.size === 0) return base
-    const paths = base.flatMap(collectFilePaths)
-    for (const path of pendingPaths) if (!paths.includes(path)) paths.push(path)
-    return buildTree(paths)
-  }, [localMode, localPaths, tree, pendingPaths])
-
-  /**
-   * The sidebar's search box. Filters the tree that is already in memory — there is no call behind
-   * it, in either mode.
-   */
-  const [fileFilter, setFileFilter] = useState('')
-  const searching = fileFilter.trim().length > 0
-
-  const visibleNodes = useMemo(() => {
-    if (!searching) return displayNodes
-    const matched = displayNodes
-      .flatMap(collectFilePaths)
-      .filter((path) => pathMatchesQuery(path, fileFilter))
-    return buildTree(matched)
-  }, [displayNodes, searching, fileFilter])
-
-  /**
-   * Folders the user collapsed *while a search is running*, which is its own short-lived state
-   * rather than an edit to `expandedPaths`.
-   */
-  const [searchCollapsed, setSearchCollapsed] = useState<ReadonlySet<string>>(new Set())
-
-  const visibleExpanded = useMemo<ReadonlySet<string>>(() => {
-    if (!searching) return expandedPaths
-    return new Set(
-      visibleNodes.flatMap(collectDirPaths).filter((path) => !searchCollapsed.has(path)),
-    )
-  }, [searching, visibleNodes, expandedPaths, searchCollapsed])
-
-  const toggleVisibleDir = useCallback(
-    (path: string) => {
-      if (!searching) {
-        onToggleDir(path)
-        return
-      }
-      setSearchCollapsed((prev) => {
-        const next = new Set(prev)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        return next
-      })
-    },
-    [searching, onToggleDir],
-  )
-
-  // Flat list of every file in the repo, for completing markdown link targets in
-  // the editor. Derived from the same tree the sidebar shows, so a file created or
-  // deleted this session is offered (or stops being offered) without a new fetch.
-  const repoFilePaths = useMemo(
-    () => displayNodes.flatMap(collectFilePaths),
-    [displayNodes],
-  )
+  const {
+    setCreatedPaths,
+    dirtyPaths,
+    setDirtyPaths,
+    savedPaths,
+    pendingPaths,
+    displayNodes,
+    visibleNodes,
+    visibleExpanded,
+    fileFilter,
+    setFileFilter,
+    searching,
+    toggleVisibleDir,
+    repoFilePaths,
+    resetExpandedPaths,
+  } = useWorkspaceTree({
+    localMode,
+    localPaths,
+    tree,
+    hasWorkspace,
+    openPath,
+    loadedSha,
+    openDocumentDirty: dirty,
+    selectedWorkspaceKey: workspaceKey(currentWorkspace()),
+    workspaceStore,
+  })
 
   /** Fetch the tree and swap it in once it arrives. */
   const treeRequestRef = useRef(new RequestGate())
@@ -767,15 +551,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // repo (stale editor content, dirty markers, expanded folders) can linger if
   // that fetch is slow or fails.
   const resetForRepoSwitch = useCallback(() => {
-    historyRequestRef.current.invalidate()
-    versionRequestRef.current.invalidate()
-    historyTargetRef.current = null
-    setHistoryOpen(false)
-    setCommits(null)
-    setVersionContent(null)
-    setHistoryError(null)
-    setVersionLoading(false)
-    setLoadingMoreCommits(false)
+    resetHistory()
     updateConfig({ scratchKind: 'mermaid' })
     setOpenPath(null)
     setLoadedSha(null)
@@ -784,12 +560,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setBaseline('')
     setDirtyPaths(new Set())
     setCreatedPaths(new Set())
-    setExpandedPaths(new Set())
+    resetExpandedPaths()
     // The outgoing repo/branch's paths are meaningless now, so this is one of the
     // few places the list *should* go back to a loading state.
     setTree(null)
     setTreeError(null)
-  }, [updateConfig, setOpenPath, setText])
+  }, [resetHistory, resetExpandedPaths, updateConfig, setOpenPath, setText, setCreatedPaths, setDirtyPaths])
 
   useEffect(() => {
     void (async () => {
@@ -860,7 +636,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     setHydrated(true)
     })()
-  }, [githubEnabled, refreshTree, showRepoStartState, setText, currentWorkspace, identityFor, workspaceStore])
+  }, [githubEnabled, refreshTree, showRepoStartState, setText, setEditorRatio, setSidebarWidth,
+    currentWorkspace, identityFor, workspaceStore])
 
   /**
    * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths` is persisted,
@@ -901,7 +678,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return next
     })
     })()
-  }, [hasWorkspace, savedPaths, repo])
+  }, [hasWorkspace, savedPaths, repo, setCreatedPaths, setDirtyPaths])
 
   /** Verify the GitHub session before the user relies on it. */
   const sessionChecked = useRef(false)
@@ -954,102 +731,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
-  const MIN_RATIO = 0.2
-  const MAX_RATIO = 0.8
-
-  const startDividerDrag = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault()
-      const row = paneRowRef.current
-      if (!row) return
-      const onMove = (ev: PointerEvent) => {
-        const rect = row.getBoundingClientRect()
-        if (rect.width === 0) return
-        const raw = (ev.clientX - rect.left) / rect.width
-        setEditorRatio(Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw)))
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setEditorRatio((r) => {
-          updateConfig({ splitRatio: r })
-          return r
-        })
-      }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    },
-    [updateConfig],
-  )
-
-  const onDividerKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? 0.1 : 0.02
-      let delta = 0
-      if (e.key === 'ArrowLeft') delta = -step
-      else if (e.key === 'ArrowRight') delta = step
-      else return
-      e.preventDefault()
-      setEditorRatio((r) => {
-        const next = Math.min(MAX_RATIO, Math.max(MIN_RATIO, r + delta))
-        updateConfig({ splitRatio: next })
-        return next
-      })
-    },
-    [updateConfig],
-  )
-
-  const MIN_SIDEBAR_WIDTH = 180
-  const MAX_SIDEBAR_WIDTH = 480
-
-  const startSidebarDrag = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault()
-      const startX = e.clientX
-      const startWidth = sidebarWidth
-      const onMove = (ev: PointerEvent) => {
-        const next = startWidth + (ev.clientX - startX)
-        setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next)))
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setSidebarWidth((w) => {
-          updateConfig({ sidebarWidth: w })
-          return w
-        })
-      }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    },
-    [sidebarWidth, updateConfig],
-  )
-
-  const onSidebarDividerKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? 40 : 8
-      let delta = 0
-      if (e.key === 'ArrowLeft') delta = -step
-      else if (e.key === 'ArrowRight') delta = step
-      else return
-      e.preventDefault()
-      setSidebarWidth((w) => {
-        const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w + delta))
-        updateConfig({ sidebarWidth: next })
-        return next
-      })
-    },
-    [updateConfig],
-  )
-
   /** Switch the scratch document between the text editor and the canvas. */
   const switchScratchKind = useCallback(
     async (nextKind: FileKind) => {
@@ -1072,11 +753,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     },
     [openPath, config.scratchKind, flushOutgoingDraft, updateConfig, setText, identityFor, workspaceStore],
   )
-
-  const openPrompt = useCallback((spec: PromptSpec) => {
-    setPrompt(spec)
-    setPromptOpen(true)
-  }, [])
 
   const onSelectRepo = useCallback(
     async (r: Repo) => {
@@ -1242,542 +918,60 @@ export default function AppShell({ user, mode }: AppShellProps) {
     void openFile(target)
   }, [linkTrail, openFile])
 
-  /* ---------------------------------------------------------------- */
-  /* Agent Link                                                        */
-  /* ---------------------------------------------------------------- */
-
-  /** The editor's imperative handle, so an agent's edit lands as one CodeMirror
-   *  transaction rather than a whole-document swap — see `EditorHandle`. Null
-   *  whenever no text editor is mounted (a canvas is open, or the diff view has
-   *  taken the pane), which `applyEdits` below handles rather than refuses. */
-  const editorRef = useRef<EditorHandle | null>(null)
-  /** The markdown reading pane, for the scroll sync below. */
-  const markdownPreviewRef = useRef<MarkdownPreviewHandle | null>(null)
-
-  /**
-   * Two-way scroll sync for markdown: double-click a line to find it in the document, double-click
-   * a block to find it in the source.
-   */
-  const revealInPreview = useCallback((line: number) => {
-    markdownPreviewRef.current?.revealLine(line)
-  }, [])
-  const revealInEditor = useCallback((line: number) => {
-    editorRef.current?.revealLine(line)
-  }, [])
-
-  const bridgeState: BridgeState = useMemo(
-    () => ({
-      mode: githubEnabled ? 'github' : 'local',
-      repo: repo
-        ? {
-            owner: repo.owner,
-            name: repo.name,
-            branch: repo.branch,
-            defaultBranch: repo.defaultBranch,
-          }
-        : null,
-      openPath,
-      kind,
-      dirty,
-      lineCount: text === '' ? 0 : text.split('\n').length,
-      charCount: text.length,
-      // Reported so an agent stops hardcoding colors. The name is the dropdown's
-      // own answer minus its UI sentinels: a preset id, `custom` for a hand-tuned
-      // palette, null for no theme at all. `mode` is the same light/dark the canvas
-      // runs in, which is the part that matters for a scene.
-      theme: {
-        name:
-          currentTheme === NONE_THEME
-            ? null
-            : currentTheme === CUSTOM_THEME
-              ? 'custom'
-              : currentTheme,
-        mode: canvasTheme,
-      },
-    }),
-    [githubEnabled, repo, openPath, kind, dirty, text, currentTheme, canvasTheme],
-  )
-
-  /** One of the agent's document commands, resolved onto an actual document. */
-  interface DocTarget {
-    /** Null only for the untitled document, which has no path until it is saved
-     *  somewhere. */
-    path: string | null
-    kind: FileKind
-    /** The working copy: unsaved edits included. */
-    text: string
-    /** The saved content, or null when the path was never saved (and so cannot be
-     *  compared against anything). */
-    committed: string | null
-    /** It is the document on screen, so writes go through the editor. */
-    open: boolean
-    /** This command brought the file into existence. */
-    created: boolean
-    identity: DocumentIdentity
-    revision: number
-    draftBase: import('@/lib/storage').DraftBaseRevision
-  }
-
-  /** Find the document a command names, fetching it if nobody has opened it. */
-  const resolveTarget = async (
-    path: string | undefined,
-    create: boolean,
-  ): Promise<DocTarget> => {
-    if (path === undefined || path === openPathRef.current) {
-      const identity = activeIdentityRef.current
-      const record = workspaceStore.get(documentKey(identity))
-      return {
-        path: openPathRef.current,
-        kind: identity.kind,
-        text: record?.content ?? liveTextRef.current,
-        // `baseline` is only the *committed* content once there is a commit behind
-        // it. For a never-committed file it is the empty string, and for the
-        // scratch document it is a template nobody committed.
-        committed: record ? (record.savedRevision === null ? null : record.savedContent) :
-          loadedSha === null ? null : baseline,
-        open: true,
-        created: false,
-        identity,
-        revision: record?.revision ?? 0,
-        draftBase: draftBasesRef.current.get(docId) ?? draftBaseFor(record?.savedRevision ?? loadedSha),
-      }
-    }
-    if (!hasWorkspace) {
-      throw new Error(
-        'This tab has no file workspace: the human is signed in and has picked no ' +
-          'repository, so there is nothing a path can name — only one untitled ' +
-          'document, reached by omitting the path. Ask them to connect a repository ' +
-          'if you need files.',
-      )
-    }
-    const invalid = validatePath(path)
-    if (invalid) throw new Error(`${path}: ${invalid}`)
-    // Deciding "this file does not exist, I will create it" against a list that has
-    // not arrived yet would create files that already exist, and then hand back a
-    // template as their content.
-    if (!savedPaths) {
-      throw new Error('The file list has not loaded yet. Try again in a moment.')
-    }
-    const targetKind = fileKind(path)
-    const cached = workspaceStore.get(documentKey(identityFor(path)))
-    if (cached) return {
-      path, kind: targetKind, text: cached.content,
-      committed: cached.savedRevision === null ? null : cached.savedContent,
-      open: false, created: false, identity: cached.identity, revision: cached.revision,
-      draftBase: draftBasesRef.current.get(docIdForPath(path)) ?? draftBaseFor(cached.savedRevision),
-    }
-    const draftResult = await readDraftResult(docIdForPath(path))
-    if (draftResult.status === 'invalid' || draftResult.status === 'unavailable') {
-      throw new Error(`${path}'s draft is ${draftResult.status}; it was not replaced.`)
-    }
-    const draft = draftResult.status === 'ok' ? draftResult.value : null
-    if (savedPaths.has(path)) {
-      const res = await readSaved(path)
-      if (!res.ok) {
-        throw new Error(
-          res.expired ? 'The GitHub session expired. The user has been signed out.' : res.message,
-        )
-      }
-      const committed = res.content
-      const differs = draft !== null && contentDiffers(draft.content, committed, targetKind)
-      if (differs && draft && draftNeedsReconciliation(draft.baseRevision, res.sha)) {
-        throw new Error(`${path}'s draft is based on an older or unknown revision. Open it to reconcile first.`)
-      }
-      if (draft) draftBasesRef.current.set(docIdForPath(path), draft.baseRevision)
-      return {
-        path,
-        kind: targetKind,
-        text: differs && draft ? draft.content : committed,
-        committed,
-        open: false,
-        created: false,
-        identity: identityFor(path),
-        revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
-        draftBase: draft?.baseRevision ?? draftBaseFor(res.sha),
-      }
-    }
-    // Not in the saved store. A draft under the path still means the file exists — it was created
-    // here and never saved.
-    if (draft) {
-      return {
-        path,
-        kind: targetKind,
-        text: draft.content,
-        committed: null,
-        open: false,
-        created: false,
-        identity: identityFor(path),
-        revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
-        draftBase: draft.baseRevision,
-      }
-    }
-    // A never-saved file with no draft: the human emptied it.
-    if (pendingPaths.has(path)) {
-      return { path, kind: targetKind, text: '', committed: null, open: false, created: false,
-        identity: identityFor(path), revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
-        draftBase: { status: 'absent' } }
-    }
-    if (!create) {
-      throw new Error(
-        `No such file in ${workspaceLabel}: ${path}. ` +
-          'Call ideate_list_files to see what is there.',
-      )
-    }
-    return {
-      path,
-      kind: targetKind,
-      text: templateFor(targetKind),
-      committed: null,
-      open: false,
-      created: true,
-      identity: identityFor(path),
-      revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
-      draftBase: { status: 'absent' },
-    }
-  }
-
-  /** Store what a command produced, and make the sidebar say so. */
-  const writeBack = async (target: DocTarget, next: string): Promise<void> => {
-    if (target.open && workspaceStore.isActive(documentKey(target.identity))) {
-      const actual = workspaceStore.get(documentKey(target.identity))?.revision ?? 0
-      if (actual !== target.revision) throw new Error('Document changed during the command. Retry.')
-      setText(next)
-      return
-    }
-    const path = target.path
-    // Unreachable: a target that is not the open document was resolved from a path
-    // against a workspace. Narrowing rather than asserting.
-    if (path === null) throw new Error('The untitled document was closed during the command. Retry.')
-    if ((workspaceStore.get(documentKey(target.identity))?.revision ?? 0) !== target.revision) {
-      throw new Error('Document changed during the command. Retry.')
-    }
-    const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
-    const id = docIdForPath(path)
-    const base = draftBasesRef.current.get(id) ?? target.draftBase
-    if (isDirty) draftBasesRef.current.set(id, base)
-    const persisted = await (isDirty
-      ? writeDraftResult(id, next, base)
-      : clearDraft(id))
-    if (!persisted.ok) throw new Error(`Could not update ${path}'s draft: ${persisted.reason}.`)
-    workspaceStore.editIfRevision(target.identity, target.revision, next)
-    if (workspaceKey(target.identity.workspace) === workspaceSelectionRef.current) {
-      if (target.created) setCreatedPaths((prev) => withPath(prev, path))
-      setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
-    }
-  }
-
-  /** How to name the saved store in a message to an agent. */
-  const workspaceLabel = repo ? `${repo.owner}/${repo.name}@${repo.branch}` : 'this browser'
-
-  /** Refuse a mutation that did not say which document it meant. */
-  function requirePath(path: string | undefined, tool: string): void {
-    if (path !== undefined || openPathRef.current === null) return
-    throw new Error(
-      `${tool} needs a path. ${openPathRef.current} is open, but the open document changes as ` +
-        'the human browses — so an edit with no path can land on a file you never ' +
-        'read. Name the file you mean: ideate_status reports the open path, ' +
-        'ideate_list_files the rest.',
-    )
-  }
-
-  const commandFor = <T,>(path: string | undefined, run: () => Promise<T>): Promise<T> => {
-    const identity = path === undefined ? activeIdentityRef.current : identityFor(path)
-    const workspace = workspaceSelectionRef.current
-    return workspaceStore.command(identity, async () => {
-      if (workspaceSelectionRef.current !== workspace) throw new Error('Workspace changed during the command. Retry.')
-      if (path === undefined && documentKey(activeIdentityRef.current) !== documentKey(identity)) {
-        throw new Error('Active document changed during the command. Retry with an explicit path.')
-      }
-      return run()
-    })
-  }
-
-  // Rebuilt every render on purpose. The hook reads it through a ref, so a fresh
-  // object costs nothing and every capability closes over current state — a
-  // memoized version would have to list every dependency the closures touch, and
-  // a missed one means the agent silently editing a stale document.
-  const linkCaps: AgentLinkCapabilities = {
-    state: () => bridgeState,
-
-    listFiles: () => ({ paths: [...new Set([
-      ...repoFilePaths,
-      ...workspaceStore.list()
-        .filter((record) => record.identity.path !== null &&
-          workspaceKey(record.identity.workspace) === workspaceSelectionRef.current)
-        .map((record) => record.identity.path!),
-    ])].sort() }),
-
-    read: async (path) => {
-      const target = await resolveTarget(path, false)
-      return {
-        path: target.path,
-        text: target.text,
-        committed:
-          target.path !== null &&
-          target.committed !== null &&
-          !contentDiffers(target.text, target.committed, target.kind),
-      }
-    },
-
-    applyEdits: async (edits, path) => commandFor(path, async () => {
-      requirePath(path, 'ideate_edit')
-      const target = await resolveTarget(path, true)
-      requireText(target.kind)
-      if (target.open) {
-        if (!workspaceStore.isActive(documentKey(target.identity)) ||
-          (workspaceStore.get(documentKey(target.identity))?.revision ?? 0) !== target.revision) {
-          throw new Error('Document changed during the command. Retry.')
-        }
-        const handle = editorRef.current
-        // No editor mounted (a canvas is open, or the diff view has taken the pane).
-        const next = handle
-          ? handle.applyEdits(edits)
-          : applyResolved(target.text, resolveEdits(target.text, edits))
-        if (!handle) setText(next)
-        return { path: target.path, created: false, text: next }
-      }
-      // Resolved before anything is written, so an edit whose anchor is missing
-      // leaves a file it was about to create uncreated. Half a file, named after a
-      // template the agent never asked for, is worse than no file.
-      const next = applyResolved(target.text, resolveEdits(target.text, edits))
-      await writeBack(target, next)
-      return { path: target.path, created: target.created, text: next }
-    }),
-
-    writeText: async (text: string, path) => commandFor(path, async () => {
-      requirePath(path, 'ideate_write')
-      const target = await resolveTarget(path, true)
-      requireText(target.kind)
-      await writeBack(target, text)
-      return { path: target.path, created: target.created }
-    }),
-
-    openFile: async (path) => {
-      if (!hasWorkspace) throw new Error('No repository is connected — nothing to open.')
-      // Checked against the file list first so a mistyped path says so, rather than
-      // surfacing as a toast in the UI and an empty success to the agent.
-      if (!repoFilePaths.includes(path)) {
-        throw new Error(
-          `No such file in ${workspaceLabel}: ${path}. ` +
-            'Call ideate_list_files to see what is there.',
-        )
-      }
-      // Opening from a tool is a fresh start, not a link follow — same reasoning
-      // as `openFromTree`, where a Back button pointing at an unrelated file is
-      // worse than no Back button.
-      setLinkTrail([])
-      if (!await openFile(path)) throw new Error(`Could not open ${path}; the workspace changed or its content could not be loaded.`)
-    },
-
-    createFile: (path, content) => commandFor(path, async () => {
-      if (!hasWorkspace) {
-        throw new Error('No repository is connected — nothing to create a file in.')
-      }
-      const invalid = validatePath(path)
-      if (invalid) throw new Error(invalid)
-      // A canvas is deliberately not creatable here. `content` for one is raw scene
-      // JSON, and omitting it opens an empty canvas nobody asked to look at, so
-      // `createCanvas` — which draws in the same call — is the only door.
-      if (fileKind(path) === 'excalidraw') {
-        throw new Error(
-          `${path} is a canvas, and this tool does not create a canvas. Use ` +
-            'ideate_create_canvas. It takes the same path, and it draws the canvas in the ' +
-            'same call.',
-        )
-      }
-      if (repoFilePaths.includes(path) || pendingPaths.has(path) ||
-        (localMode && (await readLocalFileResult(path)).status !== 'missing') ||
-        (await readDraftResult(docIdForPath(path))).status !== 'missing') {
-        // `edit`/`write`, not `open`: the path is all either of them needs, and sending the agent
-        // through `open` would drag the human's editor to this file as a side effect of a collision
-        // they never asked about.
-        throw new Error(
-          `${path} already exists. Use ideate_edit (or ideate_write) with that path to ` +
-            'change it — neither needs the file open.',
-        )
-      }
-      // Exactly what the create prompt does on submit: the file becomes the open
-      // document with nothing saved behind it. Nothing is pushed to GitHub —
-      // committing stays a human action, which is what keeps an agent from writing
-      // to the user's repository.
-      const body = content ?? templateFor(fileKind(path))
-      if (!await flushOutgoingDraft()) throw new Error('Could not preserve the open document before creating a file.')
-      const written = await createDraftResult(docIdForPath(path), body)
-      if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
-      setLinkTrail([])
-      setCreatedPaths((prev) => withPath(prev, path))
-      // Written here rather than left to the autosave effect: for a file with
-      // nothing saved behind it the draft is the only copy, and an agent creating
-      // two files in quick succession must not depend on a render landing in
-      // between.
-      setOpenPath(path)
-      setLoadedSha(null)
-      setBaseline('')
-      setText(body)
-    }),
-
-    // `createFile` for a canvas, with the drawing in the same call.
-    createCanvas: async (path, ops) => commandFor(path, async () => {
-      const operationWorkspace = workspaceSelectionRef.current
-      const expectedRevision = workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0
-      if (!hasWorkspace) {
-        throw new Error('No repository is connected — nothing to create a canvas in.')
-      }
-      const invalid = validatePath(path)
-      if (invalid) throw new Error(invalid)
-      // The extension is the whole of `fileKind`, so this is the same check the
-      // service makes — kept here as well because the tab is the side that would
-      // otherwise open a markdown document in response to a request to draw.
-      if (fileKind(path) !== 'excalidraw') {
-        throw new Error(
-          `${path} is not a canvas. The extension decides the editor, and a canvas ends ` +
-            'in .excalidraw. For a diagram or a document, use ideate_create_file.',
-        )
-      }
-      if (repoFilePaths.includes(path) || pendingPaths.has(path) ||
-        (localMode && (await readLocalFileResult(path)).status !== 'missing') ||
-        (await readDraftResult(docIdForPath(path))).status !== 'missing') {
-        throw new Error(`${path} already exists. Use ideate_scene_edit to draw on it.`)
-      }
-      // Drawn once before anything is written, so a bad op leaves no half-made file behind — the
-      // same all-or-nothing rule `applyEdits` follows.
-      const drawn = ops.length
-        ? await applySceneOps(EMPTY_SCENE, ops)
-        : { text: EMPTY_SCENE, elementCount: 0, warnings: [] }
-      if (operationWorkspace !== workspaceSelectionRef.current ||
-        (workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0) !== expectedRevision) {
-        throw new Error('Workspace or document changed while drawing the canvas. Retry.')
-      }
-      if (!await flushOutgoingDraft()) throw new Error('Could not preserve the open document before creating a canvas.')
-      const written = await createDraftResult(docIdForPath(path), drawn.text)
-      if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
-      setLinkTrail([])
-      setCreatedPaths((prev) => withPath(prev, path))
-      // Written straight away rather than left to the autosave effect: nothing is
-      // saved behind this file, so its draft is the only copy of the drawing.
-      setOpenPath(path)
-      setLoadedSha(null)
-      setBaseline('')
-      setText(drawn.text)
-
-      return {
-        path,
-        created: true,
-        applied: ops.length,
-        elementCount: drawn.elementCount,
-        warnings: drawn.warnings,
-      }
-    }),
-
-    // Takes the text to check rather than always reading the document: after an
-    // edit the caller holds the new text and React has not re-rendered yet, so
-    // reading state here would report on the document as it was before.
-    check: async ({ text: override, path }) => {
-      if (override !== undefined) {
-        return {
-          path: path ?? openPath,
-          diagnostics: await collectDiagnostics(
-            override,
-            path === undefined ? kind : fileKind(path),
-            appliedConfig,
-          ),
-        }
-      }
-      const target = await resolveTarget(path, false)
-      return {
-        path: target.path,
-        diagnostics: await collectDiagnostics(target.text, target.kind, appliedConfig),
-      }
-    },
-
-    sceneGet: async (full, path) => {
-      const target = await resolveTarget(path, false)
-      requireScene(target.kind)
-      return { path: target.path, ...summarizeScene(target.text, full) }
-    },
-
-    sceneEdit: async (ops, path) => commandFor(path, async () => {
-      requirePath(path, 'ideate_scene_edit')
-      const target = await resolveTarget(path, true)
-      requireScene(target.kind)
-      const { text: next, elementCount, warnings } = await applySceneOps(target.text, ops)
-      // Through `setText` (or a draft), not a canvas ref: `CanvasInner` already
-      // ingests an external `value` via `updateScene`, so dirty tracking (rule 9)
-      // and the file's own stored background (rule 10) keep working untouched.
-      await writeBack(target, next)
-      return {
-        path: target.path,
-        created: target.created,
-        applied: ops.length,
-        elementCount,
-        warnings,
-      }
-    }),
-
-    // Read-only, so it takes the same optional `path` as `sceneGet` and never moves the editor.
-    sceneRender: async (path, ids) => {
-      const target = await resolveTarget(path, false)
-      requireScene(target.kind)
-      const image = await renderSceneThumbnail(target.text, canvasTheme, ids)
-      // The same findings `sceneGet` returns, and the whole scene's rather than the
-      // crop's: a picture shows an agent that two boxes overlap, the warnings name
-      // which two and by how much, and an agent that has just cropped to one corner
-      // still wants to be told about the corner it stopped looking at.
-      const { elementCount, warnings } = summarizeScene(target.text)
-      return {
-        path: target.path,
-        elementCount,
-        rendered: image.rendered,
-        mimeType: image.mimeType,
-        width: image.width,
-        height: image.height,
-        scale: image.scale,
-        dataBase64: image.base64,
-        warnings,
-      }
-    },
-
-    cursor: () => editorRef.current?.cursor() ?? null,
-  }
-
-  // The two surfaces hold incompatible content, so a tool aimed at the wrong one
-  // is answered with the name of the tool that would have worked. Takes the
-  // target's kind rather than reading the open document's: since protocol 4 the
-  // document a tool acts on is often not the one on screen.
-  function requireText(target: FileKind): void {
-    if (target === 'excalidraw') {
-      throw new Error(
-        'That document is an Excalidraw scene. Use ideate_scene_get and ' +
-          'ideate_scene_edit — the text tools cannot edit a canvas.',
-      )
-    }
-  }
-  function requireScene(target: FileKind): void {
-    if (target !== 'excalidraw') {
-      throw new Error(
-        `That document is ${target}, not an Excalidraw scene. Use ideate_read and ` +
-          'ideate_edit instead.',
-      )
-    }
-  }
-
-  /** Where the Agent Link service lives: the stored override, else the build's
-   *  default. Unlike the on/off switch this *is* an `AppConfig` field, because it
-   *  describes the deployment rather than this tab — see the comment block in
-   *  lib/types.ts. */
-  const mcpOrigin = normalizeMcpOrigin(config.mcpOrigin ?? DEFAULT_MCP_ORIGIN)
-
-  const agentLink = useAgentLink({
+  const agentController = useAgentLinkController({
     enabled: agentLinkOn,
-    mcpOrigin,
-    state: bridgeState,
-    caps: linkCaps,
+    configuredOrigin: config.mcpOrigin,
+    defaultOrigin: DEFAULT_MCP_ORIGIN,
+    githubEnabled,
+    repo,
+    openPath,
+    kind,
+    dirty,
+    text,
+    currentTheme,
+    noneThemeValue: NONE_THEME,
+    customThemeValue: CUSTOM_THEME,
+    canvasTheme,
+    hasWorkspace,
+    localMode,
+    savedPaths,
+    pendingPaths,
+    repoFilePaths,
+    loadedSha,
+    baseline,
+    activeDocId: docId,
+    appliedConfig,
+    workspaceStore,
+    openPathRef,
+    activeIdentityRef,
+    liveTextRef,
+    workspaceSelectionRef,
+    draftBasesRef,
+    identityFor,
+    docIdForPath,
+    readSaved,
+    validatePath,
+    templateFor,
+    setText,
+    setOpenPath,
+    setLoadedSha,
+    setBaseline,
+    setCreatedPaths,
+    setDirtyPaths,
+    setLinkTrail,
+    openFile,
+    flushOutgoingDraft,
   })
-  // "Connected" means an agent has *attached*, not merely that this tab is paired.
-  // Treating a live socket as connected would light this up as soon as the switch
-  // was flipped, whether or not anything had chosen to drive the document.
-  const linkAttached = agentLinkOn && agentLink.status === 'attached'
-  const linkWaiting = agentLinkOn && agentLink.status === 'paired'
+  const {
+    editorRef,
+    markdownPreviewRef,
+    revealInPreview,
+    revealInEditor,
+    mcpOrigin,
+    agentLink,
+    linkAttached,
+    linkWaiting,
+  } = agentController
 
   const newDiagram = useCallback(
     async (dirPath?: string, newKind: FileKind = 'mermaid') => {
@@ -1842,7 +1036,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
         },
       })
     },
-    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths, flushOutgoingDraft, setOpenPath, setText],
+    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths,
+      flushOutgoingDraft, setOpenPath, setText, setCreatedPaths],
   )
 
   const requestRename = useCallback(
@@ -1980,6 +1175,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       identityFor,
       workspaceStore,
       setOpenPath,
+      setCreatedPaths,
+      setDirtyPaths,
     ],
   )
 
@@ -2094,6 +1291,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     refreshTree,
     identityFor,
     workspaceStore,
+    setCreatedPaths,
+    setDirtyPaths,
   ])
 
   /** Bookkeeping for a path that was committed while the user was looking at something else. */
@@ -2112,7 +1311,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       if (updateMarkers) setDirtyPaths((prev) => withoutPaths(prev, [path]))
     },
-    [docIdForPath],
+    [docIdForPath, setDirtyPaths],
   )
 
   const settleSavedRecord = useCallback(async (identity: DocumentIdentity, content: string,
@@ -2203,7 +1402,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
           submittedWorkspace === workspaceSelectionRef.current) setConflictOpen(true)
       else toast.error(res.error.message)
     },
-    [repo, refreshTree, scratchDocId, settleCommitted, settleSavedRecord, identityFor, workspaceStore, setOpenPath],
+    [repo, refreshTree, scratchDocId, settleCommitted, settleSavedRecord, identityFor,
+      workspaceStore, setOpenPath, setCreatedPaths],
   )
 
   /** Save to the local store — local mode's whole of `commitCurrent`. */
@@ -2229,7 +1429,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       void refreshLocalFiles()
       toast.success(`Saved ${path}`)
     },
-    [refreshLocalFiles, scratchDocId, identityFor, workspaceStore, setOpenPath, docIdForPath],
+    [refreshLocalFiles, scratchDocId, identityFor, workspaceStore, setOpenPath,
+      docIdForPath, setCreatedPaths],
   )
 
   const onSave = useCallback(async () => {
@@ -2472,6 +1673,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     identityFor,
     settleSavedRecord,
     docIdForPath,
+    setCreatedPaths,
   ])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
@@ -2581,204 +1783,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setConflictOpen(false)
   }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
-  const selectVersion = useCallback(
-    async (commit: FileCommit) => {
-      if (!repo) return
-      const requestedWorkspace = workspaceSelectionRef.current
-      const requestedPath = historyTargetRef.current
-      const request = versionRequestRef.current.begin(JSON.stringify([requestedWorkspace, requestedPath]))
-      setSelectedSha(commit.sha)
-      setVersionLoading(true)
-      setVersionContent(null)
-      // The comparison base belongs to the previously selected version.
-      setPreviousContent(null)
-      setCompareNote(null)
-      // Use the path the file had at that commit (may differ across renames).
-      const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
-      if (!versionRequestRef.current.accepts(request,
-        JSON.stringify([workspaceSelectionRef.current, historyTargetRef.current]))) return
-      setVersionLoading(false)
-      if (res.ok) setVersionContent(res.data)
-      else if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
-    },
-    [repo],
-  )
-
-  // Loads one page of history for `path`; `append` decides whether it extends the
-  // current list (Load more) or replaces it (first load / jump to another path).
-  const loadHistoryPage = useCallback(
-    async (path: string, page: number, append: boolean) => {
-      if (!repo) return
-      const requestedWorkspace = workspaceSelectionRef.current
-      historyTargetRef.current = path
-      const request = historyRequestRef.current.begin(JSON.stringify([requestedWorkspace, path]))
-      if (!append) versionRequestRef.current.invalidate()
-      const res = await listFileCommits(
-        repo.owner,
-        repo.name,
-        path,
-        repo.branch,
-        page,
-        HISTORY_PAGE_SIZE,
-      )
-      if (!historyRequestRef.current.accepts(request,
-        JSON.stringify([workspaceSelectionRef.current, historyTargetRef.current]))) return
-      if (!res.ok) {
-        if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
-        return
-      }
-      setCommits((prev) => (append && prev ? [...prev, ...res.data.commits] : res.data.commits))
-      setHistoryPage(page)
-      setHasMoreCommits(res.data.hasMore)
-      setRenamedFrom(res.data.renamedFrom)
-      // Preselect the latest version on a fresh load only.
-      if (!append && res.data.commits[0]) void selectVersion(res.data.commits[0])
-    },
-    [repo, selectVersion],
-  )
-
-  const openHistory = useCallback(async () => {
-    if (!repo || !openPath) return
-    setHistoryOpen(true)
-    setHistoryPath(openPath)
-    setHistoryPathStack([])
-    setCommits(null)
-    setHistoryError(null)
-    setSelectedSha(null)
-    setVersionContent(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    await loadHistoryPage(openPath, 1, false)
-  }, [repo, openPath, loadHistoryPage])
-
-  const loadMoreCommits = useCallback(async () => {
-    if (!historyPath || loadingMoreCommits) return
-    setLoadingMoreCommits(true)
-    await loadHistoryPage(historyPath, historyPage + 1, true)
-    setLoadingMoreCommits(false)
-  }, [historyPath, historyPage, loadingMoreCommits, loadHistoryPage])
-
-  const viewHistoryBeforeRename = useCallback(async () => {
-    if (!historyPath || !renamedFrom) return
-    setHistoryPathStack((prev) => [...prev, historyPath])
-    setHistoryPath(renamedFrom)
-    setCommits(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    setHistoryError(null)
-    await loadHistoryPage(renamedFrom, 1, false)
-  }, [historyPath, renamedFrom, loadHistoryPage])
-
-  const goBackHistory = useCallback(async () => {
-    if (historyPathStack.length === 0) return
-    const next = historyPathStack.slice(0, -1)
-    const target = historyPathStack[historyPathStack.length - 1]!
-    setHistoryPathStack(next)
-    setHistoryPath(target)
-    setCommits(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    setHistoryError(null)
-    await loadHistoryPage(target, 1, false)
-  }, [historyPathStack, loadHistoryPage])
-
-  // The commit immediately older than the selected one, among those loaded. A
-  // file's history is paged, so "no older commit here" can mean either "this is
-  // the first commit" or "the next page hasn't been fetched yet" — which the
-  // effect below has to tell apart before claiming the file was created here.
-  const olderCommit = useMemo(() => {
-    if (!commits || !selectedSha) return null
-    const index = commits.findIndex((c) => c.sha === selectedSha)
-    return index >= 0 ? (commits[index + 1] ?? null) : null
-  }, [commits, selectedSha])
-
-  const selectedIsOldestLoaded = useMemo(() => {
-    if (!commits || !selectedSha) return false
-    const index = commits.findIndex((c) => c.sha === selectedSha)
-    return index >= 0 && index === commits.length - 1
-  }, [commits, selectedSha])
-
-  // Fetch the previous version's content — only while a diff against it is
-  // actually on screen, so browsing history in preview mode costs nothing extra.
-  useEffect(() => {
-    if (!historyOpen || historyView !== 'diff' || historyCompare !== 'previous') return
-    if (!repo || !selectedSha) return
-    if (!olderCommit) {
-      if (selectedIsOldestLoaded && (hasMoreCommits || renamedFrom)) {
-        setPreviousContent(null)
-        setCompareNote(
-          'Load more history to compare this version with the one before it.',
-        )
-      } else {
-        // Genuinely the first commit of this path: everything in it is new.
-        setPreviousContent('')
-        setCompareNote(null)
-      }
-      return
-    }
-    let cancelled = false
-    setCompareNote(null)
-    setPreviousLoading(true)
-    void readFileAtRef(repo.owner, repo.name, olderCommit.path, olderCommit.sha).then((res) => {
-      if (cancelled) return
-      setPreviousLoading(false)
-      if (res.ok) setPreviousContent(res.data)
-      else if (!handleExpiredSession(res.error)) setCompareNote(res.error.message)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    historyOpen,
-    historyView,
-    historyCompare,
-    repo,
-    selectedSha,
-    olderCommit,
-    selectedIsOldestLoaded,
-    hasMoreCommits,
-    renamedFrom,
-  ])
-
-  // The two sides of the history diff. Comparing with the previous version reads
-  // forwards (older → this version, i.e. what the commit changed); comparing with
-  // the working copy reads the other way round, since the working copy is the
-  // newer of the two.
-  const historyDiff = useMemo(() => {
-    if (historyView !== 'diff' || versionContent === null) return null
-    if (historyCompare === 'working') return { before: versionContent, after: text }
-    if (previousContent === null) return null
-    return { before: previousContent, after: versionContent }
-  }, [historyView, historyCompare, versionContent, previousContent, text])
-
-  const onRecover = useCallback(() => {
-    if (versionContent === null) return
-    setText(versionContent)
-    setHistoryOpen(false)
-    toast.info('Version loaded into working tree (unsaved)')
-  }, [versionContent, setText])
-
-  const onFork = useCallback(() => {
-    if (versionContent === null || !repo) return
-    const content = versionContent
-    setHistoryOpen(false)
-    openPrompt({
-      title: 'Create new diagram from this version',
-      description: 'Save this version’s content as a separate new file.',
-      label: 'New file path',
-      defaultValue: defaultFileName(kind, 'copy'),
-      submitLabel: 'Start editing',
-      validate: validatePathForKind(kind),
-      onSubmit: (path) => {
-        setPromptOpen(false)
-        setOpenPath(path)
-        setLoadedSha(null)
-        setBaseline('')
-        setText(content)
-      },
-    })
-  }, [versionContent, repo, kind, openPrompt, setOpenPath, setText])
-
   const canSave =
     hasWorkspace && dirty && ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving
   /**
@@ -2797,787 +1801,188 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const sidebarHint = isMac ? '⌘ B' : 'Ctrl + B'
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex flex-none items-center justify-between gap-4 border-b bg-card px-4 py-2">
-        <div className="flex items-center gap-2">
-          {hasWorkspace ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => setSidebarOpen((v) => !v)}
-              title={`${sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'} (${sidebarHint})`}
-            >
-              <PanelLeft />
-            </Button>
-          ) : null}
-          <Link href="/" className="text-xl font-bold hover:text-primary">
-            {APP_NAME}
-          </Link>
-          {/* The repository pill carries two actions, because it names one thing
-              the user wants two things from: the label switches repositories, and
-              the arrow leaves for the repository itself on GitHub — its issues,
-              its PRs, the commits this app has been making. One pill rather than
-              two controls, since the second is meaningless without the first and
-              a ⌘-click on the label would be an affordance nothing announces.
-              The arrow opens the branch being browsed, which is the state the
-              user is actually looking at. */}
-          {githubEnabled ? (
-            <div className="ml-1 flex items-center rounded-full border border-border bg-background dark:border-input dark:bg-input/30">
-              <Button
-                size="sm"
-                variant="ghost"
-                className={cn('rounded-full', repo && 'rounded-r-none pr-1.5')}
-                onClick={() => setRepoPickerOpen(true)}
-                title={repo ? 'Switch repository' : 'Connect a repository'}
-              >
-                <FolderGit2 />
-                {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
-              </Button>
-              {repo ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="rounded-full rounded-l-none px-2"
-                  onClick={() =>
-                    window.open(
-                      `https://github.com/${repo.owner}/${repo.name}/tree/${encodeURIComponent(repo.branch)}`,
-                      '_blank',
-                      'noopener,noreferrer',
-                    )
-                  }
-                  title={`Open ${repo.owner}/${repo.name} on GitHub`}
-                  aria-label={`Open ${repo.owner}/${repo.name} on GitHub`}
-                >
-                  <SquareArrowOutUpRight />
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {githubEnabled && repo ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="rounded-full"
-              onClick={() => setBranchPickerOpen(true)}
-            >
-              <GitBranch /> {repo.branch}
-            </Button>
-          ) : null}
-          {githubEnabled && repo && repo.defaultBranch && repo.branch !== repo.defaultBranch ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="rounded-full"
-              onClick={() =>
-                window.open(
-                  `https://github.com/${repo.owner}/${repo.name}/compare/${repo.defaultBranch}...${repo.branch}?expand=1`,
-                  '_blank',
-                  'noopener,noreferrer',
-                )
-              }
-            >
-              <GitPullRequestArrow /> Open PR
-            </Button>
-          ) : null}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {hasWorkspace || githubEnabled ? (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onRestore}
-                disabled={!canRestore}
-                title={localMode ? 'Restore to last save' : 'Restore to last commit'}
-              >
-                <RotateCcw /> Restore
-              </Button>
-              {/* Save is the primary action and always means *this file* — the
-                  one on screen, the one ⌘S has always saved. Save All is a
-                  second, deliberate choice behind the chevron rather than a mode
-                  the button silently switches into, because the two write
-                  different things and only one of them touches files the user is
-                  not looking at. */}
-              <div className="flex items-center">
-                <Button
-                  size="sm"
-                  onClick={onSave}
-                  disabled={!canSave}
-                  className={showSaveAll ? 'rounded-r-none' : undefined}
-                  title={`${localMode ? 'Save' : 'Commit'} this file (${saveHint})`}
-                >
-                  {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
-                  <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
-                    {isMac ? (
-                      <>
-                        <Command className="size-2.5" /> <span>S</span>
-                      </>
-                    ) : (
-                      <span>Ctrl + S</span>
-                    )}
-                  </kbd>
-                </Button>
-                {showSaveAll ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="sm"
-                        disabled={saving}
-                        className="rounded-l-none border-l border-primary-foreground/30 px-1.5"
-                        aria-label={`More save actions — ${saveAllPaths.length} unsaved files`}
-                        title={`${saveAllPaths.length} unsaved files`}
-                      >
-                        <ChevronDown />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-64">
-                      <DropdownMenuItem
-                        onClick={() => void onSaveAll()}
-                        className="flex-col items-start gap-0.5"
-                      >
-                        <span>
-                          {localMode ? 'Save all' : 'Commit all'} ({saveAllPaths.length} files)
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {localMode
-                            ? 'Writes every changed file to this browser.'
-                            : 'All of them in a single commit.'}
-                        </span>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                        Unsaved
-                      </DropdownMenuLabel>
-                      {saveAllPaths.slice(0, MAX_LISTED_UNSAVED).map((path) => (
-                        <DropdownMenuItem
-                          key={path}
-                          onClick={() => openFromTree(path)}
-                          className="text-xs"
-                        >
-                          <span className="truncate">{path}</span>
-                        </DropdownMenuItem>
-                      ))}
-                      {saveAllPaths.length > MAX_LISTED_UNSAVED ? (
-                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                          and {saveAllPaths.length - MAX_LISTED_UNSAVED} more
-                        </p>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {dirty ? '● Unsaved' : 'Saved'}
-              </span>
-              {openPath && repo ? (
-                <Button size="sm" variant="ghost" onClick={openHistory}>
-                  <History /> History
-                </Button>
-              ) : null}
-              <Separator orientation="vertical" className="h-6" />
-            </>
-          ) : null}
-          <ExportMenu
-            text={debouncedText}
-            baseName={baseName}
-            configYaml={config.mermaidConfig}
-            background={config.exportBackground}
-            onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
-            pngScale={config.pngScale}
-            onPngScaleChange={(v) => updateConfig({ pngScale: v })}
-            config={appliedConfig}
-            kind={kind}
+    <AppLayout
+      header={
+        <AppHeader
+          githubEnabled={githubEnabled}
+          hasWorkspace={hasWorkspace}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((value) => !value)}
+          sidebarHint={sidebarHint}
+          repo={repo}
+          onOpenRepoPicker={() => setRepoPickerOpen(true)}
+          onOpenBranchPicker={() => setBranchPickerOpen(true)}
+          onRestore={() => void onRestore()}
+          canRestore={canRestore}
+          localMode={localMode}
+          onSave={() => void onSave()}
+          canSave={canSave}
+          saving={saving}
+          showSaveAll={showSaveAll}
+          saveAllPaths={saveAllPaths}
+          saveHint={saveHint}
+          isMac={isMac}
+          onSaveAll={() => void onSaveAll()}
+          onOpenPath={openFromTree}
+          dirty={dirty}
+          openPath={openPath}
+          onOpenHistory={() => void history.openHistory()}
+          exportText={debouncedText}
+          baseName={baseName}
+          config={config}
+          updateConfig={updateConfig}
+          appliedConfig={appliedConfig}
+          kind={kind}
+          user={user}
+        />
+      }
+      sidebar={
+        showSidebar ? (
+          <WorkspaceSidebar
+            width={sidebarWidth}
+            dirtyCount={dirtyPaths.size}
+            repoBranch={repo?.branch ?? null}
+            treeLoading={treeLoading}
+            onRefresh={() => {
+              if (repo) void refreshTree(repo)
+            }}
+            newHint={newHint}
+            onNewFile={(dir, selectedKind) => newDiagram(dir, selectedKind)}
+            hasDisplayNodes={displayNodes.length > 0}
+            fileFilter={fileFilter}
+            onFileFilterChange={setFileFilter}
+            searching={searching}
+            truncated={tree?.truncated ?? false}
+            treeError={treeError}
+            treeLoaded={tree !== null}
+            localMode={localMode}
+            visibleNodes={visibleNodes}
+            activePath={openPath}
+            dirtyPaths={dirtyPaths}
+            expandedPaths={visibleExpanded}
+            onToggleDir={toggleVisibleDir}
+            onOpenFile={openFromTree}
+            onDelete={requestDelete}
+            onRename={requestRename}
           />
-          <Separator orientation="vertical" className="h-6" />
-          <AuthButton user={user} />
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {showSidebar ? (
-          <aside
-            className="flex flex-none flex-col overflow-hidden bg-sidebar"
-            style={{ width: sidebarWidth }}
-          >
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
-                Files
-                {dirtyPaths.size > 0 ? (
-                  <span
-                    className="size-1.5 shrink-0 rounded-full bg-amber-500"
-                    title={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
-                    aria-label={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
-                  />
-                ) : null}
-              </span>
-              <div className="flex items-center gap-0.5">
-                {/* Nothing to refresh in local mode: the sidebar is not a cached
-                    view of a remote list, it is the store. */}
-                {repo ? (
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => void refreshTree(repo)}
-                    disabled={treeLoading}
-                    title="Refresh files"
-                  >
-                    <RefreshCw className={cn(treeLoading && 'animate-spin')} />
-                  </Button>
-                ) : null}
-                <NewFileMenu onSelect={(k) => newDiagram(undefined, k)}>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    title={`New file at root (${newHint})`}
-                  >
-                    <Plus />
-                  </Button>
-                </NewFileMenu>
-              </div>
-            </div>
-            {/* Filters what is already loaded — no fetch, both modes. Hidden while
-                the workspace is genuinely empty, where a search box is a control
-                that can only ever return nothing. */}
-            {displayNodes.length > 0 ? (
-              <div className="px-3 pb-2">
-                {/* The positioning context is the field itself, not the padded
-                    row around it: anchored to the row, the icon centred against
-                    the row's own height — field plus bottom padding — and sat a
-                    few pixels low of the text it belongs to. */}
-                <div className="relative">
-                  <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={fileFilter}
-                    onChange={(e) => {
-                      setFileFilter(e.target.value)
-                      setSearchCollapsed(EMPTY_PATHS)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        e.stopPropagation()
-                        setFileFilter('')
-                        setSearchCollapsed(EMPTY_PATHS)
-                      }
-                    }}
-                    placeholder="Search files"
-                    aria-label="Search files"
-                    className="h-7 bg-background pr-7 pl-7 text-xs"
-                  />
-                  {searching ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileFilter('')
-                        setSearchCollapsed(EMPTY_PATHS)
-                      }}
-                      aria-label="Clear search"
-                      title="Clear search"
-                      className="absolute top-1/2 right-1.5 flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            <Separator />
-            <div className="min-h-0 flex-1 overflow-auto p-2">
-              {tree?.truncated ? (
-                <p className="mb-2 rounded-md bg-muted p-2 text-xs text-muted-foreground">
-                  ⚠ Large repo; some files may be hidden.
-                </p>
-              ) : null}
-              {/* A refresh that fails while a list is already on screen shows the
-                  error as a banner and keeps the list — the stale list is far more
-                  useful than an empty pane, and the next refresh clears this. */}
-              {treeError && tree !== null ? (
-                <p className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
-                  {treeError}
-                </p>
-              ) : null}
-              {treeError && tree === null ? (
-                <p className="p-2 text-sm text-destructive">{treeError}</p>
-              ) : !localMode && tree === null ? (
-                <FileTreeSkeleton />
-              ) : (
-                <FileTree
-                  nodes={visibleNodes}
-                  activePath={openPath}
-                  dirtyPaths={dirtyPaths}
-                  expandedPaths={visibleExpanded}
-                  onToggleDir={toggleVisibleDir}
-                  branch={repo?.branch ?? ''}
-                  searchQuery={searching ? fileFilter.trim() : undefined}
-                  onOpenFile={openFromTree}
-                  onDelete={requestDelete}
-                  onNewFile={(dir, k) => newDiagram(dir, k)}
-                  onRename={requestRename}
-                />
-              )}
-            </div>
-          </aside>
-        ) : null}
-        {showSidebar ? (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            aria-valuemin={MIN_SIDEBAR_WIDTH}
-            aria-valuemax={MAX_SIDEBAR_WIDTH}
-            aria-valuenow={sidebarWidth}
-            tabIndex={0}
-            onPointerDown={startSidebarDrag}
-            onKeyDown={onSidebarDividerKeyDown}
-            className="group flex w-1.5 flex-none cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
-          >
-            <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
-          </div>
-        ) : null}
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
-            {hasWorkspace && linkTrail.length > 0 ? (
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                onClick={goBack}
-                title={`Back to ${linkTrail[linkTrail.length - 1]}`}
-                aria-label={`Back to ${linkTrail[linkTrail.length - 1]}`}
-              >
-                <ArrowLeft />
-              </Button>
-            ) : null}
-            {hasWorkspace ? (
-              <span>
-                {openPath ??
-                  (localMode ? 'untitled (unsaved)' : 'untitled (unsaved local draft)')}
-              </span>
-            ) : (
-              <span>Connect a repository to browse and commit your diagrams.</span>
-            )}
-            {localMode ? (
-              <span className="text-muted-foreground/70">
-                · local mode, files stay in this browser
-              </span>
-            ) : null}
-            {/* With no file open there's no extension to infer from, so the user
-                picks the surface. Each kind keeps its own draft, so toggling is
-                non-destructive.
-
-                Deliberately on the LEFT, outside the `ml-auto` group: it only
-                exists while no file is open, and inside that group its appearing
-                and disappearing shunted the theme and layout controls sideways
-                every time a file was opened or closed. */}
-            {!openPath ? (
-              <div className="ml-1 flex items-center gap-0.5 rounded-md border p-0.5">
-                {/* Same order as NewFileMenu: markdown first. */}
-                <Button
-                  size="sm"
-                  variant={kind === 'markdown' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('markdown')}
-                >
-                  <MarkdownIcon className="size-3" /> Markdown
-                </Button>
-                <Button
-                  size="sm"
-                  variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('mermaid')}
-                >
-                  <MermaidIcon className="size-3" /> Diagram
-                </Button>
-                <Button
-                  size="sm"
-                  variant={kind === 'excalidraw' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('excalidraw')}
-                >
-                  <ExcalidrawIcon className="size-3" /> Canvas
-                </Button>
-              </div>
-            ) : null}
-            <div className="ml-auto flex items-center gap-1.5">
-              {/* Editor-only control, so it disappears with the canvas — which has
-                  no lines to wrap. */}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={showDiff && canDiff ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => setShowDiff((v) => !v)}
-                  disabled={!canDiff}
-                  aria-pressed={showDiff && canDiff}
-                  aria-label="Compare with the last commit"
-                  title={
-                    canDiff
-                      ? showDiff
-                        ? 'Back to the editor'
-                        : 'Compare with the last commit'
-                      : 'Nothing committed yet to compare with'
-                  }
-                >
-                  <FileDiff />
-                </Button>
-              ) : null}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={config.wrapLines ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => updateConfig({ wrapLines: !config.wrapLines })}
-                  aria-pressed={config.wrapLines}
-                  aria-label="Wrap long lines"
-                  title={config.wrapLines ? 'Wrap long lines: on' : 'Wrap long lines: off'}
-                >
-                  <WrapText />
-                </Button>
-              ) : null}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={config.minimap ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => updateConfig({ minimap: !config.minimap })}
-                  aria-pressed={config.minimap}
-                  aria-label="Viewfinder"
-                  title={config.minimap ? 'Viewfinder: on' : 'Viewfinder: off'}
-                >
-                  <Map />
-                </Button>
-              ) : null}
-              <span className="text-muted-foreground">Theme</span>
-              <Select value={currentTheme} onValueChange={applyTheme}>
-                <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  <SelectItem
-                    value={NONE_THEME}
-                    className="cursor-pointer"
-                    onFocus={() => applyTheme(NONE_THEME)}
-                  >
-                    None (default)
-                  </SelectItem>
-                  {currentTheme === CUSTOM_THEME ? (
-                    <SelectItem value={CUSTOM_THEME} disabled>
-                      Custom
-                    </SelectItem>
-                  ) : null}
-                  <SelectSeparator />
-                  <SelectGroup>
-                    <SelectLabel>Light</SelectLabel>
-                    {THEME_PRESETS.filter((preset) => preset.mode === 'light').map((preset) => (
-                      <SelectItem
-                        key={preset.value}
-                        value={preset.value}
-                        className="cursor-pointer"
-                        onFocus={() => applyTheme(preset.value)}
-                      >
-                        {preset.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                  <SelectGroup>
-                    <SelectLabel>Dark</SelectLabel>
-                    {THEME_PRESETS.filter((preset) => preset.mode === 'dark').map((preset) => (
-                      <SelectItem
-                        key={preset.value}
-                        value={preset.value}
-                        className="cursor-pointer"
-                        onFocus={() => applyTheme(preset.value)}
-                      >
-                        {preset.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              {/* Layout engine and the mermaid YAML config have no meaning for a
-                  canvas. The Theme dropdown above stays, because it still recolors
-                  the app chrome — and drives the canvas's light/dark mode.
-                  Markdown keeps both: they drive its embedded ```mermaid fences. */}
-              {kind !== 'excalidraw' ? (
-                <>
-                  <span className="text-muted-foreground">Layout</span>
-                  <Select
-                    value={currentLayout}
-                    onValueChange={(v) =>
-                      updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
-                    }
-                  >
-                    <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="end">
-                      {LAYOUT_ENGINES.map((engine) => (
-                        <SelectItem key={engine.value} value={engine.value}>
-                          {engine.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="size-7"
-                    onClick={() => setConfigOpen(true)}
-                    aria-label="Diagram configuration"
-                    title="Diagram configuration"
-                  >
-                    <Settings2 />
-                  </Button>
-                </>
-              ) : null}
-              {/* Agent Link lives here, not in the diagram-config modal: it has
-                  nothing to do with diagrams, and it applies to all three document
-                  kinds. Labelled rather than icon-only, and always rendered, because
-                  this button is the only indication that an agent can be editing the
-                  document — an unlabelled plug says nothing to someone who has never
-                  turned it on.
-
-                  Clicking opens the modal rather than toggling: switching it on hands
-                  a process outside the browser the ability to rewrite the open
-                  document, which should not be one click on a toolbar control. */}
-              <Button
-                size="sm"
-                variant={linkAttached ? 'secondary' : 'ghost'}
-                className={linkAttached ? 'h-7 gap-1.5 text-primary' : 'h-7 gap-1.5'}
-                onClick={() => setLinkOpen(true)}
-                aria-pressed={agentLinkOn}
-                title={
-                  !agentLinkOn
-                    ? 'Agent Link — let a coding agent read and edit this document'
-                    : linkAttached
-                      ? `Agent Link — ${agentLink.agent ?? 'an agent'} is attached and can edit this document`
-                      : agentLink.status === 'full'
-                        ? 'Agent Link — the shared service is at capacity. Run your own and point this tab at it in Advanced options'
-                        : agentLink.status === 'blocked'
-                          ? `Agent Link — blocked: ${agentLink.detail ?? 'see the console'}`
-                          : linkWaiting
-                            ? `Agent Link — on. Give your agent the code ${agentLink.code}; it must attach before it can read or edit`
-                            : 'Agent Link — on, connecting to the service'
-                }
-              >
-                {linkAttached ? <PlugZap /> : <Plug />}
-                {linkAttached
-                  ? 'Agent Connected'
-                  : agentLinkOn
-                    ? 'Awaiting Agent'
-                    : 'Connect Agent'}
-              </Button>
-            </div>
-          </div>
-
-          {kind === 'excalidraw' ? (
-            // A canvas is its own editor *and* its own preview, so it takes the
-            // full pane — no split, no divider. `key` remounts it per file so one
-            // document's undo history and scroll position can't leak into the next.
-            <section className="min-h-0 flex-1" aria-label="Canvas">
-              <Canvas
-                key={openPath ?? 'scratch'}
-                value={text}
-                onChange={setText}
-                theme={canvasTheme}
-                backgroundColor={canvasBackground}
-              />
-            </section>
-          ) : showDiff && canDiff ? (
-            // The diff takes the whole pane row: side by side needs the width, and
-            // there is nothing to edit while reading it.
-            <section className="min-h-0 flex-1 overflow-auto" aria-label="Uncommitted changes">
-              <DiffView
-                before={baseline}
-                after={debouncedText}
-                beforeLabel="Last commit"
-                afterLabel="Working copy"
-                emptyMessage="No uncommitted changes — this document matches the last commit."
-              />
-            </section>
-          ) : (
-            <div
-              ref={paneRowRef}
-              className="grid min-h-0 flex-1"
-              style={{
-                gridTemplateColumns: `minmax(0,${editorRatio}fr) 6px minmax(0,${1 - editorRatio}fr)`,
-              }}
-            >
-              <section className="min-h-0 overflow-auto" aria-label="Editor">
-                <Editor
-                  ref={editorRef}
-                  documentId={documentKey(activeIdentityRef.current)}
-                  value={text}
-                  onChange={setText}
-                  dark={editorDark}
-                  kind={kind}
-                  wrap={config.wrapLines}
-                  // Only a committed file has something to diverge *from*; a new
-                  // file (or the local scratch document) would otherwise show
-                  // every one of its lines as added.
-                  baseline={loadedSha !== null ? baseline : null}
-                  filePaths={repoFilePaths}
-                  docPath={openPath}
-                  minimap={config.minimap}
-                  // Only markdown has a document to scroll to; a diagram preview
-                  // is one figure with no notion of a source line.
-                  onRevealPreview={kind === 'markdown' ? revealInPreview : undefined}
-                />
-              </section>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize editor and preview"
-                aria-valuemin={20}
-                aria-valuemax={80}
-                aria-valuenow={Math.round(editorRatio * 100)}
-                tabIndex={0}
-                onPointerDown={startDividerDrag}
-                onKeyDown={onDividerKeyDown}
-                className="group flex cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
-              >
-                <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
-              </div>
-              <section className="min-h-0 overflow-auto" aria-label="Preview">
-                {kind === 'markdown' ? (
-                  <MarkdownPreview
-                    ref={markdownPreviewRef}
-                    onRevealSource={revealInEditor}
-                    text={debouncedText}
-                    config={appliedConfig}
-                    path={openPath}
-                    repo={repo}
-                    onOpenFile={repo ? openLinkedFile : undefined}
-                    // Filling the window hides the toolbar's Back button, so the
-                    // reading view carries its own.
-                    onBack={linkTrail.length > 0 ? goBack : undefined}
-                    backLabel={linkTrail[linkTrail.length - 1]}
-                  />
-                ) : (
-                  <Preview text={debouncedText} config={appliedConfig} />
-                )}
-              </section>
-            </div>
-          )}
-        </main>
-      </div>
-
-      {githubEnabled ? (
-        <RepoPicker
-          open={repoPickerOpen}
-          onOpenChange={setRepoPickerOpen}
-          onSelect={onSelectRepo}
-        />
-      ) : null}
-
-      {githubEnabled && repo ? (
-        <BranchPicker
-          open={branchPickerOpen}
-          onOpenChange={setBranchPickerOpen}
-          owner={repo.owner}
-          name={repo.name}
-          currentBranch={repo.branch}
-          defaultBranch={repo.defaultBranch}
-          creating={branchBusy}
-          onSelect={onSelectBranch}
-          onCreate={onCreateBranch}
-        />
-      ) : null}
-
-      {openPath ? (
-        <ConflictModal
-          open={conflictOpen}
-          onOpenChange={setConflictOpen}
-          path={openPath}
-          branch={repo?.branch ?? ''}
-          busy={conflictBusy}
-          onOverwrite={onOverwrite}
-          onStartOver={onStartOver}
-          reconciliation={draftConflictKey === documentKey(identityFor(openPath))}
-        />
-      ) : null}
-
-      {prompt ? (
-        <PromptModal open={promptOpen} onOpenChange={setPromptOpen} {...prompt} />
-      ) : null}
-
-      <ConfigModal
-        open={configOpen}
-        onOpenChange={setConfigOpen}
-        value={config.mermaidConfig}
-        onChange={(v) => updateConfig({ mermaidConfig: v })}
-        error={parsedConfig.error}
-      />
-
-      <AgentLinkModal
-        open={linkOpen}
-        onOpenChange={setLinkOpen}
-        enabled={agentLinkOn}
-        onEnabledChange={enableAgentLink}
-        status={agentLink.status}
-        detail={agentLink.detail}
-        agent={agentLink.agent}
-        code={agentLink.code}
-        onRegenerate={agentLink.regenerate}
-        onRetry={agentLink.retry}
-        mcpOrigin={mcpOrigin}
-        onMcpOriginChange={(origin) => updateConfig({ mcpOrigin: origin })}
-        mode={mode}
-      />
-
-      <DeleteModal
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        target={deleteTarget}
-        fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
-        branch={repo?.branch ?? ''}
-        busy={deleteBusy}
-        onConfirm={confirmDelete}
-      />
-
-      {openPath ? (
-        <HistoryPanel
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          path={openPath}
-          historyPath={historyPath ?? openPath}
-          commits={commits}
-          error={historyError}
-          hasMore={hasMoreCommits}
-          loadingMore={loadingMoreCommits}
-          renamedFrom={renamedFrom}
-          canGoBack={historyPathStack.length > 0}
-          selectedSha={selectedSha}
-          versionContent={versionContent}
-          versionLoading={versionLoading}
-          config={appliedConfig}
+        ) : null
+      }
+      showSidebar={showSidebar}
+      sidebarWidth={sidebarWidth}
+      minSidebarWidth={MIN_SIDEBAR_WIDTH}
+      maxSidebarWidth={MAX_SIDEBAR_WIDTH}
+      onSidebarPointerDown={startSidebarDrag}
+      onSidebarKeyDown={onSidebarDividerKeyDown}
+      dialogs={
+        <AppDialogs
+          githubEnabled={githubEnabled}
+          repoPickerOpen={repoPickerOpen}
+          onRepoPickerOpenChange={setRepoPickerOpen}
+          onSelectRepo={(selectedRepo) => void onSelectRepo(selectedRepo)}
+          repo={repo}
+          branchPickerOpen={branchPickerOpen}
+          onBranchPickerOpenChange={setBranchPickerOpen}
+          branchBusy={branchBusy}
+          onSelectBranch={(branch) => void onSelectBranch(branch)}
+          onCreateBranch={(branch) => void onCreateBranch(branch)}
+          openPath={openPath}
+          conflictOpen={conflictOpen}
+          onConflictOpenChange={setConflictOpen}
+          conflictBusy={conflictBusy}
+          onOverwrite={() => void onOverwrite()}
+          onStartOver={() => void onStartOver()}
+          reconciliation={openPath !== null && draftConflictKey === documentKey(identityFor(openPath))}
+          prompt={prompt}
+          promptOpen={promptOpen}
+          onPromptOpenChange={setPromptOpen}
+          configOpen={configOpen}
+          onConfigOpenChange={setConfigOpen}
+          mermaidConfig={config.mermaidConfig}
+          onMermaidConfigChange={(value) => updateConfig({ mermaidConfig: value })}
+          configError={parsedConfig.error}
+          linkOpen={linkOpen}
+          onLinkOpenChange={setLinkOpen}
+          agentLinkOn={agentLinkOn}
+          onAgentLinkEnabledChange={enableAgentLink}
+          agentLink={agentLink}
+          mcpOrigin={mcpOrigin}
+          onMcpOriginChange={(origin) => updateConfig({ mcpOrigin: origin })}
+          mode={mode}
+          deleteOpen={deleteOpen}
+          onDeleteOpenChange={setDeleteOpen}
+          deleteTarget={deleteTarget}
+          deleteBusy={deleteBusy}
+          onConfirmDelete={() => void confirmDelete()}
+          history={history}
+          appliedConfig={appliedConfig}
           kind={kind}
           canvasTheme={canvasTheme}
           canvasBackground={canvasBackground}
-          view={historyView}
-          onViewChange={setHistoryView}
-          compare={historyCompare}
-          onCompareChange={setHistoryCompare}
-          diff={historyDiff}
-          diffLoading={previousLoading}
-          diffNote={compareNote}
-          onSelect={selectVersion}
-          onLoadMore={loadMoreCommits}
-          onViewBeforeRename={viewHistoryBeforeRename}
-          onBack={goBackHistory}
-          onRecover={onRecover}
-          onFork={onFork}
+          mobileWarningOpen={mobileWarningOpen}
+          onMobileWarningOpenChange={(nextOpen) => {
+            setMobileWarningOpen(nextOpen)
+            if (!nextOpen) setMobileWarningDismissed(true)
+          }}
         />
-      ) : null}
-
-      <MobileWarningModal
-        open={mobileWarningOpen}
-        onOpenChange={(open) => {
-          setMobileWarningOpen(open)
-          if (!open) setMobileWarningDismissed(true)
-        }}
+      }
+    >
+      <DocumentToolbar
+        hasWorkspace={hasWorkspace}
+        linkTrail={linkTrail}
+        onBack={goBack}
+        openPath={openPath}
+        localMode={localMode}
+        kind={kind}
+        onSwitchScratchKind={(nextKind) => void switchScratchKind(nextKind)}
+        showDiff={showDiff}
+        canDiff={canDiff}
+        onToggleDiff={() => setShowDiff((value) => !value)}
+        config={config}
+        updateConfig={updateConfig}
+        currentTheme={currentTheme}
+        customThemeValue={CUSTOM_THEME}
+        noneThemeValue={NONE_THEME}
+        onApplyTheme={applyTheme}
+        currentLayout={currentLayout}
+        onOpenConfig={() => setConfigOpen(true)}
+        linkAttached={linkAttached}
+        linkWaiting={linkWaiting}
+        agentLinkOn={agentLinkOn}
+        agentLink={agentLink}
+        onOpenAgentLink={() => setLinkOpen(true)}
       />
-    </div>
+      <DocumentSurface
+        kind={kind}
+        openPath={openPath}
+        documentId={documentKey(activeIdentityRef.current)}
+        text={text}
+        onChange={setText}
+        canvasTheme={canvasTheme}
+        canvasBackground={canvasBackground}
+        showDiff={showDiff}
+        canDiff={canDiff}
+        baseline={baseline}
+        renderedText={debouncedText}
+        paneRowRef={paneRowRef}
+        editorRatio={editorRatio}
+        onDividerPointerDown={startDividerDrag}
+        onDividerKeyDown={onDividerKeyDown}
+        editorRef={editorRef}
+        markdownPreviewRef={markdownPreviewRef}
+        editorDark={editorDark}
+        wrapLines={config.wrapLines}
+        loaded={loadedSha !== null}
+        filePaths={repoFilePaths}
+        minimap={config.minimap}
+        onRevealPreview={revealInPreview}
+        onRevealEditor={revealInEditor}
+        config={appliedConfig}
+        repo={repo}
+        onOpenLinkedFile={(path) => void openLinkedFile(path)}
+        linkTrail={linkTrail}
+        onBack={goBack}
+      />
+    </AppLayout>
   )
 }
 
