@@ -576,16 +576,6 @@
   font-size: 0.9em;
 }
 
-/* Find-in-document (the reading view's search). */
-::highlight(md-find) {
-  background-color: color-mix(in srgb, var(--color-amber-400, #fbbf24) 55%, transparent);
-  color: var(--foreground);
-}
-::highlight(md-find-active) {
-  background-color: var(--color-amber-400, #fbbf24);
-  color: #000;
-}
-
 /* Heading permalinks, like GitHub's: revealed on hover so they don't compete
    with the heading text, and pulled into the left margin so appearing doesn't
    reflow the line. */

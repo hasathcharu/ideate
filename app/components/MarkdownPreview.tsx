@@ -32,6 +32,8 @@ import {
 } from '@/lib/markdown'
 import {
   clearFindHighlights,
+  FIND_HIGHLIGHT,
+  FIND_ACTIVE_HIGHLIGHT,
   findRanges,
   paintFindHighlights,
   scrollRangeIntoView,
@@ -42,6 +44,19 @@ import DiagramViewport from './DiagramViewport'
 import FileHoverCard from './FileHoverCard'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+
+// Pass these valid selectors straight to the browser: the build's CSS parser
+// warns on ::highlight(). Keep this plain React style text, not styled-jsx.
+const findHighlightStyles = `
+::highlight(${FIND_HIGHLIGHT}) {
+  background-color: color-mix(in srgb, var(--color-amber-400, #fbbf24) 55%, transparent);
+  color: var(--foreground);
+}
+::highlight(${FIND_ACTIVE_HIGHLIGHT}) {
+  background-color: var(--color-amber-400, #fbbf24);
+  color: #000;
+}
+`
 
 export interface MarkdownPreviewProps {
   text: string
@@ -580,6 +595,7 @@ export default function MarkdownPreview({
       )}
       style={wrapperStyle}
     >
+      <style>{findHighlightStyles}</style>
       {/* The outline floats over the document rather than taking a column of it:
           the prose stays centred where it was, and opening the panel doesn't
           re-lay-out (and re-fit) every diagram in the document. */}

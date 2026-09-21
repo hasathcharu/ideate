@@ -168,6 +168,11 @@ missing the ranges are still produced and still scrolled to — navigation works
 only the paint is absent, which is a far better degradation than a highlighter
 that fights the renderer.
 
+The highlight rules live in a plain React `<style>` in `MarkdownPreview`, with
+names shared with the highlight registry. This bypasses the build's CSS parser,
+which warns on valid `::highlight()` selectors in `globals.css`. The browser
+parses these rules directly; the colors and document markup stay unchanged.
+
 `lib/findInDocument.ts` flattens the document's text nodes and inserts a newline
 wherever the walk crosses into a different block. A query never contains one, so a
 match can never run from the end of `<p>foo</p>` into the start of `<p>bar</p>` —
