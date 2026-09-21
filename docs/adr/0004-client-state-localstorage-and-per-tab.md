@@ -43,3 +43,8 @@ repositories or branches are separate records. Document storage is asynchronous.
 the outgoing dirty draft before changing the active document. Legacy `km:file:` and
 `km:draft:` localStorage records are deliberately neither imported, read through, nor
 deleted: this storage generation starts empty.
+
+Draft values use a versioned envelope containing content, update time, and an
+explicit base revision: a known saved revision, an absent saved file, or unknown.
+The unversioned development format was never released and is not migrated. Malformed
+versioned envelopes are invalid and are neither partially adopted nor silently treated as current.

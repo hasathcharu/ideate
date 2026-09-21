@@ -72,6 +72,49 @@ describe('document storage boundary', () => {
     })
   })
 
+  it('stores the original saved revision in a versioned draft envelope', async () => {
+    await storage.writeDraftResult('owner/repo@main:a.mmd', 'working', {
+      status: 'known', revision: 'sha-base',
+    })
+    await expect(storage.readDraftResult('owner/repo@main:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: {
+        version: 2, content: 'working', baseRevision: { status: 'known', revision: 'sha-base' },
+      },
+    })
+  })
+
+  it('does not migrate the unversioned development draft format', async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('ideate-documents', 1)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const tx = db.transaction('drafts', 'readwrite')
+    tx.objectStore('drafts').put({ content: 'old development draft', updatedAt: 1 }, 'old')
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error)
+    })
+    await expect(storage.readDraftResult('old')).resolves.toEqual({ status: 'invalid' })
+    db.close()
+  })
+
+  it('rejects a malformed versioned envelope', async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('ideate-documents', 1)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const tx = db.transaction('drafts', 'readwrite')
+    tx.objectStore('drafts').put({ version: 99, content: 'recover me', updatedAt: 'bad' }, 'broken')
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error)
+    })
+    await expect(storage.readDraftResult('broken')).resolves.toEqual({ status: 'invalid' })
+    db.close()
+  })
+
   it('moves a saved file and draft atomically and rejects collisions', async () => {
     await storage.writeLocalFileResult('a.mmd', 'saved')
     await storage.writeDraftResult('local:file:a.mmd', 'working')

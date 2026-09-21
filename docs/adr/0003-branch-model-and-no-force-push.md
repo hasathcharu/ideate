@@ -35,11 +35,12 @@ didn't" is not a state this can produce, so reporting it would be a lie the user
 then has to untangle. It is deliberately not routed to `ConflictModal`, whose two
 choices act on the *open* file — which is usually not the file that went stale.
 
-The client supplies each file's sha, and holds only one of them: the open file's.
-For every other dirty path it reads the saved file immediately before committing,
-which is exactly the read `openFile` would do if the user had clicked it — the app
-genuinely has no record of what a background edit was based on, so this is no
-weaker than the path it replaces. A competing branch update after the head is
+The client supplies each file's sha. A dirty draft records the saved SHA on which
+its first edit was based. Before a single save or Save All, that base must match
+the current saved revision. A legacy, damaged, or otherwise unknown draft base is
+an explicit reconciliation state and is never relabelled with the current SHA.
+The user may either discard the draft for the latest GitHub content or deliberately
+commit it on top of the latest revision. A competing branch update after the head is
 captured makes the non-forced ref advance fail; it cannot silently become the
 parent of stale content.
 

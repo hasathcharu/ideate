@@ -76,6 +76,8 @@ Rule numbers remain stable because source comments and ADRs refer to them.
   Resolve scratch slots through `scratchDocIdFor`.
 - Persist drafts while dirty or while a named file awaits its first save, even if
   empty; clear clean saved-document drafts. New files need an immediate draft.
+  Preserve a dirty draft's original saved revision. Reject invalid envelopes;
+  require explicit reconciliation for valid drafts whose base is unknown.
   Preserve newer edits and the current document when an earlier save completes.
 - Key debounce state by document identity. Keep its key and value in one snapshot.
   Reuse one CodeMirror instance and switch document settings through compartments.

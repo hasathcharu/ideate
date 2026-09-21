@@ -22,6 +22,12 @@
   the current document when persistence fails. Key listings do not load document bodies.
   Related local saved-file and draft changes share one transaction.
 
+- Preserve a dirty draft's original base revision across subsequent autosaves.
+  Reopening a draft compares that base with the saved revision; unknown or changed
+  bases require reconciliation. If a save succeeds while newer working edits remain,
+  rebase the remaining draft envelope to the returned saved revision without replacing
+  its newer content.
+
 - TypeScript strict; server actions return `ActionResult<T>` so the client can
   branch on errors (especially `kind: 'conflict'` for 409/422, and
   `kind: 'unauthenticated'` for 401 / a dead session) without try/catch.

@@ -141,6 +141,13 @@ File and tree requests carry a selection generation. A response from an older
 repository, branch, or file selection cannot replace the current view. History
 page and version reads use the same latest-request rule.
 
+When a saved GitHub file has a draft, opening it compares the draft's recorded
+base SHA with the current file SHA. A changed or unknown base opens the working
+text in an explicit reconciliation state. Save and Save All refuse to pair that
+text with the new SHA until the user chooses to keep it on top of the latest
+revision or discard it and start from the latest content. There is no migration
+path for the unversioned development draft format because it was never released.
+
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
 kind inside it.

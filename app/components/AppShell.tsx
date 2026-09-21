@@ -87,7 +87,7 @@ import {
 } from '@/lib/mermaidConfig'
 import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
-import { canConsumeScratchDraft, needsDraft } from '@/lib/draftLifecycle'
+import { canConsumeScratchDraft, draftBaseFor, draftNeedsReconciliation, needsDraft } from '@/lib/draftLifecycle'
 import { saveLocalBatch } from '@/lib/localBatch'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
 import { RequestGate, WorkspaceStore, documentKey, workspaceKey, type DocumentIdentity, type WorkspaceIdentity } from '@/lib/workspaceStore'
@@ -409,6 +409,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [saving, setSaving] = useState(false)
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflictBusy, setConflictBusy] = useState(false)
+  const [draftConflictKey, setDraftConflictKey] = useState<string | null>(null)
+  const draftBasesRef = useRef(new globalThis.Map<string, import('@/lib/storage').DraftBaseRevision>())
 
   const [deleteTarget, setDeleteTarget] = useState<TreeNode | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -558,13 +560,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   // The editor callback updates liveTextRef before React renders. Navigation can
   // therefore persist the outgoing document even in the same event as an edit.
-  const activeDraftRef = useRef({ docId, baseline, kind, pending: openPath !== null && loadedSha === null })
-  activeDraftRef.current = { docId, baseline, kind, pending: openPath !== null && loadedSha === null }
+  const activeDraftRef = useRef({ docId, baseline, kind, pending: openPath !== null && loadedSha === null,
+    savedRevision: loadedSha })
+  activeDraftRef.current = { docId, baseline, kind, pending: openPath !== null && loadedSha === null,
+    savedRevision: loadedSha }
   const flushOutgoingDraft = useCallback(async (): Promise<boolean> => {
     const active = activeDraftRef.current
     const content = liveTextRef.current
     if (!needsDraft(contentDiffers(content, active.baseline, active.kind), active.pending)) return true
-    const result = await writeDraftResult(active.docId, content)
+    const base = draftBasesRef.current.get(active.docId) ?? draftBaseFor(active.savedRevision)
+    draftBasesRef.current.set(active.docId, base)
+    const result = await writeDraftResult(active.docId, content, base)
     workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
     if (result.ok) return true
     toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
@@ -924,7 +930,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (!hydrated) return
     void (async () => {
     if (dirty) {
-      const result = await writeDraftResult(docId, text)
+      const base = draftBasesRef.current.get(docId) ?? draftBaseFor(loadedSha)
+      draftBasesRef.current.set(docId, base)
+      const result = await writeDraftResult(docId, text, base)
       workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
       if (!result.ok) toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
     }
@@ -934,7 +942,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       else if (stored.status === 'invalid') toast.error('A damaged draft remains in browser storage; it was not deleted.')
     }
     })()
-  }, [text, docId, hydrated, dirty, workspaceStore])
+  }, [text, docId, hydrated, dirty, loadedSha, workspaceStore])
 
   useEffect(() => {
     if (!dirty) return
@@ -1168,11 +1176,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
           toast.error(`Could not open ${path}: its unsaved draft is ${draft.status}.`)
           return false
         }
+        draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
         setBaseline('')
         setLoadedSha(null)
         setOpenPath(path)
         setText(draft.value.content)
         workspaceStore.adopt(identityFor(path), draft.value.content, '', null, workspaceStore.active().generation)
+        setDraftConflictKey(null)
         return true
       }
       const res = await readSaved(path)
@@ -1188,6 +1198,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         toast.error(`Could not open ${path}: its draft is ${draft.status}.`)
         return false
       }
+      if (draft.status === 'ok') draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
       setBaseline(res.content)
       setLoadedSha(res.sha)
       setOpenPath(path)
@@ -1196,6 +1207,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const content = draftDiffers && draft.status === 'ok' ? draft.value.content : res.content
       setText(content)
       workspaceStore.adopt(identityFor(path), content, res.content, res.sha, workspaceStore.active().generation)
+      const needsReconciliation = draftDiffers && draft.status === 'ok' &&
+        draftNeedsReconciliation(draft.value.baseRevision, res.sha)
+      setDraftConflictKey(needsReconciliation ? documentKey(identityFor(path)) : null)
+      if (needsReconciliation) setConflictOpen(true)
       return true
     },
     [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
@@ -1300,6 +1315,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     created: boolean
     identity: DocumentIdentity
     revision: number
+    draftBase: import('@/lib/storage').DraftBaseRevision
   }
 
   /** Find the document a command names, fetching it if nobody has opened it. */
@@ -1323,6 +1339,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         created: false,
         identity,
         revision: record?.revision ?? 0,
+        draftBase: draftBasesRef.current.get(docId) ?? draftBaseFor(record?.savedRevision ?? loadedSha),
       }
     }
     if (!hasWorkspace) {
@@ -1347,6 +1364,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       path, kind: targetKind, text: cached.content,
       committed: cached.savedRevision === null ? null : cached.savedContent,
       open: false, created: false, identity: cached.identity, revision: cached.revision,
+      draftBase: draftBasesRef.current.get(docIdForPath(path)) ?? draftBaseFor(cached.savedRevision),
     }
     const draftResult = await readDraftResult(docIdForPath(path))
     if (draftResult.status === 'invalid' || draftResult.status === 'unavailable') {
@@ -1362,6 +1380,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       const committed = res.content
       const differs = draft !== null && contentDiffers(draft.content, committed, targetKind)
+      if (differs && draft && draftNeedsReconciliation(draft.baseRevision, res.sha)) {
+        throw new Error(`${path}'s draft is based on an older or unknown revision. Open it to reconcile first.`)
+      }
+      if (draft) draftBasesRef.current.set(docIdForPath(path), draft.baseRevision)
       return {
         path,
         kind: targetKind,
@@ -1371,6 +1393,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         created: false,
         identity: identityFor(path),
         revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
+        draftBase: draft?.baseRevision ?? draftBaseFor(res.sha),
       }
     }
     // Not in the saved store. A draft under the path still means the file exists — it was created
@@ -1385,12 +1408,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
         created: false,
         identity: identityFor(path),
         revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
+        draftBase: draft.baseRevision,
       }
     }
     // A never-saved file with no draft: the human emptied it.
     if (pendingPaths.has(path)) {
       return { path, kind: targetKind, text: '', committed: null, open: false, created: false,
-        identity: identityFor(path), revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0 }
+        identity: identityFor(path), revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
+        draftBase: { status: 'absent' } }
     }
     if (!create) {
       throw new Error(
@@ -1407,6 +1432,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       created: true,
       identity: identityFor(path),
       revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
+      draftBase: { status: 'absent' },
     }
   }
 
@@ -1427,7 +1453,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
     const id = docIdForPath(path)
-    const persisted = await (isDirty ? writeDraftResult(id, next) : clearDraft(id))
+    const base = draftBasesRef.current.get(id) ?? target.draftBase
+    if (isDirty) draftBasesRef.current.set(id, base)
+    const persisted = await (isDirty
+      ? writeDraftResult(id, next, base)
+      : clearDraft(id))
     if (!persisted.ok) throw new Error(`Could not update ${path}'s draft: ${persisted.reason}.`)
     workspaceStore.editIfRevision(target.identity, target.revision, next)
     if (workspaceKey(target.identity.workspace) === workspaceSelectionRef.current) {
@@ -1877,7 +1907,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             void refreshLocalFiles()
             if (!local) renamedSha = LOCAL_SAVED
           } else if (draft.status === 'ok') {
-            const copied = await writeDraftResult(newId, draft.value.content)
+            const copied = await writeDraftResult(newId, draft.value.content, draft.value.baseRevision)
             if (!copied.ok) {
               toast.error(`Could not move ${node.path}'s draft: ${copied.reason}.`)
               return
@@ -2095,6 +2125,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       workspaceStore.edit(identity, draft.value.content)
     }
     workspaceStore.settleSave(identity, content, sha, submittedRevision)
+    if (draft.status === 'ok' && contentDiffers(draft.value.content, content, identity.kind)) {
+      const rebased = draftBaseFor(sha)
+      draftBasesRef.current.set(draftId, rebased)
+      const persisted = await writeDraftResult(draftId, draft.value.content, rebased)
+      if (!persisted.ok) workspaceStore.markPersistence(key, 'failed')
+    } else {
+      draftBasesRef.current.delete(draftId)
+    }
   }, [workspaceStore])
 
   /** The open document, readable after an await. `openPath` in a closure is the
@@ -2196,6 +2234,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onSave = useCallback(async () => {
     if (!hasWorkspace || !dirty || saving) return
+    if (openPath && draftConflictKey === documentKey(identityFor(openPath))) {
+      setConflictOpen(true)
+      return
+    }
     if (openPath === null) {
       openPrompt({
         title: localMode ? 'Save file' : 'Save to repository',
@@ -2238,6 +2280,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     savedPaths,
     pendingPaths,
     docIdForPath,
+    draftConflictKey,
+    identityFor,
   ])
 
   /* ---------------------------------------------------------------- */
@@ -2314,6 +2358,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
         continue
       }
       if (path === openPath && loadedSha !== null) {
+        const base = draftBasesRef.current.get(docIdForPath(path))
+        if (base && draftNeedsReconciliation(base, loadedSha)) {
+          setSaving(false)
+          setDraftConflictKey(documentKey(identityFor(path)))
+          setConflictOpen(true)
+          toast.error(`${path} has unsaved work based on an older or unknown revision. Reconcile it before Save All.`)
+          return
+        }
         writes.push({ path, content, sha: loadedSha })
         continue
       }
@@ -2321,6 +2373,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!current.ok) {
         setSaving(false)
         if (!current.expired) toast.error(current.message)
+        return
+      }
+      const draft = await readDraftResult(docIdForPath(path))
+      if (draft.status !== 'ok') {
+        setSaving(false)
+        toast.error(`Could not verify ${path}'s draft base (${draft.status}). Nothing was committed.`)
+        return
+      }
+      if (draftNeedsReconciliation(draft.value.baseRevision, current.sha)) {
+        setSaving(false)
+        toast.error(`${path} has unsaved work based on an older or unknown revision. Open it to reconcile before Save All.`)
         return
       }
       if (!contentDiffers(content, current.content, fileKind(path))) {
@@ -2475,6 +2538,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (res.ok) {
       await settleSavedRecord(identity, submittedContent, res.data.sha, submittedRevision,
         docIdForFile(repo.owner, repo.name, repo.branch, openPath))
+      setDraftConflictKey(null)
       if (workspaceStore.isActive(key, generation)) {
         setBaseline(submittedContent)
         setLoadedSha(res.data.sha)
@@ -2513,6 +2577,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setLoadedSha(fresh.data.sha)
     workspaceStore.adopt(identityFor(openPath), fresh.data.content, fresh.data.content,
       fresh.data.sha, generation)
+    setDraftConflictKey(null)
     setConflictOpen(false)
   }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
@@ -3428,6 +3493,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           busy={conflictBusy}
           onOverwrite={onOverwrite}
           onStartOver={onStartOver}
+          reconciliation={draftConflictKey === documentKey(identityFor(openPath))}
         />
       ) : null}
 

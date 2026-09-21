@@ -200,7 +200,18 @@ export function savePairingCode(code: string | null): void {
 /* ------------------------------------------------------------------ */
 
 export interface LocalFile { path: string; content: string; updatedAt: number }
-export interface Draft { content: string; updatedAt: number }
+export type DraftBaseRevision =
+  | { status: 'known'; revision: string }
+  | { status: 'absent' }
+  | { status: 'unknown' }
+
+/** Version 2 records the saved revision the first dirty edit was based on. */
+export interface Draft {
+  version: 2
+  content: string
+  updatedAt: number
+  baseRevision: DraftBaseRevision
+}
 
 /** Asynchronous boundary used by document lifecycle code. */
 export interface DocumentStorage {
@@ -210,8 +221,8 @@ export interface DocumentStorage {
   writeLocalFile(path: string, content: string): Promise<StorageWrite>
   deleteLocalFile(path: string): Promise<StorageWrite>
   readDraft(id: string): Promise<StorageRead<Draft>>
-  writeDraft(id: string, content: string): Promise<StorageWrite>
-  createDraft(id: string, content: string): Promise<StorageWrite>
+  writeDraft(id: string, content: string, baseRevision?: DraftBaseRevision): Promise<StorageWrite>
+  createDraft(id: string, content: string, baseRevision?: DraftBaseRevision): Promise<StorageWrite>
   clearDraft(id: string): Promise<StorageWrite>
   listDraftPaths(prefix: string): Promise<StorageRead<string[]>>
 }
@@ -347,15 +358,39 @@ function validFile(value: unknown): value is LocalFile {
   return !!file && typeof file.path === 'string' && typeof file.content === 'string' &&
     typeof file.updatedAt === 'number' && Number.isFinite(file.updatedAt)
 }
-function validDraft(value: unknown): value is Draft {
-  const draft = value as Partial<Draft> | null
-  return !!draft && typeof draft.content === 'string' && typeof draft.updatedAt === 'number' &&
-    Number.isFinite(draft.updatedAt)
+function parseDraft(value: unknown): Draft | null {
+  const draft = value as Record<string, unknown> | null
+  if (!draft || typeof draft.content !== 'string') return null
+  // This schema has not shipped, so there is no migration path for the
+  // unversioned development format. Do not mistake it for a current draft.
+  if (draft.version === undefined) return null
+  const base = draft.baseRevision as Partial<DraftBaseRevision> | null
+  const validBase = !!base && (base.status === 'absent' || base.status === 'unknown' ||
+    (base.status === 'known' && typeof base.revision === 'string' && base.revision.length > 0))
+  if (draft.version !== 2 || !validBase || typeof draft.updatedAt !== 'number' || !Number.isFinite(draft.updatedAt)) {
+    return null
+  }
+  return {
+    version: 2, content: draft.content, updatedAt: draft.updatedAt,
+    baseRevision: base as DraftBaseRevision,
+  }
 }
 
 export const listLocalFilesResult = (): Promise<StorageRead<string[]>> => keys(FILES)
 export const readLocalFileResult = (path: string): Promise<StorageRead<LocalFile>> => read(FILES, path, validFile)
-export const readDraftResult = (id: string): Promise<StorageRead<Draft>> => read(DRAFTS, id, validDraft)
+export async function readDraftResult(id: string): Promise<StorageRead<Draft>> {
+  const db = await database()
+  if (!db) return { status: 'unavailable' }
+  try {
+    const tx = db.transaction(DRAFTS, 'readonly')
+    const done = transactionDone(tx)
+    const value: unknown = await requestValue(tx.objectStore(DRAFTS).get(id))
+    await done
+    if (value === undefined) return { status: 'missing' }
+    const parsed = parseDraft(value)
+    return parsed ? { status: 'ok', value: parsed } : { status: 'invalid' }
+  } catch { return { status: 'unavailable' } }
+}
 export const listDraftPathsResult = (owner: string, repo: string, branch: string): Promise<StorageRead<string[]>> =>
   keys(DRAFTS, docIdForFile(owner, repo, branch, ''))
 export const listLocalDraftPathsResult = (): Promise<StorageRead<string[]>> => keys(DRAFTS, docIdForLocalFile(''))
@@ -364,9 +399,13 @@ export const writeLocalFileResult = (path: string, content: string): Promise<Sto
   orderedWrite(`file:${path}`, () => mutate(FILES, (store) => { store.put({ path, content, updatedAt: Date.now() }, path) }))
 export const deleteLocalFile = (path: string): Promise<StorageWrite> =>
   orderedWrite(`file:${path}`, () => mutate(FILES, (store) => { store.delete(path) }))
-export const writeDraftResult = (id: string, content: string): Promise<StorageWrite> =>
-  orderedWrite(`draft:${id}`, () => mutate(DRAFTS, (store) => { store.put({ content, updatedAt: Date.now() }, id) }))
-export const createDraftResult = (id: string, content: string): Promise<StorageWrite> =>
+export const writeDraftResult = (id: string, content: string,
+  baseRevision: DraftBaseRevision = { status: 'unknown' }): Promise<StorageWrite> =>
+  orderedWrite(`draft:${id}`, () => mutate(DRAFTS, (store) => {
+    store.put({ version: 2, content, updatedAt: Date.now(), baseRevision }, id)
+  }))
+export const createDraftResult = (id: string, content: string,
+  baseRevision: DraftBaseRevision = { status: 'absent' }): Promise<StorageWrite> =>
   orderedWrite(`draft:${id}`, async () => {
     const db = await database()
     if (!db) return { ok: false, reason: 'unavailable' }
@@ -377,7 +416,7 @@ export const createDraftResult = (id: string, content: string): Promise<StorageW
       if (await requestValue(drafts.getKey(id)) !== undefined) {
         tx.abort(); await done.catch(() => undefined); return { ok: false, reason: 'collision' }
       }
-      drafts.add({ content, updatedAt: Date.now() }, id)
+      drafts.add({ version: 2, content, updatedAt: Date.now(), baseRevision }, id)
       await done
       return { ok: true }
     } catch (error) { return failure(error) }
@@ -409,9 +448,10 @@ async function move(store: string, from: string, to: string): Promise<StorageWri
       const objects = tx.objectStore(store)
       const source: unknown = await requestValue(objects.get(from))
       const destination: unknown = await requestValue(objects.get(to))
-      const valid = store === FILES ? validFile : validDraft
+      const sourceValid = store === FILES ? validFile(source) : parseDraft(source) !== null
+      const destinationValid = store === FILES ? validFile(destination) : parseDraft(destination) !== null
       const reason: WriteReason | null = source === undefined ? 'missing' :
-        !valid(source) ? 'invalid' : destination !== undefined ? valid(destination) ? 'collision' : 'invalid' : null
+        !sourceValid ? 'invalid' : destination !== undefined ? destinationValid ? 'collision' : 'invalid' : null
       if (reason) { tx.abort(); await done.catch(() => undefined); return { ok: false, reason } }
       objects.put(store === FILES ? { ...(source as LocalFile), path: to } : source, to)
       objects.delete(from)
@@ -464,7 +504,7 @@ export async function moveLocalFileAndDraft(from: string, to: string, oldId: str
     const newDraft = await requestValue(drafts.get(newId))
     const reason = saved && source === undefined ? 'missing' : saved && !validFile(source) ? 'invalid' :
       destination !== undefined || newDraft !== undefined ? 'collision' :
-      draft !== undefined && !validDraft(draft) ? 'invalid' : !saved && draft === undefined ? 'missing' : null
+      draft !== undefined && parseDraft(draft) === null ? 'invalid' : !saved && draft === undefined ? 'missing' : null
     if (reason) { tx.abort(); throw new StorageAbort(reason) }
     if (saved) { files.put({ ...(source as LocalFile), path: to }, to); files.delete(from) }
     if (draft !== undefined) { drafts.put(draft, newId); drafts.delete(oldId) }
