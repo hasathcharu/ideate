@@ -8,6 +8,15 @@
 
 ## Conventions
 
+- `WorkspaceStore` advances working revisions synchronously when the shell edits
+  content. Async file, tree, history, and save callers capture workspace identity
+  and a request or activation generation. A stale read is discarded; a completed
+  write settles into its originating document record even if the user navigated
+  away. The sidebar's dirty and pending sets combine recovered draft metadata
+  with current workspace records, so a settled record wins over stale marker
+  state. The shell still has presentation state while commands are moved to the
+  shared owner in the next stage.
+
 - TypeScript strict; server actions return `ActionResult<T>` so the client can
   branch on errors (especially `kind: 'conflict'` for 409/422, and
   `kind: 'unauthenticated'` for 401 / a dead session) without try/catch.

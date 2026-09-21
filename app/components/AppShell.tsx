@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import {
   ArrowLeft,
@@ -90,6 +90,7 @@ import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
 import { canConsumeScratchDraft, needsDraft } from '@/lib/draftLifecycle'
 import { saveLocalBatch } from '@/lib/localBatch'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
+import { RequestGate, WorkspaceStore, documentKey, workspaceKey, type DocumentIdentity, type WorkspaceIdentity } from '@/lib/workspaceStore'
 import {
   loadAgentLink,
   loadConfig,
@@ -313,6 +314,31 @@ export default function AppShell({ user, mode }: AppShellProps) {
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
+  const configRef = useRef(config)
+  const workspaceStoreRef = useRef<WorkspaceStore | null>(null)
+  if (!workspaceStoreRef.current) workspaceStoreRef.current = new WorkspaceStore()
+  const workspaceStore = workspaceStoreRef.current
+  const currentWorkspace = useCallback((): WorkspaceIdentity => {
+    const selected = mode === 'github' ? configRef.current.repo : null
+    return selected
+      ? { mode: 'github', owner: selected.owner, repo: selected.name, branch: selected.branch }
+      : { mode: 'local' }
+  }, [mode])
+  const identityFor = useCallback((path: string | null, scratchKind?: FileKind): DocumentIdentity => ({
+    // Scratch drafts are global per kind in the current storage contract.
+    workspace: path ? currentWorkspace() : { mode: 'local' },
+    path, kind: path ? fileKind(path) : (scratchKind ?? configRef.current.scratchKind),
+  }), [currentWorkspace])
+  const workspaceSelectionRef = useRef(workspaceKey(currentWorkspace()))
+  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
+    configRef.current = { ...configRef.current, ...patch }
+    workspaceSelectionRef.current = workspaceKey(currentWorkspace())
+    setConfig((prev) => {
+      const next = { ...prev, ...patch }
+      saveConfig(next)
+      return next
+    })
+  }, [currentWorkspace])
 
   /** Agent Link, scoped to *this tab* rather than to the origin — see `loadAgentLink`. */
   const [agentLinkOn, setAgentLinkOn] = useState(false)
@@ -346,13 +372,24 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [text, setTextState] = useState(SAMPLE)
   const liveTextRef = useRef(text)
   const workingRevisionRef = useRef(0)
+  const openPathRef = useRef<string | null>(null)
+  const openRequestRef = useRef(0)
+  const activeIdentityRef = useRef<DocumentIdentity>(identityFor(null))
   const setText = useCallback((next: string) => {
     liveTextRef.current = next
     workingRevisionRef.current += 1
+    workspaceStore.edit(activeIdentityRef.current, next)
     setTextState(next)
-  }, [])
+  }, [workspaceStore])
   const [baseline, setBaseline] = useState(SAMPLE)
-  const [openPath, setOpenPath] = useState<string | null>(null)
+  const [openPath, setOpenPathState] = useState<string | null>(null)
+  const setOpenPath = useCallback((next: string | null) => {
+    openRequestRef.current += 1
+    openPathRef.current = next
+    activeIdentityRef.current = identityFor(next)
+    workspaceStore.activate(documentKey(activeIdentityRef.current))
+    setOpenPathState(next)
+  }, [identityFor, workspaceStore])
   const [loadedSha, setLoadedSha] = useState<string | null>(null)
   // Files opened by following a link inside a document, so there is a way back.
   // Only link navigation pushes: picking a file in the tree is a fresh start, not
@@ -389,6 +426,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [showDiff, setShowDiff] = useState(false)
 
   const [historyOpen, setHistoryOpen] = useState(false)
+  const versionRequestRef = useRef(new RequestGate())
+  const historyRequestRef = useRef(new RequestGate())
+  const historyTargetRef = useRef<string | null>(null)
   // Path segment currently displayed — starts at the open file's path, but moves
   // to an older path once the user chooses to view history before a rename.
   const [historyPath, setHistoryPath] = useState<string | null>(null)
@@ -452,7 +492,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (v !== NONE_THEME && !preset) return
       updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
     },
-    [config.mermaidConfig],
+    [config.mermaidConfig, updateConfig],
   )
 
   const repo = githubEnabled ? config.repo : null
@@ -523,10 +563,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const content = liveTextRef.current
     if (!needsDraft(contentDiffers(content, active.baseline, active.kind), active.pending)) return true
     const result = writeDraftResult(active.docId, content)
+    workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
     if (result.ok) return true
     toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
     return false
-  }, [])
+  }, [workspaceStore])
 
   // Keyed on the open document: edits within a file debounce, but switching files
   // takes effect at once so nothing downstream ever sees the outgoing file's text.
@@ -541,6 +582,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
    * no entry for them and GitHub has nothing under the path.
    */
   const [createdPaths, setCreatedPaths] = useState<ReadonlySet<string>>(new Set())
+  const storeRecords = useSyncExternalStore(
+    workspaceStore.subscribe, workspaceStore.snapshot, workspaceStore.snapshot,
+  )
+  const selectedWorkspaceKey = workspaceKey(currentWorkspace())
 
   // Every never-committed path, as the rest of the app should see it: anything in `createdPaths`
   // the branch still doesn't have, plus the open file whenever it has no sha behind it.
@@ -557,14 +602,28 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const next = new Set<string>()
     for (const path of createdPaths) if (!savedPaths?.has(path)) next.add(path)
     if (hasWorkspace && openPath && loadedSha === null) next.add(openPath)
+    for (const record of storeRecords) {
+      if (workspaceKey(record.identity.workspace) !== selectedWorkspaceKey) continue
+      if (record.identity.path && record.exists && record.savedRevision === null &&
+          !savedPaths?.has(record.identity.path)) next.add(record.identity.path)
+    }
     return next
-  }, [savedPaths, createdPaths, hasWorkspace, openPath, loadedSha])
+  }, [savedPaths, createdPaths, hasWorkspace, openPath, loadedSha, storeRecords, selectedWorkspaceKey])
 
   // Every path with unsaved edits made *this session*, not just the open one —
   // so switching files without saving still shows the earlier file as dirty in
   // the tree. Keyed off the open file's live dirty state; committing, reverting,
   // deleting, or renaming a path removes it below.
-  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
+  const [legacyDirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
+  const dirtyPaths = useMemo<ReadonlySet<string>>(() => {
+    const next = new Set(legacyDirtyPaths)
+    for (const record of storeRecords) {
+      if (!record.identity.path || workspaceKey(record.identity.workspace) !== selectedWorkspaceKey) continue
+      if (record.persistence === 'clean') next.delete(record.identity.path)
+      else next.add(record.identity.path)
+    }
+    return next
+  }, [legacyDirtyPaths, storeRecords, selectedWorkspaceKey])
   useEffect(() => {
     if (!openPath) return
     setDirtyPaths((prev) => {
@@ -649,16 +708,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [displayNodes],
   )
 
-  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...patch }
-      saveConfig(next)
-      return next
-    })
-  }, [])
-
   /** Fetch the tree and swap it in once it arrives. */
+  const treeRequestRef = useRef(new RequestGate())
   const refreshTree = useCallback(async (target: RepoRef) => {
+    const targetKey = workspaceKey({ mode: 'github', owner: target.owner, repo: target.name, branch: target.branch })
+    const request = treeRequestRef.current.begin(targetKey)
     setTreeLoading(true)
     setTreeError(null)
     const res = await listTree(
@@ -667,6 +721,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       target.branch,
       target.branch === target.defaultBranch,
     )
+    if (!treeRequestRef.current.accepts(request, workspaceSelectionRef.current)) return null
     setTreeLoading(false)
     if (res.ok) {
       setTree(res.data)
@@ -687,6 +742,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const showRepoStartState = useCallback(
     (treeData: TreeResult) => {
       const hasFiles = treeData.tree.flatMap(collectFilePaths).length > 0
+      updateConfig({ scratchKind: 'mermaid' })
       setOpenPath(null)
       setLoadedSha(null)
       const content = hasFiles ? '' : SAMPLE
@@ -694,9 +750,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setBaseline(content)
       // This content is mermaid source, so the scratch surface has to be the text
       // editor — otherwise a leftover canvas choice would try to parse it as a scene.
-      updateConfig({ scratchKind: 'mermaid' })
     },
-    [updateConfig, setText],
+    [updateConfig, setOpenPath, setText],
   )
 
   // Invalidate everything scoped to the previously-selected repo/branch — called
@@ -704,6 +759,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // repo (stale editor content, dirty markers, expanded folders) can linger if
   // that fetch is slow or fails.
   const resetForRepoSwitch = useCallback(() => {
+    historyRequestRef.current.invalidate()
+    versionRequestRef.current.invalidate()
+    historyTargetRef.current = null
+    setHistoryOpen(false)
+    setCommits(null)
+    setVersionContent(null)
+    setHistoryError(null)
+    setVersionLoading(false)
+    setLoadingMoreCommits(false)
+    updateConfig({ scratchKind: 'mermaid' })
     setOpenPath(null)
     setLoadedSha(null)
     setLinkTrail([])
@@ -716,8 +781,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // few places the list *should* go back to a loading state.
     setTree(null)
     setTreeError(null)
-    updateConfig({ scratchKind: 'mermaid' })
-  }, [updateConfig, setText])
+  }, [updateConfig, setOpenPath, setText])
 
   useEffect(() => {
     // `loginWithGitHub` redirects here with `?connect=1`, which marks this arrival as a fresh
@@ -732,6 +796,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
     const loaded = loadConfig()
     const stored = freshLogin ? { ...loaded, repo: null } : loaded
+    configRef.current = stored
+    workspaceSelectionRef.current = workspaceKey(currentWorkspace())
+    activeIdentityRef.current = identityFor(null, stored.scratchKind)
+    const initialActivation = workspaceStore.activate(documentKey(activeIdentityRef.current))
     if (freshLogin) saveConfig(stored)
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
@@ -759,6 +827,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
     if (githubEnabled && stored.repo) {
       void refreshTree(stored.repo).then((data) => {
+        if (workspaceStore.active().generation !== initialActivation) return
         if (restorable !== null) {
           setText(restorable)
           setBaseline('')
@@ -776,7 +845,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setText(restorable)
       setBaseline(SAMPLE)
     }
-  }, [githubEnabled, refreshTree, showRepoStartState, setText])
+  }, [githubEnabled, refreshTree, showRepoStartState, setText, currentWorkspace, identityFor, workspaceStore])
 
   /**
    * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths` is persisted,
@@ -844,6 +913,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (!hydrated) return
     if (dirty) {
       const result = writeDraftResult(docId, text)
+      workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
       if (!result.ok) toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
     }
     else {
@@ -851,7 +921,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (stored.status === 'ok') clearDraft(docId)
       else if (stored.status === 'invalid') toast.error('A damaged draft remains in browser storage; it was not deleted.')
     }
-  }, [text, docId, hydrated, dirty])
+  }, [text, docId, hydrated, dirty, workspaceStore])
 
   useEffect(() => {
     if (!dirty) return
@@ -971,12 +1041,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       const fresh = templateFor(nextKind)
       updateConfig({ scratchKind: nextKind })
+      openRequestRef.current += 1
+      activeIdentityRef.current = identityFor(null, nextKind)
+      workspaceStore.activate(documentKey(activeIdentityRef.current))
       setText(parked.status === 'ok' ? parked.value.content : fresh)
       // Baseline is the pristine template, so a restored draft correctly reads as
       // unsaved work while a fresh switch reads as clean.
       setBaseline(fresh)
     },
-    [openPath, config.scratchKind, flushOutgoingDraft, updateConfig, setText],
+    [openPath, config.scratchKind, flushOutgoingDraft, updateConfig, setText, identityFor, workspaceStore],
   )
 
   const openPrompt = useCallback((spec: PromptSpec) => {
@@ -996,11 +1069,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       updateConfig({ repo: next })
       setRepoPickerOpen(false)
       resetForRepoSwitch()
+      const activation = workspaceStore.active().generation
       void refreshTree(next).then((data) => {
-        if (data) showRepoStartState(data)
+        if (data && workspaceStore.active().generation === activation) showRepoStartState(data)
       })
     },
-    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft],
+    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
   )
 
   const onSelectBranch = useCallback(
@@ -1011,11 +1085,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       updateConfig({ repo: next })
       setBranchPickerOpen(false)
       resetForRepoSwitch()
+      const activation = workspaceStore.active().generation
       void refreshTree(next).then((data) => {
-        if (data) showRepoStartState(data)
+        if (data && workspaceStore.active().generation === activation) showRepoStartState(data)
       })
     },
-    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft],
+    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
   )
 
   const onCreateBranch = useCallback(
@@ -1066,8 +1141,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const openFile = useCallback(
     async (path: string) => {
       if (!hasWorkspace) return
-      if (path === openPath) return
+      if (path === openPathRef.current) return
       if (!flushOutgoingDraft()) return
+      const request = ++openRequestRef.current
+      const requestedWorkspace = workspaceSelectionRef.current
+      const activation = workspaceStore.active().generation
       // A never-committed file has nothing on GitHub under its path, so reading it
       // would 404. Its draft *is* the file: reopen it exactly as it was created —
       // no sha, empty baseline, so it still reads as unsaved.
@@ -1081,9 +1159,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setLoadedSha(null)
         setOpenPath(path)
         setText(draft.value.content)
+        workspaceStore.adopt(identityFor(path), draft.value.content, '', null, workspaceStore.active().generation)
         return
       }
       const res = await readSaved(path)
+      if (request !== openRequestRef.current || requestedWorkspace !== workspaceSelectionRef.current ||
+          activation !== workspaceStore.active().generation) return
       if (!res.ok) {
         if (!res.expired) toast.error(res.message)
         return
@@ -1099,9 +1180,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setOpenPath(path)
       // Only prefer the draft when it actually differs from what's saved.
       const draftDiffers = draft.status === 'ok' && contentDiffers(draft.value.content, res.content, fileKind(path))
-      setText(draftDiffers && draft.status === 'ok' ? draft.value.content : res.content)
+      const content = draftDiffers && draft.status === 'ok' ? draft.value.content : res.content
+      setText(content)
+      workspaceStore.adopt(identityFor(path), content, res.content, res.sha, workspaceStore.active().generation)
     },
-    [hasWorkspace, openPath, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setText],
+    [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
   )
 
   /** Open a file the user picked from the tree — the start of a new trail. */
@@ -1659,7 +1742,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         },
       })
     },
-    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths, flushOutgoingDraft, setText],
+    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths, flushOutgoingDraft, setOpenPath, setText],
   )
 
   const requestRename = useCallback(
@@ -1700,6 +1783,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
             return
           }
           if (!flushOutgoingDraft()) return
+          const operationWorkspace = workspaceSelectionRef.current
+          const oldIdentity = identityFor(node.path)
+          const newIdentity = identityFor(newPath)
+          const oldKey = documentKey(oldIdentity)
+          const activation = workspaceStore.active().generation
+          let renamedSha: string | null | undefined
           const oldId = docIdForPath(node.path)
           const newId = docIdForPath(newPath)
           const draft = readDraftResult(oldId)
@@ -1731,7 +1820,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 return
               }
               refreshLocalFiles()
-              if (openPath === node.path) setLoadedSha(LOCAL_SAVED)
+              renamedSha = LOCAL_SAVED
             } else if (repo) {
               const res = await renameFile(
                 repo.owner,
@@ -1748,27 +1837,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 toast.error(res.error.message)
                 return
               }
-              if (openPath === node.path) setLoadedSha(res.data.sha)
+              renamedSha = res.data.sha
             }
           }
-          setPromptOpen(false)
+          workspaceStore.move(oldIdentity, newIdentity, renamedSha)
+          const sameWorkspace = operationWorkspace === workspaceSelectionRef.current
+          if (sameWorkspace) setPromptOpen(false)
           if (draft.status === 'ok') {
             const removed = clearDraft(oldId)
             if (!removed.ok) toast.error(`Renamed ${node.path}, but its old draft could not be cleared (${removed.reason}).`)
           }
           // A never-saved rename moves the only copy there is, so the pending set
           // has to follow it or the file drops out of the sidebar under both names.
-          if (local) {
+          if (local && sameWorkspace) {
             setCreatedPaths((prev) => withPath(withoutPaths(prev, [node.path]), newPath))
           }
-          setDirtyPaths((prev) => {
+          if (sameWorkspace) setDirtyPaths((prev) => {
             if (!prev.has(node.path)) return prev
             const next = new Set(prev)
             next.delete(node.path)
             next.add(newPath)
             return next
           })
-          if (openPath === node.path) setOpenPath(newPath)
+          if (sameWorkspace && workspaceStore.isActive(oldKey, activation)) {
+            if (renamedSha !== undefined) setLoadedSha(renamedSha)
+            setOpenPath(newPath)
+          }
           toast.success(`Renamed to ${newPath}`)
           // A never-saved rename changed nothing on the branch, and `pendingPaths`
           // already re-splices the new name into the sidebar.
@@ -1781,13 +1875,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       localMode,
       repo,
       openPrompt,
-      openPath,
       pendingPaths,
       savedPaths,
       docIdForPath,
       flushOutgoingDraft,
       refreshLocalFiles,
       refreshTree,
+      identityFor,
+      workspaceStore,
+      setOpenPath,
     ],
   )
 
@@ -1795,16 +1891,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // deleted out from under it. Baseline is left empty (not equal to the text) so
   // the doc reads as unsaved and Save is enabled, prompting for a new path.
   const detachEditor = useCallback(() => {
-    setOpenPath((prev) => {
-      if (prev) clearDraft(docId)
-      return null
-    })
+    if (openPathRef.current) clearDraft(docId)
+    updateConfig({ scratchKind: 'mermaid' })
+    setOpenPath(null)
     setLoadedSha(null)
     setBaseline('')
     setText(NEW_TEMPLATE)
     setLinkTrail([])
-    updateConfig({ scratchKind: 'mermaid' })
-  }, [docId, updateConfig, setText])
+  }, [docId, updateConfig, setOpenPath, setText])
 
   const requestDelete = useCallback((node: TreeNode) => {
     setDeleteTarget(node)
@@ -1814,6 +1908,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const confirmDelete = useCallback(async () => {
     if (!hasWorkspace || !deleteTarget) return
     const paths = collectFilePaths(deleteTarget)
+    const operationWorkspace = workspaceSelectionRef.current
+    const deletedIdentities = paths.map((path) => identityFor(path))
+    const activeAtDelete = workspaceStore.active()
     const affectsOpen = !!openPath && paths.includes(openPath)
     // A never-saved file (the pending new one) only exists as a draft — there is
     // nothing in the saved store to remove, so skip the write for it.
@@ -1823,11 +1920,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // deleted file would reappear as a new one on the next load.
     const forget = () => {
       for (const p of paths) clearDraft(docIdForPath(p))
-      setCreatedPaths((prev) => withoutPaths(prev, paths))
-      setDirtyPaths((prev) => withoutPaths(prev, paths))
+      for (const identity of deletedIdentities) workspaceStore.forget(identity)
+      if (operationWorkspace === workspaceSelectionRef.current) {
+        setCreatedPaths((prev) => withoutPaths(prev, paths))
+        setDirtyPaths((prev) => withoutPaths(prev, paths))
+      }
     }
     if (committed.length === 0) {
-      if (affectsOpen) detachEditor()
+      if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
       forget()
       setDeleteOpen(false)
       setDeleteTarget(null)
@@ -1839,7 +1939,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       forget()
       setDeleteOpen(false)
       setDeleteTarget(null)
-      if (affectsOpen) detachEditor()
+      if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
       toast.success(
         committed.length === 1 ? `Deleted ${committed[0]}` : `Deleted ${committed.length} files`,
       )
@@ -1860,9 +1960,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
         : `Deleted ${res.data.deleted} files`,
     )
     forget()
-    setDeleteOpen(false)
-    setDeleteTarget(null)
-    if (affectsOpen) detachEditor()
+    if (operationWorkspace === workspaceSelectionRef.current) {
+      setDeleteOpen(false)
+      setDeleteTarget(null)
+    }
+    if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
     void refreshTree(repo)
   }, [
     hasWorkspace,
@@ -1875,31 +1977,44 @@ export default function AppShell({ user, mode }: AppShellProps) {
     refreshLocalFiles,
     detachEditor,
     refreshTree,
+    identityFor,
+    workspaceStore,
   ])
 
   /** Bookkeeping for a path that was committed while the user was looking at something else. */
   const settleCommitted = useCallback(
-    (path: string, content: string) => {
-      const draft = readDraftResult(docIdForPath(path))
+    (path: string, content: string, draftId = docIdForPath(path), updateMarkers = true) => {
+      const draft = readDraftResult(draftId)
       if (draft.status === 'invalid' || draft.status === 'unavailable') {
         toast.error(`Could not settle ${path}'s draft: ${draft.status}.`)
         return
       }
       const outstanding = draft.status === 'ok' && contentDiffers(draft.value.content, content, fileKind(path))
       if (outstanding) return
-      if (draft.status === 'ok' && !clearDraft(docIdForPath(path)).ok) {
+      if (draft.status === 'ok' && !clearDraft(draftId).ok) {
         toast.error(`Could not clear ${path}'s saved draft.`)
         return
       }
-      setDirtyPaths((prev) => withoutPaths(prev, [path]))
+      if (updateMarkers) setDirtyPaths((prev) => withoutPaths(prev, [path]))
     },
     [docIdForPath],
   )
 
+  const settleSavedRecord = useCallback((identity: DocumentIdentity, content: string,
+    sha: string, submittedRevision: number, draftId: string) => {
+    const key = documentKey(identity)
+    const current = workspaceStore.get(key)
+    const draft = readDraftResult(draftId)
+    if (draft.status === 'ok' && contentDiffers(draft.value.content, content, identity.kind) &&
+        (!current || current.revision === submittedRevision)) {
+      workspaceStore.edit(identity, draft.value.content)
+    }
+    workspaceStore.settleSave(identity, content, sha, submittedRevision)
+  }, [workspaceStore])
+
   /** The open document, readable after an await. `openPath` in a closure is the
    *  value at the moment the request went out, which is the one question a commit
    *  landing later must not ask. */
-  const openPathRef = useRef<string | null>(openPath)
   openPathRef.current = openPath
 
   const commitCurrent = useCallback(
@@ -1910,35 +2025,49 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // untitled document *gives* it a path, so `origin` is null there and the
       // adoption below is exactly what promotes it.
       const origin = openPathRef.current
-      const submittedRevision = workingRevisionRef.current
+      const originIdentity = identityFor(origin)
+      const targetIdentity = identityFor(path)
+      const originKey = documentKey(originIdentity)
+      const originGeneration = workspaceStore.active().generation
+      const submittedRevision = workspaceStore.get(originKey)?.revision ?? workingRevisionRef.current
+      const submittedWorkspace = workspaceSelectionRef.current
+      const submittedDraftId = docIdForFile(repo.owner, repo.name, repo.branch, path)
       setSaving(true)
       const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
       setSaving(false)
       if (res.ok) {
+        const sameWorkspace = submittedWorkspace === workspaceSelectionRef.current
+        const stillActive = workspaceStore.isActive(originKey, originGeneration) && sameWorkspace
+        if (origin === null && stillActive && liveTextRef.current !== content) {
+          workspaceStore.edit(targetIdentity, liveTextRef.current)
+        }
+        settleSavedRecord(targetIdentity, content, res.data.sha, submittedRevision, submittedDraftId)
         // The path is on the branch now — the next tree fetch will carry it, so it
         // must stop being spliced in as a never-committed file. Hand it to the
         // tree in the same batch, or the sidebar drops the file for the length of
         // that fetch (see `treeWithPath`).
-        setCreatedPaths((prev) => withoutPaths(prev, [path]))
-        setTree((prev) => (prev ? treeWithPath(prev, path) : prev))
+        if (sameWorkspace) {
+          setCreatedPaths((prev) => withoutPaths(prev, [path]))
+          setTree((prev) => (prev ? treeWithPath(prev, path) : prev))
+        }
         // Committing an untitled scratch document promotes it to a real file, so
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
-        if (origin === null) {
+        if (origin === null && sameWorkspace) {
           const parked = readDraftResult(scratchDocId)
           if (canConsumeScratchDraft(true, content, parked.status === 'ok' ? parked.value.content : null,
-            submittedRevision, workingRevisionRef.current)) {
+            submittedRevision, workspaceStore.get(originKey)?.revision ?? submittedRevision)) {
             clearDraft(scratchDocId)
           }
         }
-        if (openPathRef.current === origin) {
+        if (stillActive) {
           setBaseline(content)
           setLoadedSha(res.data.sha)
           setOpenPath(path)
           // The dirty effect and the draft effect both key on the open document,
           // so a clean baseline is all it takes to clear the marker and the slot.
         } else {
-          settleCommitted(path, content)
+          settleCommitted(path, content, submittedDraftId, sameWorkspace)
         }
         toast.success(`Committed ${path}`)
         void refreshTree(repo)
@@ -1947,15 +2076,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (handleExpiredSession(res.error)) return
       // The conflict modal acts on the *open* file — refetch its sha, commit on
       // top — so it can only be offered while that is still the file in question.
-      if (res.error.kind === 'conflict' && openPathRef.current === origin) setConflictOpen(true)
+      if (res.error.kind === 'conflict' && workspaceStore.isActive(originKey, originGeneration) &&
+          submittedWorkspace === workspaceSelectionRef.current) setConflictOpen(true)
       else toast.error(res.error.message)
     },
-    [repo, refreshTree, scratchDocId, settleCommitted],
+    [repo, refreshTree, scratchDocId, settleCommitted, settleSavedRecord, identityFor, workspaceStore, setOpenPath],
   )
 
   /** Save to the local store — local mode's whole of `commitCurrent`. */
   const saveLocal = useCallback(
     (path: string, content: string, fromScratch = false) => {
+      const identity = identityFor(path)
+      const submittedRevision = workspaceStore.get(documentKey(identity))?.revision ?? 0
       if (fromScratch && readLocalFileResult(path).status !== 'missing') {
         toast.error(`${path} already exists or cannot be checked in browser storage.`)
         return
@@ -1968,6 +2100,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         )
         return
       }
+      workspaceStore.settleSave(identity, content, LOCAL_SAVED, submittedRevision)
       setBaseline(content)
       setLoadedSha(LOCAL_SAVED)
       setOpenPath(path)
@@ -1984,7 +2117,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
       toast.success(`Saved ${path}`)
     },
-    [refreshLocalFiles, scratchDocId],
+    [refreshLocalFiles, scratchDocId, identityFor, workspaceStore, setOpenPath],
   )
 
   const onSave = useCallback(() => {
@@ -2058,6 +2191,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const { saved, failed } = saveLocalBatch(saveAllPaths, workingCopy)
       const savedPathsThisRun = saved.map(({ path }) => path)
       for (const { path, content } of saved) {
+        const identity = identityFor(path)
+        workspaceStore.settleSave(identity, content, LOCAL_SAVED,
+          workspaceStore.get(documentKey(identity))?.revision ?? 0)
         if (path === openPath) {
           setBaseline(content)
           setLoadedSha(LOCAL_SAVED)
@@ -2078,16 +2214,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
 
     if (!repo) return
+    const submittedWorkspace = workspaceSelectionRef.current
+    const activeAtSubmit = workspaceStore.active()
+    const submitted = new globalThis.Map<string, { content: string; revision: number }>()
+    for (const path of saveAllPaths) {
+      const content = workingCopy(path)
+      if (content === null) {
+        toast.error(`Could not read the unsaved copy of ${path}. Nothing was committed.`)
+        return
+      }
+      const identity: DocumentIdentity = {
+        workspace: { mode: 'github', owner: repo.owner, repo: repo.name, branch: repo.branch },
+        path, kind: fileKind(path),
+      }
+      submitted.set(path, { content, revision: workspaceStore.get(documentKey(identity))?.revision ?? 0 })
+    }
     setSaving(true)
     const writes: FileWrite[] = []
     const alreadySaved: string[] = []
     for (const path of saveAllPaths) {
-      const content = workingCopy(path)
-      if (content === null) {
-        setSaving(false)
-        toast.error(`Could not read the unsaved copy of ${path}. Nothing was committed.`)
-        return
-      }
+      const content = submitted.get(path)!.content
       // Never committed: nothing on the branch to be stale against.
       if (pendingPaths.has(path)) {
         writes.push({ path, content })
@@ -2114,7 +2260,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // make, just markers to put out.
     if (writes.length === 0) {
       setSaving(false)
-      for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+      for (const path of alreadySaved) settleCommitted(path, submitted.get(path)?.content ?? '',
+        docIdForFile(repo.owner, repo.name, repo.branch, path),
+        submittedWorkspace === workspaceSelectionRef.current)
       toast.success('Everything is already committed.')
       return
     }
@@ -2140,17 +2288,29 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
 
     for (const file of res.data.files) {
-      if (file.path === openPath) {
+      const identity: DocumentIdentity = {
+        workspace: { mode: 'github', owner: repo.owner, repo: repo.name, branch: repo.branch },
+        path: file.path, kind: fileKind(file.path),
+      }
+      settleSavedRecord(identity, file.content, file.sha, submitted.get(file.path)?.revision ?? 0,
+        docIdForFile(repo.owner, repo.name, repo.branch, file.path))
+      const sameWorkspace = submittedWorkspace === workspaceSelectionRef.current
+      if (sameWorkspace && workspaceStore.isActive(documentKey(identity), activeAtSubmit.generation)) {
         setBaseline(file.content)
         setLoadedSha(file.sha)
       } else {
-        settleCommitted(file.path, file.content)
+        settleCommitted(file.path, file.content,
+          docIdForFile(repo.owner, repo.name, repo.branch, file.path), sameWorkspace)
       }
     }
-    for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+    for (const path of alreadySaved) settleCommitted(path, submitted.get(path)?.content ?? '',
+      docIdForFile(repo.owner, repo.name, repo.branch, path),
+      submittedWorkspace === workspaceSelectionRef.current)
     const committed = res.data.files.map((f) => f.path)
-    setCreatedPaths((prev) => withoutPaths(prev, committed))
-    setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
+    if (submittedWorkspace === workspaceSelectionRef.current) {
+      setCreatedPaths((prev) => withoutPaths(prev, committed))
+      setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
+    }
     toast.success(
       committed.length === 1
         ? `Committed ${committed[0]}`
@@ -2171,6 +2331,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     settleCommitted,
     refreshLocalFiles,
     refreshTree,
+    workspaceStore,
+    identityFor,
+    settleSavedRecord,
   ])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
@@ -2211,6 +2374,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
+    const identity = identityFor(openPath)
+    const key = documentKey(identity)
+    const generation = workspaceStore.active().generation
+    const submittedContent = text
+    const submittedRevision = workspaceStore.get(key)?.revision ?? 0
     setConflictBusy(true)
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     if (!fresh.ok) {
@@ -2219,25 +2387,38 @@ export default function AppShell({ user, mode }: AppShellProps) {
       toast.error(fresh.error.message)
       return
     }
-    const res = await commitFile(repo.owner, repo.name, openPath, text, repo.branch, fresh.data.sha)
+    if (!workspaceStore.isActive(key, generation)) {
+      setConflictBusy(false)
+      return
+    }
+    const res = await commitFile(repo.owner, repo.name, openPath, submittedContent, repo.branch, fresh.data.sha)
     setConflictBusy(false)
     if (res.ok) {
-      setBaseline(text)
-      setLoadedSha(res.data.sha)
-      setConflictOpen(false)
-      clearDraft(docId)
+      settleSavedRecord(identity, submittedContent, res.data.sha, submittedRevision,
+        docIdForFile(repo.owner, repo.name, repo.branch, openPath))
+      if (workspaceStore.isActive(key, generation)) {
+        setBaseline(submittedContent)
+        setLoadedSha(res.data.sha)
+        setConflictOpen(false)
+      }
+      settleCommitted(openPath, submittedContent,
+        docIdForFile(repo.owner, repo.name, repo.branch, openPath),
+        workspaceStore.isActive(key, generation))
       toast.success('Overwritten on top of latest')
       void refreshTree(repo)
     } else if (!handleExpiredSession(res.error)) {
       toast.error(res.error.message)
     }
-  }, [repo, openPath, text, docId, refreshTree])
+  }, [repo, openPath, text, refreshTree, identityFor, workspaceStore, settleCommitted, settleSavedRecord])
 
   const onStartOver = useCallback(async () => {
     if (!repo || !openPath) return
+    const key = documentKey(identityFor(openPath))
+    const generation = workspaceStore.active().generation
     setConflictBusy(true)
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     setConflictBusy(false)
+    if (!workspaceStore.isActive(key, generation)) return
     if (!fresh.ok) {
       if (handleExpiredSession(fresh.error)) return
       toast.error(fresh.error.message)
@@ -2246,13 +2427,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setText(fresh.data.content)
     setBaseline(fresh.data.content)
     setLoadedSha(fresh.data.sha)
+    workspaceStore.adopt(identityFor(openPath), fresh.data.content, fresh.data.content,
+      fresh.data.sha, generation)
     setConflictOpen(false)
     clearDraft(docId)
-  }, [repo, openPath, docId, setText])
+  }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
   const selectVersion = useCallback(
     async (commit: FileCommit) => {
       if (!repo) return
+      const requestedWorkspace = workspaceSelectionRef.current
+      const requestedPath = historyTargetRef.current
+      const request = versionRequestRef.current.begin(JSON.stringify([requestedWorkspace, requestedPath]))
       setSelectedSha(commit.sha)
       setVersionLoading(true)
       setVersionContent(null)
@@ -2261,6 +2447,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setCompareNote(null)
       // Use the path the file had at that commit (may differ across renames).
       const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
+      if (!versionRequestRef.current.accepts(request,
+        JSON.stringify([workspaceSelectionRef.current, historyTargetRef.current]))) return
       setVersionLoading(false)
       if (res.ok) setVersionContent(res.data)
       else if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
@@ -2268,18 +2456,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
-  const HISTORY_PAGE_SIZE = 30
-
-/** How many unsaved paths the save menu names before it starts counting. Enough
- *  to recognize the set at a glance; a list long enough to scroll would be a file
- *  tree, and there is one of those on the left. */
-const MAX_LISTED_UNSAVED = 6
-
   // Loads one page of history for `path`; `append` decides whether it extends the
   // current list (Load more) or replaces it (first load / jump to another path).
   const loadHistoryPage = useCallback(
     async (path: string, page: number, append: boolean) => {
       if (!repo) return
+      const requestedWorkspace = workspaceSelectionRef.current
+      historyTargetRef.current = path
+      const request = historyRequestRef.current.begin(JSON.stringify([requestedWorkspace, path]))
+      if (!append) versionRequestRef.current.invalidate()
       const res = await listFileCommits(
         repo.owner,
         repo.name,
@@ -2288,6 +2473,8 @@ const MAX_LISTED_UNSAVED = 6
         page,
         HISTORY_PAGE_SIZE,
       )
+      if (!historyRequestRef.current.accepts(request,
+        JSON.stringify([workspaceSelectionRef.current, historyTargetRef.current]))) return
       if (!res.ok) {
         if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
         return
@@ -2442,7 +2629,7 @@ const MAX_LISTED_UNSAVED = 6
         setText(content)
       },
     })
-  }, [versionContent, repo, kind, openPrompt, setText])
+  }, [versionContent, repo, kind, openPrompt, setOpenPath, setText])
 
   const canSave =
     hasWorkspace && dirty && ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving

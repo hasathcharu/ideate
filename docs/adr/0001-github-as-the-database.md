@@ -35,6 +35,13 @@ and agent path resolution work in both modes. `AppShell` centralizes
 document identity and saved-content reads in `docIdForPath` and `readSaved`.
 Writes and tree construction also distinguish the stores.
 
+The browser working copy also has a `WorkspaceStore` record keyed by mode,
+repository, branch, path, and kind. Its saved baseline and working revision are
+in-memory coordination data; GitHub commits and local saved files remain the
+saved stores. A successful delayed save advances the originating record's saved
+baseline without replacing newer working content. The planned IndexedDB document
+store is a later storage change and does not change this boundary yet.
+
 Local mode has no Git history, conflicts, branches, Open PR, or hover previews on
 in-repo Markdown links. A Markdown link to another local file is also not
 clickable yet — `lib/markdown.ts` tags in-repo links only when a repo is

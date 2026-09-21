@@ -35,3 +35,9 @@ Moves check the destination and write it before deleting the source. A failed
 copy leaves the source in place; a failed source deletion may leave two copies,
 which is recoverable and reported to the caller. The per-tab Agent Link state
 remains separate from these document records.
+
+`WorkspaceStore` is the in-memory owner for working document revisions and save
+settlement. Its keys include full workspace identity so equal paths in two
+repositories or branches are separate records. Storage is still synchronous
+localStorage in this stage; the asynchronous IndexedDB migration is planned after
+shared document commands are in place.

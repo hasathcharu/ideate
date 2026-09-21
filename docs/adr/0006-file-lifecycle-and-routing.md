@@ -113,14 +113,18 @@ together:
 - **A commit that lands after the user moved on must not adopt itself.** A commit is
   a round trip, and picking another file during it is exactly what people do — the
   button's whole point is that they are done with this one. `commitCurrent` captures
-  the document it came from and compares `openPathRef` on the way back:
+  the full document key and activation generation:
   `baseline`/`loadedSha`/`openPath` are applied only if that document is still on
   screen (which is also what promotes an untitled one), and otherwise
-  `settleCommitted` does the half that is always right — clearing the path's draft
-  and its dirty marker. It clears them **only if the draft still matches what was
+  `settleCommitted` clears the originating path's draft and dirty marker. It clears
+  them **only if the draft still matches what was
   committed**: a user who kept typing between the click and the switch has newer text
   in there, and that text is the only copy of those keystrokes, so the file stays
   dirty.
+  Settlement also records the returned saved content and SHA under the full
+  originating workspace/document key. The current view adopts them only while
+  its activation generation still matches. A later edit keeps its working
+  content and remains dirty against the newly saved baseline.
 - **A scratch slot is spent only by its own successful promotion.** Saving an
   already-named file or using Save All leaves parked scratch work untouched. A
   delayed scratch save clears its draft only if the submitted working revision
@@ -132,6 +136,10 @@ together:
   recorded as **committed**, not left pending: a pending path reads from a draft
   the commit just spent, and sends rename and delete down the local-only branch
   that skips GitHub.
+
+File and tree requests carry a selection generation. A response from an older
+repository, branch, or file selection cannot replace the current view. History
+page and version reads use the same latest-request rule.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either
