@@ -13,6 +13,12 @@ with the global YAML config merged over renderer defaults. Rendering is async
 and browser-only. Any diagram type mermaid
 supports works.
 
+Mermaid configuration is mutable global state. `lib/mermaid.ts` serializes the
+entire initialize → font readiness → parse/render → cleanup lifecycle. Applying
+configuration outside that queue would allow an overlapping caller to retheme an
+operation while it is awaiting fonts or the renderer. UI callers still suppress
+stale result adoption independently.
+
 ## Rendering & theming
 
 Diagrams render through the official `mermaid` library in `lib/mermaid.ts`.

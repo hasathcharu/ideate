@@ -165,6 +165,16 @@ async function ensureFontsReady(userConfig: MermaidUserConfig | null): Promise<v
 // them distinct across rapid re-renders.
 let renderSeq = 0
 
+// Mermaid owns one mutable global configuration. Queue the complete lifecycle,
+// including initialization and font readiness, so no caller can replace another
+// caller's config while it is awaiting parse or render.
+let lifecycleTail: Promise<void> = Promise.resolve()
+function serializeLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const result = lifecycleTail.then(operation, operation)
+  lifecycleTail = result.then(() => undefined, () => undefined)
+  return result
+}
+
 /**
  * Render `text` to an SVG string, throwing on invalid syntax. On failure mermaid
  * can leave an orphaned temp element behind, so we clean it up before rethrowing.
@@ -173,20 +183,22 @@ export async function renderToSvg(
   text: string,
   userConfig: MermaidUserConfig | null = null,
 ): Promise<string> {
-  applyConfig(userConfig)
-  await ensureFontsReady(userConfig)
-  const id = `mmd-${++renderSeq}`
-  installCircularSafeStringify()
-  try {
-    const { svg } = await mermaid.render(id, text)
-    return svg
-  } catch (err) {
-    document.getElementById(id)?.remove()
-    document.getElementById(`d${id}`)?.remove()
-    throw err
-  } finally {
-    restoreStringify()
-  }
+  return serializeLifecycle(async () => {
+    applyConfig(userConfig)
+    await ensureFontsReady(userConfig)
+    const id = `mmd-${++renderSeq}`
+    installCircularSafeStringify()
+    try {
+      const { svg } = await mermaid.render(id, text)
+      return svg
+    } catch (err) {
+      document.getElementById(id)?.remove()
+      document.getElementById(`d${id}`)?.remove()
+      throw err
+    } finally {
+      restoreStringify()
+    }
+  })
 }
 
 export interface RenderResult {
@@ -228,16 +240,18 @@ export async function parseDiagram(
 ): Promise<ParseResult> {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false, message: 'Empty diagram.' }
-  applyConfig(userConfig)
-  installCircularSafeStringify()
-  try {
-    await mermaid.parse(text)
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, message: describeRenderError(err, text, userConfig) }
-  } finally {
-    restoreStringify()
-  }
+  return serializeLifecycle(async () => {
+    applyConfig(userConfig)
+    installCircularSafeStringify()
+    try {
+      await mermaid.parse(text)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: describeRenderError(err, text, userConfig) }
+    } finally {
+      restoreStringify()
+    }
+  })
 }
 
 /** Render the diagram, returning a discriminated result instead of throwing so

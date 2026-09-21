@@ -58,10 +58,10 @@ embedded figure owns the screen and reverts to bare-wheel zoom.
 
 The prose itself is styled by `.md-prose` in `app/globals.css`, written against
 the shadcn tokens rather than literal colors, so a rendered document follows
-`applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**,
-not through `Promise.all`: mermaid re-`initialize()`s one global instance and
-measures against the live DOM, so overlapping renders are a race with nothing to
-gain. Code fences have no such constraint and are highlighted in parallel.
+`applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**.
+The shared Mermaid wrapper also serializes its complete global-config lifecycle,
+so previews, diagnostics, hover cards, exports, and separate Markdown renders
+cannot race it. Code fences have no such constraint and are highlighted in parallel.
 
 ### Rendering a document the way GitHub does
 

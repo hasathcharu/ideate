@@ -141,6 +141,10 @@ File and tree requests carry a selection generation. A response from an older
 repository, branch, or file selection cannot replace the current view. History
 page and version reads use the same latest-request rule.
 
+History display pages are slices of a stable upstream commit stream. The server
+uses a fixed GitHub page size, applies rename-away filtering before display
+pagination, and preserves surplus records so every commit appears exactly once.
+
 When a saved GitHub file has a draft, opening it compares the draft's recorded
 base SHA with the current file SHA. A changed or unknown base opens the working
 text in an explicit reconciliation state. Save and Save All refuse to pair that

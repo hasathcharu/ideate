@@ -48,8 +48,13 @@ Rename uses the same snapshot and commit path. It reads the source blob and
 checks that the destination is absent at the captured commit. Any destination
 entry is a conflict; a rejected rename leaves both paths untouched.
 
-A branch without an initial commit has no Git tree to use as a base. Save All
-and rename return a conflict explaining that the branch must first be
+Multi-file deletion also uses one captured snapshot and one commit. Paths already
+absent at that snapshot are idempotent no-ops; every existing requested file is
+removed together or none is. The ref still advances with `force: false`, so a
+competing branch update rejects the deletion without a partial result.
+
+A branch without an initial commit has no Git tree to use as a base. Save All,
+rename, and deletion return a conflict explaining that the branch must first be
 initialized on GitHub. The same answer applies if the selected branch ref has
 disappeared; these actions do not create an initial branch or commit.
 

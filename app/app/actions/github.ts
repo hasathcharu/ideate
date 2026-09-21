@@ -318,28 +318,33 @@ export async function listFileCommits(
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    // The commits API's path filter is a tree-diff, so it also matches the commit that renamed
-    // `path` AWAY to somewhere else (its tree entry at `path` changed too — to "absent").
-    const fetchSize = page === 1 ? perPage + 2 : perPage + 1
-    const { data } = await octokit.repos.listCommits({
-      owner,
-      repo,
-      path,
-      sha: branch,
-      page,
-      per_page: fetchSize,
-    })
-
-    let raw = data
-    if (page === 1 && raw.length > 0) {
-      const newest = raw[0]!
-      if (await renamedAwayFromPath(octokit, owner, repo, newest.sha, path)) {
-        raw = raw.slice(1)
+    // UI pages are slices of one logical stream. Never use the UI page number
+    // with a different upstream page size: doing so skips the surplus records.
+    const upstreamSize = 100
+    const logicalEnd = page * perPage
+    const raw: Awaited<ReturnType<typeof octokit.repos.listCommits>>['data'] = []
+    let upstreamPage = 1
+    let exhausted = false
+    while (raw.length <= logicalEnd && !exhausted) {
+      const { data } = await octokit.repos.listCommits({
+        owner, repo, path, sha: branch, page: upstreamPage, per_page: upstreamSize,
+      })
+      const fetchedCount = data.length
+      if (upstreamPage === 1 && data.length > 0) {
+        const newest = data[0]!
+        // The path filter also includes the commit that renamed this path away.
+        // Remove it once, before display pagination is applied.
+        if (await renamedAwayFromPath(octokit, owner, repo, newest.sha, path)) data.shift()
       }
+      raw.push(...data)
+      exhausted = fetchedCount < upstreamSize
+      upstreamPage += 1
     }
 
-    const hasMore = raw.length > perPage
-    const commits: FileCommit[] = raw.slice(0, perPage).map((c) => ({
+    const start = (page - 1) * perPage
+    const selected = raw.slice(start, logicalEnd)
+    const hasMore = raw.length > logicalEnd || !exhausted
+    const commits: FileCommit[] = selected.map((c) => ({
       sha: c.sha,
       message: c.commit.message.split('\n')[0] ?? c.commit.message,
       author: c.commit.author?.name ?? c.author?.login ?? 'unknown',
@@ -347,8 +352,6 @@ export async function listFileCommits(
       path,
     }))
 
-    // Only the last page of a segment can reveal a rename into `path` — every
-    // earlier page is newer than the segment's earliest (renaming) commit.
     let renamedFrom: string | null = null
     if (!hasMore && commits.length > 0) {
       const earliest = commits[commits.length - 1]!
@@ -392,8 +395,7 @@ async function renamedFromPath(
 }
 
 /**
- * Delete = commit a removal. Removes each path from `branch`, one commit per file (the file's
- * current blob sha is fetched immediately before deletion).
+ * Delete paths atomically from one captured branch snapshot.
  */
 export async function deletePaths(
   owner: string,
@@ -404,21 +406,27 @@ export async function deletePaths(
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    let deleted = 0
+    const captured = await captureBranchSnapshot(octokit, owner, repo, branch)
+    if (!captured.ok) return captured
+    const snapshot = captured.data
+    const existing: string[] = []
     for (const path of paths) {
-      const sha = await getFileSha(octokit, owner, repo, path, branch)
-      if (!sha) continue
-      await octokit.repos.deleteFile({
-        owner,
-        repo,
-        path,
-        message: `Delete ${path} via ${APP_NAME}`,
-        sha,
-        branch,
-      })
-      deleted += 1
+      const present = await octokit.repos.getContent({
+        owner, repo, path, ref: snapshot.parentSha,
+      }).then(({ data }) => !Array.isArray(data) && data.type === 'file')
+        .catch((error: unknown) => {
+          if (mapError(error).kind === 'not_found') return false
+          throw error
+        })
+      if (present) existing.push(path)
     }
-    return ok({ deleted })
+    if (existing.length === 0) return ok({ deleted: 0 })
+    const message = existing.length === 1
+      ? `Delete ${existing[0]} via ${APP_NAME}`
+      : `Delete ${existing.length} files via ${APP_NAME}`
+    await commitSnapshot(octokit, owner, repo, branch, snapshot, message,
+      existing.map((path) => ({ path, mode: '100644', type: 'blob', sha: null })))
+    return ok({ deleted: existing.length })
   } catch (error) {
     return err(mapError(error))
   }
@@ -470,19 +478,6 @@ export async function renameFile(
   } catch (error) {
     return err(mapError(error))
   }
-}
-
-/** Current blob sha of a file on `branch`, or null if it isn't a plain file. */
-async function getFileSha(
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  path: string,
-  branch: string,
-): Promise<string | null> {
-  const { data } = await octokit.repos.getContent({ owner, repo, path, ref: branch })
-  if (Array.isArray(data) || data.type !== 'file') return null
-  return data.sha
 }
 
 /** Save = commit. Writes `content` to `path` on `branch`. */

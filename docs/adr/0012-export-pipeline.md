@@ -16,6 +16,8 @@ color). Both exporters (SVG / PNG) share the single `resolveStandaloneSvg` step;
 PNG rasterizes it via `Image` → `<canvas>`. Exporting the mermaid source
 (`exportSource`/`copySource`) bakes the global YAML config in as a real
 frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
+The render wrapper serializes configuration, font readiness, rendering, and cleanup;
+an export therefore cannot inherit configuration from an overlapping preview.
 
 ### Markdown exports the source, not a rendering
 
