@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { ChangeSet, EditorState, Compartment, StateEffect, StateField } from '@codemirror/state'
+import { ChangeSet, EditorState, Compartment, StateEffect, StateField, type Extension } from '@codemirror/state'
 import {
   EditorView,
   GutterMarker,
@@ -822,6 +822,7 @@ export interface EditorHandle {
 }
 
 export interface EditorProps {
+  documentId: string
   value: string
   onChange: (value: string) => void
   dark: boolean
@@ -859,6 +860,7 @@ export interface EditorProps {
 }
 
 export default function Editor({
+  documentId,
   value,
   onChange,
   dark,
@@ -873,6 +875,10 @@ export default function Editor({
 }: EditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
+  const statesRef = useRef(new Map<string, EditorState>())
+  const currentIdRef = useRef(documentId)
+  const applyingExternalRef = useRef(false)
+  const extensionsRef = useRef<Extension[]>([])
   const onChangeRef = useRef(onChange)
   // Behind a ref for the same reason `onChange` is: the extension array is built
   // once at mount, and this handler changes identity on every parent render.
@@ -893,11 +899,7 @@ export default function Editor({
   // Mount once.
   useEffect(() => {
     if (!hostRef.current) return
-    const view = new EditorView({
-      parent: hostRef.current,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
+    const extensions: Extension[] = [
           baseSetup,
           // Order matters: gutters render in extension order, so this puts the
           // change bar immediately right of the line numbers and the fold arrows
@@ -923,6 +925,7 @@ export default function Editor({
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
+              if (applyingExternalRef.current) return
               const doc = update.state.doc.toString()
               emittedRef.current = [...emittedRef.current, doc].slice(-EMITTED_HISTORY)
               onChangeRef.current(doc)
@@ -931,17 +934,33 @@ export default function Editor({
               measureScrollRef.current()
             }
           }),
-        ],
-      }),
+        ]
+    extensionsRef.current = extensions
+    const view = new EditorView({
+      parent: hostRef.current,
+      state: EditorState.create({ doc: value, extensions }),
     })
     viewRef.current = view
     return () => {
       view.destroy()
       viewRef.current = null
+      statesRef.current.clear()
     }
     // Mount-only; `value`/`dark` changes handled by the effects below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Preserve each document's undo stack and selection while reusing the same DOM view.
+  // Leaving text mode or entering Diff unmounts this component and discards the cache.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || currentIdRef.current === documentId) return
+    statesRef.current.set(currentIdRef.current, view.state)
+    currentIdRef.current = documentId
+    emittedRef.current = []
+    const state = statesRef.current.get(documentId) ?? EditorState.create({ doc: value, extensions: extensionsRef.current })
+    view.setState(state)
+  }, [documentId, value])
 
   // Reconcile external value changes (open file, recover version, start over).
   useEffect(() => {
@@ -957,10 +976,12 @@ export default function Editor({
     // Genuinely external: replace the document wholesale, and forget the
     // emission history, which now describes a document that no longer exists.
     emittedRef.current = [value]
+    applyingExternalRef.current = true
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     })
-  }, [value])
+    applyingExternalRef.current = false
+  }, [value, documentId])
 
   // Swap the grammar when the open document's kind changes (e.g. opening a .md
   // after a .mmd), without tearing down the editor.
@@ -970,7 +991,7 @@ export default function Editor({
     view.dispatch({
       effects: languageCompartment.current.reconfigure(languageFor(kind)),
     })
-  }, [kind])
+  }, [kind, documentId])
 
   // Recompute the dirty gutter when the document or the committed baseline changes.
   const [changes, setChanges] = useState<Map<number, LineChangeKind>>(() => new Map())
@@ -1053,7 +1074,7 @@ export default function Editor({
     view.dispatch({
       effects: setRepoPaths.of({ paths: filePaths ?? [], docPath }),
     })
-  }, [filePaths, docPath])
+  }, [filePaths, docPath, documentId])
 
   // Toggle soft wrapping in place.
   useEffect(() => {
@@ -1062,7 +1083,7 @@ export default function Editor({
     view.dispatch({
       effects: wrapCompartment.current.reconfigure(wrap ? EditorView.lineWrapping : []),
     })
-  }, [wrap])
+  }, [wrap, documentId])
 
   /* ---------------------------------------------------------------- */
   /* Peek popup (click a gutter marker)                                */
@@ -1151,7 +1172,7 @@ export default function Editor({
     view.dispatch({
       effects: themeCompartment.current.reconfigure(editorTheme(dark)),
     })
-  }, [dark])
+  }, [dark, documentId])
 
   // Agent Link's door into this editor (see `EditorHandle`). Mount-stable:
   // everything it needs is behind `viewRef`, so the handle identity never changes

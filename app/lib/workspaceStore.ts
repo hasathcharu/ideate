@@ -51,6 +51,7 @@ const EMPTY_RECORDS: readonly DocumentRecord[] = []
 /** Synchronous owner for browser working copies. Async callers settle by key and revision. */
 export class WorkspaceStore {
   private records = new Map<string, DocumentRecord>()
+  private mutationTails = new Map<string, Promise<void>>()
   private listeners = new Set<() => void>()
   private activeKey: string | null = null
   private generation = 0
@@ -69,6 +70,50 @@ export class WorkspaceStore {
   snapshot = (): readonly DocumentRecord[] => this.recordsSnapshot
 
   get(key: string): DocumentRecord | undefined { return this.records.get(key) }
+  /** Run dependent work for one document in arrival order. The queue survives failures. */
+  async command<T>(identity: DocumentIdentity, run: () => Promise<T>): Promise<T> {
+    const key = documentKey(identity)
+    const previous = this.mutationTails.get(key) ?? Promise.resolve()
+    let release!: () => void
+    const tail = new Promise<void>((resolve) => { release = resolve })
+    const queued = previous.then(() => tail)
+    this.mutationTails.set(key, queued)
+    await previous
+    try { return await run() }
+    finally {
+      release()
+      if (this.mutationTails.get(key) === queued) this.mutationTails.delete(key)
+    }
+  }
+
+  /** Lock a set of documents in stable key order for folder operations. */
+  commandMany<T>(identities: readonly DocumentIdentity[], run: () => Promise<T>): Promise<T> {
+    const keys = [...new Set(identities.map(documentKey))].sort()
+    const predecessors = keys.map((key) => this.mutationTails.get(key) ?? Promise.resolve())
+    let release!: () => void
+    const done = new Promise<void>((resolve) => { release = resolve })
+    const reservations = keys.map((key, index) => {
+      const reserved = predecessors[index]!.then(() => done)
+      this.mutationTails.set(key, reserved)
+      return reserved
+    })
+    return (async () => {
+      await Promise.all(predecessors)
+      try { return await run() }
+      finally {
+        release()
+        keys.forEach((key, index) => {
+          if (this.mutationTails.get(key) === reservations[index]) this.mutationTails.delete(key)
+        })
+      }
+    })()
+  }
+
+  editIfRevision(identity: DocumentIdentity, expected: number, content: string): DocumentRecord {
+    const actual = this.get(documentKey(identity))?.revision ?? 0
+    if (actual !== expected) throw new Error(`Document changed during the command (revision ${expected} → ${actual}). Retry.`)
+    return this.edit(identity, content)
+  }
   list(): readonly DocumentRecord[] { return this.recordsSnapshot }
   active(): { key: string | null; generation: number } {
     return { key: this.activeKey, generation: this.generation }

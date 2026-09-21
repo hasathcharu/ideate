@@ -7,6 +7,52 @@ const file = (repo: string, branch: string): DocumentIdentity => ({
 })
 
 describe('WorkspaceStore', () => {
+  it('orders commands for one document and acknowledges each edit before the next reads', async () => {
+    const store = new WorkspaceStore()
+    const identity = file('one', 'main')
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const first = store.command(identity, async () => {
+      await pending
+      store.edit(identity, 'first')
+    })
+    const second = store.command(identity, async () => {
+      const current = store.get(documentKey(identity))!.content
+      store.edit(identity, `${current} second`)
+    })
+    release()
+    await Promise.all([first, second])
+    expect(store.get(documentKey(identity))?.content).toBe('first second')
+  })
+
+  it('rejects a delayed edit after a human revision and keeps the queue usable', async () => {
+    const store = new WorkspaceStore()
+    const identity = file('one', 'main')
+    const start = store.edit(identity, 'start')
+    store.edit(identity, 'human')
+    expect(() => store.editIfRevision(identity, start.revision, 'agent')).toThrow(/changed/)
+    await expect(store.command(identity, async () => { throw new Error('failed') })).rejects.toThrow('failed')
+    await store.command(identity, async () => { store.edit(identity, 'next') })
+    expect(store.get(documentKey(identity))?.content).toBe('next')
+  })
+
+  it('keeps a folder command ahead of later commands on each affected file', async () => {
+    const store = new WorkspaceStore()
+    const one = file('one', 'main')
+    const two: DocumentIdentity = { ...one, path: 'other.md', kind: 'markdown' }
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const folder = store.commandMany([two, one], async () => {
+      await pending
+      store.forget(one)
+      store.forget(two)
+    })
+    const later = store.command(two, async () => store.edit(two, 'after delete'))
+    release()
+    await Promise.all([folder, later])
+    expect(store.get(documentKey(one))).toBeUndefined()
+    expect(store.get(documentKey(two))?.content).toBe('after delete')
+  })
   it('keeps identical paths on different repositories and branches distinct', () => {
     const store = new WorkspaceStore()
     const main = file('one', 'main')

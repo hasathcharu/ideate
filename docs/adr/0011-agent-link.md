@@ -33,6 +33,15 @@ code, but cannot guess another tab's code. The security requirements are:
 delete are deliberately not exposed either, because in this app they *are*
 commits. An agent's blast radius is the uncommitted working copy.
 
+Browser working-copy mutations are ordered by full workspace and document identity
+in `WorkspaceStore`. An acknowledged edit is in that synchronous record before the
+next command reads it. Async scene computations check the record's working revision
+before applying; a human edit during the computation returns a retryable error.
+Navigation does not redirect a delayed scene result to the newly active document.
+Opening a file reports failure to the agent if the read or activation fails.
+Human rename and multi-file delete reserve the same document queues before changing
+their saved-file and working-copy records.
+
 ## Agent Link — an agent drives the live editor
 
 **Ship both ends of a protocol change together.** The tab and service refuse to

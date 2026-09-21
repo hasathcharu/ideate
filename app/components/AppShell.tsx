@@ -1139,10 +1139,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const openFile = useCallback(
-    async (path: string) => {
-      if (!hasWorkspace) return
-      if (path === openPathRef.current) return
-      if (!flushOutgoingDraft()) return
+    async (path: string): Promise<boolean> => {
+      if (!hasWorkspace) return false
+      if (path === openPathRef.current) return true
+      if (!flushOutgoingDraft()) return false
       const request = ++openRequestRef.current
       const requestedWorkspace = workspaceSelectionRef.current
       const activation = workspaceStore.active().generation
@@ -1153,27 +1153,27 @@ export default function AppShell({ user, mode }: AppShellProps) {
         const draft = readDraftResult(docIdForPath(path))
         if (draft.status !== 'ok') {
           toast.error(`Could not open ${path}: its unsaved draft is ${draft.status}.`)
-          return
+          return false
         }
         setBaseline('')
         setLoadedSha(null)
         setOpenPath(path)
         setText(draft.value.content)
         workspaceStore.adopt(identityFor(path), draft.value.content, '', null, workspaceStore.active().generation)
-        return
+        return true
       }
       const res = await readSaved(path)
       if (request !== openRequestRef.current || requestedWorkspace !== workspaceSelectionRef.current ||
-          activation !== workspaceStore.active().generation) return
+          activation !== workspaceStore.active().generation) return false
       if (!res.ok) {
         if (!res.expired) toast.error(res.message)
-        return
+        return false
       }
-      if (!flushOutgoingDraft()) return
+      if (!flushOutgoingDraft()) return false
       const draft = readDraftResult(docIdForPath(path))
       if (draft.status === 'invalid' || draft.status === 'unavailable') {
         toast.error(`Could not open ${path}: its draft is ${draft.status}.`)
-        return
+        return false
       }
       setBaseline(res.content)
       setLoadedSha(res.sha)
@@ -1183,6 +1183,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const content = draftDiffers && draft.status === 'ok' ? draft.value.content : res.content
       setText(content)
       workspaceStore.adopt(identityFor(path), content, res.content, res.sha, workspaceStore.active().generation)
+      return true
     },
     [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
   )
@@ -1284,6 +1285,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
     open: boolean
     /** This command brought the file into existence. */
     created: boolean
+    identity: DocumentIdentity
+    revision: number
   }
 
   /** Find the document a command names, fetching it if nobody has opened it. */
@@ -1291,17 +1294,22 @@ export default function AppShell({ user, mode }: AppShellProps) {
     path: string | undefined,
     create: boolean,
   ): Promise<DocTarget> => {
-    if (path === undefined || path === openPath) {
+    if (path === undefined || path === openPathRef.current) {
+      const identity = activeIdentityRef.current
+      const record = workspaceStore.get(documentKey(identity))
       return {
-        path: openPath,
-        kind,
-        text,
+        path: openPathRef.current,
+        kind: identity.kind,
+        text: record?.content ?? liveTextRef.current,
         // `baseline` is only the *committed* content once there is a commit behind
         // it. For a never-committed file it is the empty string, and for the
         // scratch document it is a template nobody committed.
-        committed: loadedSha === null ? null : baseline,
+        committed: record ? (record.savedRevision === null ? null : record.savedContent) :
+          loadedSha === null ? null : baseline,
         open: true,
         created: false,
+        identity,
+        revision: record?.revision ?? 0,
       }
     }
     if (!hasWorkspace) {
@@ -1321,6 +1329,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       throw new Error('The file list has not loaded yet. Try again in a moment.')
     }
     const targetKind = fileKind(path)
+    const cached = workspaceStore.get(documentKey(identityFor(path)))
+    if (cached) return {
+      path, kind: targetKind, text: cached.content,
+      committed: cached.savedRevision === null ? null : cached.savedContent,
+      open: false, created: false, identity: cached.identity, revision: cached.revision,
+    }
     const draftResult = readDraftResult(docIdForPath(path))
     if (draftResult.status === 'invalid' || draftResult.status === 'unavailable') {
       throw new Error(`${path}'s draft is ${draftResult.status}; it was not replaced.`)
@@ -1342,6 +1356,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
         committed,
         open: false,
         created: false,
+        identity: identityFor(path),
+        revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
       }
     }
     // Not in the saved store. A draft under the path still means the file exists — it was created
@@ -1354,11 +1370,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
         committed: null,
         open: false,
         created: false,
+        identity: identityFor(path),
+        revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
       }
     }
     // A never-saved file with no draft: the human emptied it.
     if (pendingPaths.has(path)) {
-      return { path, kind: targetKind, text: '', committed: null, open: false, created: false }
+      return { path, kind: targetKind, text: '', committed: null, open: false, created: false,
+        identity: identityFor(path), revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0 }
     }
     if (!create) {
       throw new Error(
@@ -1373,25 +1392,35 @@ export default function AppShell({ user, mode }: AppShellProps) {
       committed: null,
       open: false,
       created: true,
+      identity: identityFor(path),
+      revision: workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0,
     }
   }
 
   /** Store what a command produced, and make the sidebar say so. */
   const writeBack = (target: DocTarget, next: string): void => {
-    if (target.open) {
+    if (target.open && workspaceStore.isActive(documentKey(target.identity))) {
+      const actual = workspaceStore.get(documentKey(target.identity))?.revision ?? 0
+      if (actual !== target.revision) throw new Error('Document changed during the command. Retry.')
       setText(next)
       return
     }
     const path = target.path
     // Unreachable: a target that is not the open document was resolved from a path
     // against a workspace. Narrowing rather than asserting.
-    if (path === null) return
+    if (path === null) throw new Error('The untitled document was closed during the command. Retry.')
+    if ((workspaceStore.get(documentKey(target.identity))?.revision ?? 0) !== target.revision) {
+      throw new Error('Document changed during the command. Retry.')
+    }
     const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
     const id = docIdForPath(path)
     const persisted = isDirty ? writeDraftResult(id, next) : clearDraft(id)
     if (!persisted.ok) throw new Error(`Could not update ${path}'s draft: ${persisted.reason}.`)
-    if (target.created) setCreatedPaths((prev) => withPath(prev, path))
-    setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
+    workspaceStore.editIfRevision(target.identity, target.revision, next)
+    if (workspaceKey(target.identity.workspace) === workspaceSelectionRef.current) {
+      if (target.created) setCreatedPaths((prev) => withPath(prev, path))
+      setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
+    }
   }
 
   /** How to name the saved store in a message to an agent. */
@@ -1399,13 +1428,25 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   /** Refuse a mutation that did not say which document it meant. */
   function requirePath(path: string | undefined, tool: string): void {
-    if (path !== undefined || openPath === null) return
+    if (path !== undefined || openPathRef.current === null) return
     throw new Error(
-      `${tool} needs a path. ${openPath} is open, but the open document changes as ` +
+      `${tool} needs a path. ${openPathRef.current} is open, but the open document changes as ` +
         'the human browses — so an edit with no path can land on a file you never ' +
         'read. Name the file you mean: ideate_status reports the open path, ' +
         'ideate_list_files the rest.',
     )
+  }
+
+  const commandFor = <T,>(path: string | undefined, run: () => Promise<T>): Promise<T> => {
+    const identity = path === undefined ? activeIdentityRef.current : identityFor(path)
+    const workspace = workspaceSelectionRef.current
+    return workspaceStore.command(identity, async () => {
+      if (workspaceSelectionRef.current !== workspace) throw new Error('Workspace changed during the command. Retry.')
+      if (path === undefined && documentKey(activeIdentityRef.current) !== documentKey(identity)) {
+        throw new Error('Active document changed during the command. Retry with an explicit path.')
+      }
+      return run()
+    })
   }
 
   // Rebuilt every render on purpose. The hook reads it through a ref, so a fresh
@@ -1415,7 +1456,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const linkCaps: AgentLinkCapabilities = {
     state: () => bridgeState,
 
-    listFiles: () => ({ paths: repoFilePaths }),
+    listFiles: () => ({ paths: [...new Set([
+      ...repoFilePaths,
+      ...workspaceStore.list()
+        .filter((record) => record.identity.path !== null &&
+          workspaceKey(record.identity.workspace) === workspaceSelectionRef.current)
+        .map((record) => record.identity.path!),
+    ])].sort() }),
 
     read: async (path) => {
       const target = await resolveTarget(path, false)
@@ -1429,11 +1476,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       }
     },
 
-    applyEdits: async (edits, path) => {
+    applyEdits: async (edits, path) => commandFor(path, async () => {
       requirePath(path, 'ideate_edit')
       const target = await resolveTarget(path, true)
       requireText(target.kind)
       if (target.open) {
+        if (!workspaceStore.isActive(documentKey(target.identity)) ||
+          (workspaceStore.get(documentKey(target.identity))?.revision ?? 0) !== target.revision) {
+          throw new Error('Document changed during the command. Retry.')
+        }
         const handle = editorRef.current
         // No editor mounted (a canvas is open, or the diff view has taken the pane).
         const next = handle
@@ -1448,15 +1499,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const next = applyResolved(target.text, resolveEdits(target.text, edits))
       writeBack(target, next)
       return { path: target.path, created: target.created, text: next }
-    },
+    }),
 
-    writeText: async (text: string, path) => {
+    writeText: async (text: string, path) => commandFor(path, async () => {
       requirePath(path, 'ideate_write')
       const target = await resolveTarget(path, true)
       requireText(target.kind)
       writeBack(target, text)
       return { path: target.path, created: target.created }
-    },
+    }),
 
     openFile: async (path) => {
       if (!hasWorkspace) throw new Error('No repository is connected — nothing to open.')
@@ -1472,10 +1523,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       // as `openFromTree`, where a Back button pointing at an unrelated file is
       // worse than no Back button.
       setLinkTrail([])
-      await openFile(path)
+      if (!await openFile(path)) throw new Error(`Could not open ${path}; the workspace changed or its content could not be loaded.`)
     },
 
-    createFile: (path, content) => {
+    createFile: (path, content) => commandFor(path, async () => {
       if (!hasWorkspace) {
         throw new Error('No repository is connected — nothing to create a file in.')
       }
@@ -1520,10 +1571,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setLoadedSha(null)
       setBaseline('')
       setText(body)
-    },
+    }),
 
     // `createFile` for a canvas, with the drawing in the same call.
-    createCanvas: async (path, ops) => {
+    createCanvas: async (path, ops) => commandFor(path, async () => {
+      const operationWorkspace = workspaceSelectionRef.current
+      const expectedRevision = workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0
       if (!hasWorkspace) {
         throw new Error('No repository is connected — nothing to create a canvas in.')
       }
@@ -1548,6 +1601,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const drawn = ops.length
         ? await applySceneOps(EMPTY_SCENE, ops)
         : { text: EMPTY_SCENE, elementCount: 0, warnings: [] }
+      if (operationWorkspace !== workspaceSelectionRef.current ||
+        (workspaceStore.get(documentKey(identityFor(path)))?.revision ?? 0) !== expectedRevision) {
+        throw new Error('Workspace or document changed while drawing the canvas. Retry.')
+      }
       if (!flushOutgoingDraft()) throw new Error('Could not preserve the open document before creating a canvas.')
       const written = writeDraftResult(docIdForPath(path), drawn.text)
       if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
@@ -1567,7 +1624,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         elementCount: drawn.elementCount,
         warnings: drawn.warnings,
       }
-    },
+    }),
 
     // Takes the text to check rather than always reading the document: after an
     // edit the caller holds the new text and React has not re-rendered yet, so
@@ -1596,7 +1653,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return { path: target.path, ...summarizeScene(target.text, full) }
     },
 
-    sceneEdit: async (ops, path) => {
+    sceneEdit: async (ops, path) => commandFor(path, async () => {
       requirePath(path, 'ideate_scene_edit')
       const target = await resolveTarget(path, true)
       requireScene(target.kind)
@@ -1612,7 +1669,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         elementCount,
         warnings,
       }
-    },
+    }),
 
     // Read-only, so it takes the same optional `path` as `sceneGet` and never moves the editor.
     sceneRender: async (path, ids) => {
@@ -1771,7 +1828,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         selection: 'name',
         submitLabel: 'Rename',
         validate: extension ? validateNewFilePath(extension) : validatePath,
-        onSubmit: async (newPath) => {
+        onSubmit: async (newPath) => workspaceStore.command(identityFor(node.path), async () => {
           if (newPath === node.path) {
             setPromptOpen(false)
             return
@@ -1867,7 +1924,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           // A never-saved rename changed nothing on the branch, and `pendingPaths`
           // already re-splices the new name into the sidebar.
           if (!local && repo) void refreshTree(repo)
-        },
+        }),
       })
     },
     [
@@ -1908,6 +1965,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const confirmDelete = useCallback(async () => {
     if (!hasWorkspace || !deleteTarget) return
     const paths = collectFilePaths(deleteTarget)
+    return workspaceStore.commandMany(paths.map((path) => identityFor(path)), async () => {
     const operationWorkspace = workspaceSelectionRef.current
     const deletedIdentities = paths.map((path) => identityFor(path))
     const activeAtDelete = workspaceStore.active()
@@ -1966,6 +2024,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
     void refreshTree(repo)
+    })
   }, [
     hasWorkspace,
     localMode,
@@ -3258,6 +3317,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
               <section className="min-h-0 overflow-auto" aria-label="Editor">
                 <Editor
                   ref={editorRef}
+                  documentId={documentKey(activeIdentityRef.current)}
                   value={text}
                   onChange={setText}
                   dark={editorDark}

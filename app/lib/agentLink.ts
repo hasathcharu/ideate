@@ -68,7 +68,7 @@ export interface AgentLinkCapabilities {
   openFile: (path: string) => Promise<void>
   /** Create a `.mmd`/`.md` file and open it. A `.excalidraw` path is refused —
    *  `createCanvas` is the door for one, because an empty canvas is no use. */
-  createFile: (path: string, content: string | undefined) => void
+  createFile: (path: string, content: string | undefined) => Promise<void>
   /** Create a `.excalidraw` file, draw `ops` into it and open it. Async where
    *  `createFile` is not, because the ops go through `applySceneOps` — which waits
    *  on the fonts before it measures a single label. */
@@ -435,7 +435,7 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
       await caps.openFile(command.path)
       return {}
     case 'create_file':
-      caps.createFile(command.path, command.content)
+      await caps.createFile(command.path, command.content)
       return {}
     case 'create_canvas':
       return await caps.createCanvas(command.path, command.ops ?? [])

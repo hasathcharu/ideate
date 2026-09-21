@@ -10,8 +10,13 @@
 
 `components/Editor.tsx` is one CodeMirror instance for both text kinds, with every
 per-document setting swapped through a `Compartment` (language, theme, soft wrap)
-rather than by remounting — a remount drops undo history and cursor position on
-every file switch. The line-wrap toggle is an app preference
+rather than by remounting. Each full document identity retains its own `EditorState`,
+including undo history and selection, while the same `EditorView` displays the active
+state. Switching identities never records the previous document as an undoable
+replacement. A deliberate external edit or revert within one identity remains
+undoable. Leaving text mode for the canvas or entering Diff unmounts the editor and
+ends these in-memory history sessions; the working content remains in `WorkspaceStore`.
+The line-wrap toggle is an app preference
 (`AppConfig.wrapLines`), so it survives reloads.
 
 It **does not use `basicSetup`**: that bundle is spelled out as `baseSetup` because
