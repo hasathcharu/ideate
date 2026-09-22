@@ -32,17 +32,21 @@ export default function Preview({
 
   // mermaid renders asynchronously; keep the latest result in state and ignore
   // any in-flight render that a newer source change has superseded.
-  const [result, setResult] = useState<RenderResult | RenderError | null>(null)
+  const [rendered, setRendered] = useState<
+    { source: string; result: RenderResult | RenderError } | null
+  >(null)
   useEffect(() => {
     if (!mounted) return
     let cancelled = false
     void renderPreview(text, config).then((r) => {
-      if (!cancelled) setResult(r)
+      if (!cancelled) setRendered({ source: text, result: r })
     })
     return () => {
       cancelled = true
     }
   }, [text, config, mounted])
+  const result = rendered?.result ?? null
+  const stale = !!rendered && rendered.source !== text
   const isEmpty = !text.trim()
 
   const themeBackground =
@@ -59,7 +63,7 @@ export default function Preview({
 
   return (
     <div className="relative h-full w-full overflow-hidden" style={wrapperStyle}>
-      {!result ? null : isEmpty ? (
+      {!result || stale ? null : isEmpty ? (
         <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
           Start typing on the left to see your diagram here.
         </div>
