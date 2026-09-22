@@ -19,9 +19,14 @@ extension:
 Because an `.excalidraw` file is just JSON, all three ride the same git flow:
 open, commit, rename, delete, branch, diff, version history.
 
+Images (`.svg`, `.png`, `.jpg`, `.gif`) also appear in the tree. They are not
+editable documents — they open in a viewer — but they can be uploaded, renamed and
+deleted through the same flow, so an exported diagram can live beside its source.
+
 ## Mental model
 
-- **localStorage is the working copy** — your uncommitted, in-progress edits.
+- **Browser storage is the working copy** — your uncommitted, in-progress edits,
+  held in IndexedDB.
 - **GitHub is the committed state.**
 - The app behaves like git: editing changes the working copy, **Save is a
   commit**, and opening an old version is `git checkout <sha> -- file`.
@@ -346,11 +351,16 @@ module under `ideate-mcp/`.
 
 - The GitHub access token **and its refresh token** live **only** inside the
   encrypted Auth.js session JWT and are read **server-side** by server actions.
-  Neither is ever written to `localStorage`, placed on the session object exposed
+  Neither is ever written to browser storage, placed on the session object exposed
   at `/api/auth/session`, or passed to a client component.
-- `localStorage` stores only uncommitted drafts and app config (selected repo,
-  theme, export preference, which scratch surface was last open) — never tokens or
-  secrets.
+- **IndexedDB** stores document content: local-mode saved files and uncommitted
+  drafts. **localStorage** stores only app config (selected repo, theme, export
+  preferences, which scratch surface was last open, the Agent Link service origin).
+  Neither holds tokens or secrets.
+- Agent Link's on/off switch and its pairing code live in per-tab `sessionStorage`,
+  not app config, so arming one tab never arms the rest of the origin. The pairing
+  code is a credential: it is never put in a URL, and logs carry at most an
+  eight-character hash prefix of it.
 - Repository reach is bounded twice over: by the App's declared permissions
   (Contents, Metadata only) and by the repositories the user selected when
   installing it. Revoking access is a GitHub-side action the user controls.
