@@ -171,9 +171,9 @@ export function saveAgentLink(enabled: boolean): void {
   }
 }
 
-/** This tab's pairing code, canonical (uppercase, no separator). Never a token —
- *  it is a name the human reads aloud, and the service holds nothing durable that
- *  it unlocks. */
+/** This tab's pairing credential, canonical (uppercase, no separator). It is read
+ *  aloud for convenience, but still authorizes access to the paired working copy
+ *  and therefore stays in per-tab sessionStorage and out of URLs and logs. */
 const PAIRING_CODE_KEY = 'km:agent-code'
 
 export function loadPairingCode(): string | null {
@@ -423,6 +423,30 @@ export const createDraftResult = (id: string, content: string,
   })
 export const clearDraft = (id: string): Promise<StorageWrite> =>
   orderedWrite(`draft:${id}`, () => mutate(DRAFTS, (store) => { store.delete(id) }))
+
+export interface DraftBatchChange {
+  id: string
+  content: string | null
+  baseRevision?: DraftBaseRevision
+}
+
+/** Apply a multi-document working-copy change in one IndexedDB transaction. */
+export function writeDraftBatchResult(changes: readonly DraftBatchChange[]): Promise<StorageWrite> {
+  const ids = changes.map(({ id }) => id)
+  if (new Set(ids).size !== ids.length) return Promise.resolve({ ok: false, reason: 'invalid' })
+  return orderedWrite(ids.map((id) => `draft:${id}`), () => mutate(DRAFTS, (store) => {
+    const updatedAt = Date.now()
+    for (const change of changes) {
+      if (change.content === null) store.delete(change.id)
+      else store.put({
+        version: 2,
+        content: change.content,
+        updatedAt,
+        baseRevision: change.baseRevision ?? { status: 'unknown' },
+      }, change.id)
+    }
+  }))
+}
 
 export const documentStorage: DocumentStorage = {
   open: openDocumentStorage,

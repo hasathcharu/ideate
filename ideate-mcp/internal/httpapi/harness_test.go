@@ -430,6 +430,22 @@ func (h *harness) pair(code string) (*fakeTab, *mcp.ClientSession) {
 	tab.expectReady()
 	tab.pushState(sampleState())
 	cs := h.agent()
+	go func() {
+		req, ok := tab.nextRequest(3 * time.Second)
+		if !ok {
+			return
+		}
+		if req.Command.Cmd != protocol.CmdManifest {
+			h.t.Errorf("connect command = %q, want manifest", req.Command.Cmd)
+		}
+		tab.reply(req.ID, map[string]any{
+			"workspace":  "{\"mode\":\"github\",\"owner\":\"acme\",\"repo\":\"docs\",\"branch\":\"v3\"}",
+			"identity":   map[string]any{"mode": "github", "owner": "acme", "repo": "docs", "branch": "v3"},
+			"activePath": "diagrams/flow.mmd",
+			"files":      []any{},
+			"truncated":  false,
+		})
+	}()
 	call(h.t, cs, "ideate_connect", map[string]any{"code": code, "agent": "Test Agent"}).
 		ok(h.t, "ideate_connect")
 	tab.expectFrame(protocol.TAttached)

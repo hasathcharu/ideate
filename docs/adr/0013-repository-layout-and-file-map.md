@@ -60,6 +60,9 @@ works. `.env.local` lives in `app/`, because that is Next's working directory.
   `color-mix()` for anything it then has to measure.
 - `lib/agentProtocol.ts` — Agent Link's wire contract, hand-mirrored in Go. Every frame
   it declares needs a fixture in `ideate-mcp/testdata/frames/`.
+- `lib/agentWorkspace.ts` — bounded literal search, ranged text reads, and the
+  strict unified-diff parser/applicator used by Agent Link. It is pure domain code;
+  the capability adapter supplies effective working copies and atomic persistence.
 - `lib/sceneLint.ts` — the layout checks an agent's drawing is answered with. Pure
   geometry over finished elements: no React, no I/O, and no value import of
   Excalidraw, which is what lets both `applySceneOps` and `summarizeScene` call it.

@@ -35,3 +35,8 @@ fixtures, one with the key and one without. Since protocol 4 that is `read`,
 here than anywhere else in this directory: the two spellings do not name the same
 document. A field silently dropped on the way out does not fail — it edits
 whatever the human happens to have open instead of the file the agent asked for.
+
+Protocol 7's workspace commands each have a fixture: manifest, bounded literal
+search, ordered grouped reads, atomic patches with numeric/`"absent"` revisions,
+and scene edits carrying an expected revision. Client results also carry the
+browser execution time that the relay combines with its own end-to-end timing.

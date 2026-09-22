@@ -16,6 +16,9 @@ state. Switching identities never records the previous document as an undoable
 replacement. A deliberate external edit or revert within one identity remains
 undoable. Leaving text mode for the canvas or entering Diff unmounts the editor and
 ends these in-memory history sessions; the working content remains in `WorkspaceStore`.
+Agent Link's whole-document writes and each open-file part of an atomic workspace
+patch dispatch one deliberate transaction through `EditorHandle`, so they are
+immediately visible to the next command and remain one undo step.
 The line-wrap toggle is an app preference
 (`AppConfig.wrapLines`), so it survives reloads.
 

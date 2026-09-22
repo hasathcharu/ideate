@@ -52,7 +52,7 @@ pairing must be in one process to be piped together. So:
 
 | Route | Purpose |
 | --- | --- |
-| `POST /mcp` | MCP over Streamable HTTP. All twelve tools; every one takes a `code`. |
+| `POST /mcp` | MCP over Streamable HTTP. All seventeen tools; every one takes a `code`. |
 | `GET /v1/tab` | The browser tab's WebSocket. Sends `hello` within 2s, claims its bucket, gets `ready`. |
 | `GET /v1/capacity` | `{live, max}` — **529** when full, 200 otherwise. |
 | `GET /v1/stats` | How many sessions this process is handling — `{live, max, withTab, inGrace, attached}` — plus a `process` object with what that is costing the box. **Basic auth**, and absent entirely (404) unless `STATS_USER`/`STATS_PASSWORD` are set. |
@@ -146,6 +146,14 @@ The real memory risk is **many large frames at once**, which is what
 `MAX_INFLIGHT_BYTES` bounds: 250 × 8MB would be a 2GB spike on a 512MB box. A
 command that cannot acquire budget waits, then fails with a message that says to
 retry.
+
+Every forwarded command also produces one structured `agent command` log record
+with its command name, request and response byte counts, browser execution time,
+relay time, and end-to-end time. It deliberately excludes document content, paths,
+and the pairing code; only the existing eight-character code-hash prefix identifies
+the in-memory session. These records are the baseline for comparing the legacy
+single-file loop with `connect → search/read_many → apply_patch` before changing the
+transport.
 
 ## Run your own
 

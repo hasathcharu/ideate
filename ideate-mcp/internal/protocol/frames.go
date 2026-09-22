@@ -8,7 +8,22 @@ import (
 
 // Version is bumped on any breaking change to the frames here, and must equal PROTOCOL_VERSION in
 // app/lib/agentProtocol.ts.
-const Version = 6
+const Version = 7
+
+const (
+	MaxManifestFiles         = 500
+	MaxSearchBytes           = 2 << 20
+	MaxSearchResults         = 200
+	MaxSearchContext         = 5
+	MaxSearchGlobs           = 32
+	MaxSearchResponseBytes   = 2 << 20
+	MaxReadManyPaths         = 32
+	MaxReadManyBytes         = 1 << 20
+	MaxReadManyResponseBytes = 3 << 20
+	MaxPatchPaths            = 32
+	MaxPatchBytes            = 1 << 20
+	MaxPatchResponseBytes    = 2 << 20
+)
 
 // Close codes, in the WebSocket private-use range (4000–4999), so they cannot
 // collide with the protocol's own and the tab can tell a refusal from the service
@@ -60,6 +75,17 @@ type TextEdit struct {
 	ReplaceAll *bool `json:"replaceAll,omitempty"`
 }
 
+type ReadManyFile struct {
+	Path      string `json:"path"`
+	StartLine *int   `json:"startLine,omitempty"`
+	EndLine   *int   `json:"endLine,omitempty"`
+}
+
+type RevisionExpectation struct {
+	Path     string `json:"path"`
+	Revision any    `json:"revision"`
+}
+
 // ScenePoint is an Excalidraw arrow/line vertex, relative to the element origin.
 type ScenePoint struct {
 	X float64 `json:"x"`
@@ -94,10 +120,14 @@ type SceneOp struct {
 	Gap  *float64 `json:"gap,omitempty"`
 }
 
-// Command names of the twelve commands a tab can be asked to run.
+// Command names of the sixteen commands a tab can be asked to run.
 const (
 	CmdStatus       = "status"
 	CmdListFiles    = "list_files"
+	CmdManifest     = "manifest"
+	CmdSearch       = "search"
+	CmdReadMany     = "read_many"
+	CmdApplyPatch   = "apply_patch"
 	CmdRead         = "read"
 	CmdEdit         = "edit"
 	CmdWrite        = "write"
@@ -125,7 +155,17 @@ type Command struct {
 	Full    *bool      `json:"full,omitempty"`
 	Ops     []SceneOp  `json:"ops,omitempty"`
 	// IDs belongs to scene_render, where absent means the whole canvas.
-	IDs []string `json:"ids,omitempty"`
+	IDs              []string              `json:"ids,omitempty"`
+	Query            *string               `json:"query,omitempty"`
+	Globs            []string              `json:"globs,omitempty"`
+	CaseSensitive    *bool                 `json:"caseSensitive,omitempty"`
+	ContextLines     *int                  `json:"contextLines,omitempty"`
+	Limit            *int                  `json:"limit,omitempty"`
+	Files            []ReadManyFile        `json:"files,omitempty"`
+	Workspace        *string               `json:"workspace,omitempty"`
+	Patch            *string               `json:"patch,omitempty"`
+	Expected         []RevisionExpectation `json:"expected,omitempty"`
+	ExpectedRevision any                   `json:"expectedRevision,omitempty"`
 }
 
 /* ------------------------------------------------------------------ */
@@ -236,6 +276,11 @@ type Result struct {
 	OK      bool            `json:"ok"`
 	Data    json.RawMessage `json:"data,omitempty"`
 	Message string          `json:"message,omitempty"`
+	Metrics CommandMetrics  `json:"metrics"`
+}
+
+type CommandMetrics struct {
+	BrowserMS int64 `json:"browserMs"`
 }
 
 // StateEvent is the tab pushing its current BridgeState.

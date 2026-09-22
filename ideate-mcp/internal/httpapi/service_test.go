@@ -52,6 +52,50 @@ func TestPairingHappyPath(t *testing.T) {
 	}
 }
 
+func TestWorkspaceToolsForwardBoundedRevisionedCommands(t *testing.T) {
+	h := newHarness(t, nil)
+	tab, cs := h.pair(testCode)
+
+	tab.answer(func(cmd protocol.Command) any {
+		switch cmd.Cmd {
+		case protocol.CmdSearch:
+			if cmd.Query == nil || *cmd.Query != "needle" || cmd.ContextLines == nil || *cmd.ContextLines != 2 {
+				t.Errorf("search command = %+v", cmd)
+			}
+			return map[string]any{"matches": []any{}, "scannedBytes": 12, "truncated": false}
+		case protocol.CmdReadMany:
+			if len(cmd.Files) != 2 || cmd.Files[0].StartLine == nil || *cmd.Files[0].StartLine != 4 {
+				t.Errorf("read_many command = %+v", cmd)
+			}
+			return map[string]any{"files": []any{}, "truncated": false}
+		case protocol.CmdApplyPatch:
+			if cmd.Workspace == nil || *cmd.Workspace != "workspace-1" || len(cmd.Expected) != 1 {
+				t.Errorf("apply_patch command = %+v", cmd)
+			}
+			return map[string]any{"applied": true, "files": []any{}, "conflicts": []any{}}
+		default:
+			t.Errorf("unexpected command %q", cmd.Cmd)
+			return map[string]any{}
+		}
+	})
+
+	call(t, cs, "ideate_search", map[string]any{
+		"code": testCode, "query": "needle", "globs": []string{"docs/**"}, "contextLines": 2,
+	}).ok(t, "ideate_search")
+	call(t, cs, "ideate_read_many", map[string]any{
+		"code": testCode,
+		"files": []map[string]any{
+			{"path": "docs/a.md", "startLine": 4, "endLine": 8},
+			{"path": "diagrams/a.mmd"},
+		},
+	}).ok(t, "ideate_read_many")
+	call(t, cs, "ideate_apply_patch", map[string]any{
+		"code": testCode, "workspace": "workspace-1",
+		"patch":    "--- a/docs/a.md\n+++ b/docs/a.md\n@@ -1 +1 @@\n-old\n+new",
+		"expected": []map[string]any{{"path": "docs/a.md", "revision": 7}},
+	}).ok(t, "ideate_apply_patch")
+}
+
 // The code is normalized server-side, so the form a human reads off the screen and
 // the form they type at their agent do not have to match. Crockford's alphabet is
 // what makes the letter substitutions unambiguous.
@@ -183,6 +227,12 @@ func TestReattach(t *testing.T) {
 	h := newHarness(t, nil)
 	tab, cs := h.pair(testCode)
 
+	go func() {
+		req, ok := tab.nextRequest(3 * time.Second)
+		if ok {
+			tab.reply(req.ID, map[string]any{"workspace": "same", "files": []any{}, "truncated": false})
+		}
+	}()
 	call(t, cs, "ideate_connect", map[string]any{"code": testCode, "agent": "Test Agent"}).
 		ok(t, "re-attach by the same agent")
 	tab.expectFrame(protocol.TAttached)

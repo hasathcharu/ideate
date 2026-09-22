@@ -72,6 +72,22 @@ describe('document storage boundary', () => {
     })
   })
 
+  it('writes and clears several drafts in one completed transaction', async () => {
+    await storage.writeDraftResult('local:file:clean.mmd', 'old')
+    await expect(storage.writeDraftBatchResult([
+      { id: 'local:file:a.mmd', content: 'A', baseRevision: { status: 'absent' } },
+      { id: 'local:file:b.md', content: 'B', baseRevision: { status: 'known', revision: 'sha-b' } },
+      { id: 'local:file:clean.mmd', content: null },
+    ])).resolves.toEqual({ ok: true })
+    await expect(storage.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'A', baseRevision: { status: 'absent' } },
+    })
+    await expect(storage.readDraftResult('local:file:b.md')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'B', baseRevision: { status: 'known', revision: 'sha-b' } },
+    })
+    await expect(storage.readDraftResult('local:file:clean.mmd')).resolves.toEqual({ status: 'missing' })
+  })
+
   it('stores the original saved revision in a versioned draft envelope', async () => {
     await storage.writeDraftResult('owner/repo@main:a.mmd', 'working', {
       status: 'known', revision: 'sha-base',
@@ -84,6 +100,7 @@ describe('document storage boundary', () => {
   })
 
   it('does not migrate the unversioned development draft format', async () => {
+    await storage.openDocumentStorage()
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('ideate-documents', 1)
       request.onsuccess = () => resolve(request.result)
@@ -100,6 +117,7 @@ describe('document storage boundary', () => {
   })
 
   it('rejects a malformed versioned envelope', async () => {
+    await storage.openDocumentStorage()
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open('ideate-documents', 1)
       request.onsuccess = () => resolve(request.result)

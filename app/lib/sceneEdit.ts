@@ -836,7 +836,7 @@ function colorOf(element: ExcalidrawElement, key: 'strokeColor' | 'backgroundCol
 export function summarizeScene(
   sceneText: string,
   full = false,
-): Omit<SceneGetResult, 'path'> {
+): Omit<SceneGetResult, 'path' | 'revision'> {
   const scene = parseScene(sceneText)
   if (!scene) throw new Error('That document is not a readable Excalidraw scene.')
 

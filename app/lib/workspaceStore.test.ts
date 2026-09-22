@@ -7,6 +7,15 @@ const file = (repo: string, branch: string): DocumentIdentity => ({
 })
 
 describe('WorkspaceStore', () => {
+  it('seeds a resolved working copy once without relabeling its revision', () => {
+    const store = new WorkspaceStore()
+    const identity = file('one', 'main')
+    const first = store.ensure(identity, 'working', 'saved', 'sha-1')
+    const repeated = store.ensure(identity, 'stale load', 'other saved', 'sha-2')
+    expect(first).toMatchObject({ revision: 1, content: 'working', savedRevision: 'sha-1', persistence: 'dirty' })
+    expect(repeated).toBe(first)
+  })
+
   it('orders commands for one document and acknowledges each edit before the next reads', async () => {
     const store = new WorkspaceStore()
     const identity = file('one', 'main')

@@ -185,6 +185,7 @@ func (s *Session) Touch() {
 
 // Call sends one command to the tab and waits for its answer.
 func (s *Session) Call(ctx context.Context, cmd protocol.Command) (json.RawMessage, error) {
+	started := time.Now()
 	s.mu.Lock()
 	if !s.attached {
 		s.mu.Unlock()
@@ -239,11 +240,34 @@ func (s *Session) Call(ctx context.Context, cmd protocol.Command) (json.RawMessa
 
 	select {
 	case res := <-answer:
+		elapsed := time.Since(started)
+		browserMS := res.Metrics.BrowserMS
+		if browserMS < 0 {
+			browserMS = 0
+		}
+		browser := time.Duration(browserMS) * time.Millisecond
+		relay := elapsed - browser
+		if relay < 0 {
+			relay = 0
+		}
+		s.reg.opts.Logger.Info("agent command",
+			"code", LogKey(s.codeHash),
+			"command", cmd.Cmd,
+			"ok", res.OK,
+			"request_bytes", len(payload),
+			"response_bytes", len(res.Data)+len(res.Message),
+			"browser_ms", browserMS,
+			"relay_ms", relay.Milliseconds(),
+			"end_to_end_ms", elapsed.Milliseconds())
 		if !res.OK {
 			return nil, errors.New(res.Message)
 		}
 		return res.Data, nil
 	case <-ctx.Done():
+		s.reg.opts.Logger.Info("agent command",
+			"code", LogKey(s.codeHash), "command", cmd.Cmd, "ok", false,
+			"request_bytes", len(payload), "end_to_end_ms", time.Since(started).Milliseconds(),
+			"timeout", true)
 		return nil, fmt.Errorf(
 			"the tab did not answer %q within %s. It may be busy, or the page may have "+
 				"been reloaded", cmd.Cmd, timeout)

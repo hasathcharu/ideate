@@ -1,0 +1,12 @@
+{
+  "t": "req",
+  "id": 22,
+  "command": {
+    "cmd": "search",
+    "query": "authentication",
+    "globs": ["docs/**", "diagrams/*.mmd"],
+    "caseSensitive": false,
+    "contextLines": 2,
+    "limit": 40
+  }
+}

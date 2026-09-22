@@ -1,7 +1,7 @@
 /** The wire contract between the Agent Link service and the browser tab. */
 
 /** Bumped on any breaking change to the frames below. */
-export const PROTOCOL_VERSION = 6
+export const PROTOCOL_VERSION = 7
 
 /** Where the tab opens its WebSocket, under the configured service origin. */
 export const TAB_PATH = '/v1/tab'
@@ -63,6 +63,19 @@ export interface TextEdit {
   /** Replace every occurrence. Without it, `oldText` matching more than once is
    *  an error rather than a coin flip over which one was meant. */
   replaceAll?: boolean
+}
+
+export type ExpectedRevision = number | 'absent'
+
+export interface ReadManyRequest {
+  path: string
+  startLine?: number
+  endLine?: number
+}
+
+export interface RevisionExpectation {
+  path: string
+  revision: ExpectedRevision
 }
 
 export type SceneElementType = 'rectangle' | 'ellipse' | 'diamond' | 'text' | 'arrow' | 'line'
@@ -147,6 +160,10 @@ export type SceneOp =
 export type Command =
   | { cmd: 'status' }
   | { cmd: 'list_files' }
+  | { cmd: 'manifest' }
+  | { cmd: 'search'; query: string; globs?: string[]; caseSensitive?: boolean; contextLines?: number; limit?: number }
+  | { cmd: 'read_many'; files: ReadManyRequest[] }
+  | { cmd: 'apply_patch'; workspace: string; patch: string; expected: RevisionExpectation[] }
   | { cmd: 'read'; path?: string }
   | { cmd: 'edit'; path?: string; edits: TextEdit[] }
   | { cmd: 'write'; path?: string; text: string }
@@ -156,7 +173,7 @@ export type Command =
   | { cmd: 'create_canvas'; path: string; ops?: SceneOp[] }
   | { cmd: 'check'; path?: string }
   | { cmd: 'scene_get'; path?: string; full?: boolean }
-  | { cmd: 'scene_edit'; path?: string; ops: SceneOp[] }
+  | { cmd: 'scene_edit'; path?: string; ops: SceneOp[]; expectedRevision?: number | 'absent' }
   /** A picture of a canvas, for the agent that drew it. */
   | { cmd: 'scene_render'; path?: string; ids?: string[] }
 
@@ -238,11 +255,75 @@ export interface EditResult extends Touched {
 export interface ReadResult {
   path: string | null
   text: string
+  kind: DocKind
+  revision: number
   /**
    * True when what came back is byte-for-byte (drawing-for-drawing, for a scene) what the branch
    * has committed.
    */
   committed: boolean
+}
+
+export interface WorkspaceFile {
+  path: string
+  kind: DocKind
+  size: number
+  revision: number
+  dirty: boolean
+  created: boolean
+}
+
+export interface WorkspaceManifestResult {
+  workspace: string
+  identity: { mode: 'local' } | { mode: 'github'; owner: string; repo: string; branch: string }
+  activePath: string | null
+  files: WorkspaceFile[]
+  truncated: boolean
+}
+
+export interface SearchResult {
+  matches: Array<{ path: string; line: number; excerpt: string; revision: number }>
+  scannedBytes: number
+  truncated: boolean
+}
+
+export interface ReadManyItem {
+  path: string
+  ok: boolean
+  text?: string
+  kind?: DocKind
+  revision?: number
+  committed?: boolean
+  startLine?: number
+  endLine?: number
+  lineCount?: number
+  error?: string
+}
+
+export interface ReadManyResult {
+  files: ReadManyItem[]
+  truncated: boolean
+}
+
+export interface PatchConflict {
+  path: string
+  expected: ExpectedRevision
+  revision: number | 'absent'
+  excerpt: string
+  message: string
+}
+
+export interface PatchResult {
+  applied: boolean
+  files: Array<{
+    path: string
+    revision: number
+    created: boolean
+    added: number
+    deleted: number
+    diagnostics: Diagnostic[]
+  }>
+  conflicts: PatchConflict[]
 }
 
 export interface ListFilesResult {
@@ -306,6 +387,7 @@ export interface SceneWarning {
 
 export interface SceneGetResult {
   path: string | null
+  revision: number
   elementCount: number
   elements: SceneElementSummary[]
   /**
@@ -350,6 +432,7 @@ export interface SceneRenderResult {
 
 export interface SceneEditResult extends Touched {
   applied: number
+  revision: number
   elementCount: number
   /** Layout problems in the scene *after* the edit — including ones the edit did not
    *  cause, because the caller is the only party that can fix any of them and the
@@ -382,8 +465,8 @@ export type ClientFrame =
   /** First frame, inside `HELLO_DEADLINE_MS`. The code is the credential; it travels
    *  in-band because a browser WebSocket cannot set request headers. */
   | { t: 'hello'; code: string; protocol: number }
-  | { t: 'res'; id: number; ok: true; data: unknown }
-  | { t: 'res'; id: number; ok: false; message: string }
+  | { t: 'res'; id: number; ok: true; data: unknown; metrics: { browserMs: number } }
+  | { t: 'res'; id: number; ok: false; message: string; metrics: { browserMs: number } }
   | { t: 'event'; name: 'state'; state: BridgeState }
 
 /** Close codes. 4001–4009 is the private-use range, so these can't collide with the

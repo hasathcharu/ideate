@@ -33,6 +33,8 @@ Content storage has explicit read outcomes: present, missing, invalid data, or
 unavailable storage. Draft and local-file writes report quota/access failure.
 Moves check the destination and change source and destination in one transaction. Local
 saves, renames, and deletes update related saved-file and draft records atomically. A
+multi-document Agent Link patch likewise puts or clears every affected draft in one
+`drafts` transaction before any working-copy record acknowledges the patch. A
 transaction reports success only after completion; abort, quota, blocked-open, and upgrade
 failures are unavailable or quota outcomes, never an empty workspace. The per-tab Agent Link state
 remains separate from these document records.

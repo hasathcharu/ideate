@@ -24,6 +24,10 @@
   pane geometry live in `useAgentLinkController`, `useWorkspaceTree`,
   `useAppearanceController`, and `useResizableLayout`; these hooks remain narrow
   clients of the same document owner rather than alternate state owners.
+  Multi-document agent patches reserve every touched identity with
+  `WorkspaceStore.commandMany`, validate all working revisions and hunks before
+  mutation, persist every draft change in one IndexedDB transaction, and only then
+  advance the records. A patch never partially acknowledges.
 
 - IndexedDB document writes are asynchronous and ordered. A caller reports durability only
   after the transaction completes. Navigation awaits the outgoing dirty draft and remains on

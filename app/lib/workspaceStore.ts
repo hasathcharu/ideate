@@ -114,6 +114,20 @@ export class WorkspaceStore {
     if (actual !== expected) throw new Error(`Document changed during the command (revision ${expected} → ${actual}). Retry.`)
     return this.edit(identity, content)
   }
+  /** Seed a resolved working copy without changing a record that another command already owns. */
+  ensure(identity: DocumentIdentity, content: string, savedContent: string,
+    savedRevision: string | null): DocumentRecord {
+    const key = documentKey(identity)
+    const current = this.records.get(key)
+    if (current) return current
+    const next: DocumentRecord = {
+      key, identity, content, revision: 1, savedContent, savedRevision, exists: true,
+      persistence: contentEqual(content, savedContent, identity.kind) && savedRevision !== null ? 'clean' : 'dirty',
+    }
+    this.records.set(key, next)
+    this.publish()
+    return next
+  }
   list(): readonly DocumentRecord[] { return this.recordsSnapshot }
   active(): { key: string | null; generation: number } {
     return { key: this.activeKey, generation: this.generation }

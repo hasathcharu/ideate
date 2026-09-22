@@ -13,7 +13,12 @@ import {
   type Command,
   type EditResult,
   type ListFilesResult,
+  type PatchResult,
   type ReadResult,
+  type ReadManyRequest,
+  type ReadManyResult,
+  type RevisionExpectation,
+  type SearchResult,
   type SceneEditResult,
   type SceneGetResult,
   type SceneOp,
@@ -22,6 +27,7 @@ import {
   type StatusResult,
   type TextEdit,
   type Touched,
+  type WorkspaceManifestResult,
 } from './agentProtocol'
 import { mcpTabUrl } from './mcpOrigin'
 import { loadPairingCode, savePairingCode } from './storage'
@@ -62,6 +68,12 @@ export interface AgentLinkCapabilities {
    *  `status` call answers with the truth rather than the last debounced push. */
   state: () => BridgeState
   listFiles: () => ListFilesResult
+  manifest: () => Promise<WorkspaceManifestResult>
+  search: (query: string, options: {
+    globs?: readonly string[]; caseSensitive?: boolean; contextLines?: number; limit?: number
+  }) => Promise<SearchResult>
+  readMany: (files: readonly ReadManyRequest[]) => Promise<ReadManyResult>
+  applyPatch: (workspace: string, patch: string, expected: readonly RevisionExpectation[]) => Promise<PatchResult>
   read: (path?: string) => Promise<ReadResult>
   applyEdits: (edits: readonly TextEdit[], path?: string) => Promise<AppliedEdit>
   writeText: (text: string, path?: string) => Promise<Touched>
@@ -78,7 +90,7 @@ export interface AgentLinkCapabilities {
    *  one. `path` also decides which *kind* the text is diagnosed as. */
   check: (target: { text?: string; path?: string }) => Promise<CheckResult>
   sceneGet: (full: boolean, path?: string) => Promise<SceneGetResult>
-  sceneEdit: (ops: readonly SceneOp[], path?: string) => Promise<SceneEditResult>
+  sceneEdit: (ops: readonly SceneOp[], path?: string, expectedRevision?: number | 'absent') => Promise<SceneEditResult>
   /** A small picture of a canvas. Read-only, so it takes the same optional `path`
    *  as `sceneGet` and leaves the editor where it is. */
   sceneRender: (path?: string, ids?: readonly string[]) => Promise<SceneRenderResult>
@@ -367,14 +379,21 @@ async function respond(
   command: Command,
   caps: AgentLinkCapabilities,
 ): Promise<void> {
+  const started = performance.now()
   let data: unknown
   try {
     data = await execute(command, caps)
   } catch (error) {
-    send(ws, { t: 'res', id, ok: false, message: describe(error, 'The command failed.') })
+    send(ws, {
+      t: 'res', id, ok: false, message: describe(error, 'The command failed.'),
+      metrics: { browserMs: Math.max(0, Math.round(performance.now() - started)) },
+    })
     return
   }
-  send(ws, { t: 'res', id, ok: true, data })
+  send(ws, {
+    t: 'res', id, ok: true, data,
+    metrics: { browserMs: Math.max(0, Math.round(performance.now() - started)) },
+  })
 }
 
 function send(ws: WebSocket, frame: unknown): void {
@@ -402,6 +421,19 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
     }
     case 'list_files':
       return caps.listFiles()
+    case 'manifest':
+      return await caps.manifest()
+    case 'search':
+      return await caps.search(command.query, {
+        globs: command.globs,
+        caseSensitive: command.caseSensitive,
+        contextLines: command.contextLines,
+        limit: command.limit,
+      })
+    case 'read_many':
+      return await caps.readMany(command.files)
+    case 'apply_patch':
+      return await caps.applyPatch(command.workspace, command.patch, command.expected)
     case 'read':
       return await caps.read(command.path)
     case 'edit': {
@@ -444,7 +476,7 @@ async function execute(command: Command, caps: AgentLinkCapabilities): Promise<u
     case 'scene_get':
       return await caps.sceneGet(command.full === true, command.path)
     case 'scene_edit':
-      return await caps.sceneEdit(command.ops, command.path)
+      return await caps.sceneEdit(command.ops, command.path, command.expectedRevision)
     case 'scene_render':
       return await caps.sceneRender(command.path, command.ids)
   }

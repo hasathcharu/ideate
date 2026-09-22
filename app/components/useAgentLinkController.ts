@@ -4,7 +4,26 @@ import { useCallback, useMemo, useRef, type Dispatch, type SetStateAction } from
 import type { EditorHandle } from './Editor'
 import type { MarkdownPreviewHandle } from './MarkdownPreview'
 import { useAgentLink, type AgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
-import type { BridgeState } from '@/lib/agentProtocol'
+import type {
+  BridgeState,
+  Diagnostic,
+  PatchConflict,
+  ReadManyRequest,
+  RevisionExpectation,
+} from '@/lib/agentProtocol'
+import {
+  AGENT_MAX_MANIFEST_FILES,
+  AGENT_MAX_READ_MANY_BYTES,
+  AGENT_MAX_READ_MANY_PATHS,
+  AGENT_MAX_SEARCH_BYTES,
+  PatchHunkError,
+  applyFilePatch,
+  assertPatchableKind,
+  lineRange,
+  matchesPathGlobs,
+  parseUnifiedDiff,
+  searchDocuments,
+} from '@/lib/agentWorkspace'
 import { collectDiagnostics } from '@/lib/diagnostics'
 import { draftBaseFor, draftNeedsReconciliation } from '@/lib/draftLifecycle'
 import { EMPTY_SCENE, scenesEqual } from '@/lib/excalidraw'
@@ -17,6 +36,7 @@ import {
   readDraftResult,
   readLocalFileResult,
   writeDraftResult,
+  writeDraftBatchResult,
   type DraftBaseRevision,
 } from '@/lib/storage'
 import { applyResolved, resolveEdits } from '@/lib/textEdit'
@@ -102,6 +122,14 @@ interface DocTarget {
   draftBase: DraftBaseRevision
 }
 
+interface PreparedPatchChange {
+  target: DocTarget
+  text: string
+  added: number
+  deleted: number
+  diagnostics: Diagnostic[]
+}
+
 function contentDiffers(a: string, b: string, kind: FileKind): boolean {
   return kind === 'excalidraw' ? !scenesEqual(a, b) : a !== b
 }
@@ -118,6 +146,33 @@ function withPath(set: ReadonlySet<string>, path: string): ReadonlySet<string> {
   const next = new Set(set)
   next.add(path)
   return next
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : 'The operation failed.'
+}
+
+function conflictExcerpt(text: string, line = 1): string {
+  const lines = text.split('\n')
+  const from = Math.max(0, line - 3)
+  return lines.slice(from, from + 5).map((value, offset) => `${from + offset + 1}: ${value}`).join('\n')
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  map: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length)
+  let cursor = 0
+  await Promise.all(Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await map(values[index]!)
+    }
+  }))
+  return results
 }
 
 function requireText(target: FileKind): void {
@@ -222,7 +277,12 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
   const resolveTarget = async (path: string | undefined, create: boolean): Promise<DocTarget> => {
     if (path === undefined || path === openPathRef.current) {
       const identity = activeIdentityRef.current
-      const record = workspaceStore.get(documentKey(identity))
+      const record = workspaceStore.get(documentKey(identity)) ?? workspaceStore.ensure(
+        identity,
+        liveTextRef.current,
+        loadedSha === null ? '' : baseline,
+        loadedSha,
+      )
       return {
         path: openPathRef.current,
         kind: identity.kind,
@@ -233,8 +293,8 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
         open: true,
         created: false,
         identity,
-        revision: record?.revision ?? 0,
-        draftBase: draftBasesRef.current.get(activeDocId) ?? draftBaseFor(record?.savedRevision ?? loadedSha),
+        revision: record.revision,
+        draftBase: draftBasesRef.current.get(activeDocId) ?? draftBaseFor(record.savedRevision),
       }
     }
     if (!hasWorkspace) {
@@ -281,19 +341,22 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
         throw new Error(`${path}'s draft is based on an older or unknown revision. Open it to reconcile first.`)
       }
       if (draft) draftBasesRef.current.set(docIdForPath(path), draft.baseRevision)
+      const working = differs && draft ? draft.content : res.content
+      const record = workspaceStore.ensure(identity, working, res.content, res.sha)
       return {
         path,
         kind: targetKind,
-        text: differs && draft ? draft.content : res.content,
+        text: working,
         committed: res.content,
         open: false,
         created: false,
         identity,
-        revision: workspaceStore.get(documentKey(identity))?.revision ?? 0,
+        revision: record.revision,
         draftBase: draft?.baseRevision ?? draftBaseFor(res.sha),
       }
     }
     if (draft) {
+      const record = workspaceStore.ensure(identity, draft.content, '', null)
       return {
         path,
         kind: targetKind,
@@ -302,11 +365,12 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
         open: false,
         created: false,
         identity,
-        revision: workspaceStore.get(documentKey(identity))?.revision ?? 0,
+        revision: record.revision,
         draftBase: draft.baseRevision,
       }
     }
     if (pendingPaths.has(path)) {
+      const record = workspaceStore.ensure(identity, '', '', null)
       return {
         path,
         kind: targetKind,
@@ -315,7 +379,7 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
         open: false,
         created: false,
         identity,
-        revision: workspaceStore.get(documentKey(identity))?.revision ?? 0,
+        revision: record.revision,
         draftBase: { status: 'absent' },
       }
     }
@@ -396,23 +460,260 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
     (localMode && (await readLocalFileResult(path)).status !== 'missing') ||
     (await readDraftResult(docIdForPath(path))).status !== 'missing'
 
+  const workspacePaths = (): string[] => [...new Set([
+    ...repoFilePaths,
+    ...workspaceStore.list()
+      .filter((record) => record.identity.path !== null &&
+        workspaceKey(record.identity.workspace) === workspaceSelectionRef.current)
+      .map((record) => record.identity.path!),
+  ])].sort()
+
   // Rebuilt each render so every capability observes the current workspace snapshot.
   const caps: AgentLinkCapabilities = {
     state: () => bridgeState,
-    listFiles: () => ({
-      paths: [...new Set([
-        ...repoFilePaths,
-        ...workspaceStore.list()
-          .filter((record) => record.identity.path !== null &&
-            workspaceKey(record.identity.workspace) === workspaceSelectionRef.current)
-          .map((record) => record.identity.path!),
-      ])].sort(),
-    }),
+    listFiles: () => ({ paths: workspacePaths() }),
+    manifest: async () => {
+      const paths = workspacePaths()
+      const selected = paths.slice(0, AGENT_MAX_MANIFEST_FILES)
+      const files = await mapWithConcurrency(selected, 8, async (path) => {
+        const target = await resolveTarget(path, false)
+        return {
+          path,
+          kind: target.kind,
+          size: new TextEncoder().encode(target.text).byteLength,
+          revision: target.revision,
+          dirty: target.committed === null || contentDiffers(target.text, target.committed, target.kind),
+          created: target.committed === null && !savedPaths!.has(path),
+        }
+      })
+      const identity = identityFor(selected[0] ?? '__manifest__.mmd').workspace
+      return {
+        workspace: workspaceSelectionRef.current,
+        identity,
+        activePath: openPathRef.current,
+        files,
+        truncated: paths.length > selected.length,
+      }
+    },
+    search: async (query, options) => {
+      const documents = []
+      let loadedBytes = 0
+      let sourceTruncated = false
+      for (const path of workspacePaths()) {
+        if (!matchesPathGlobs(path, options.globs ?? [])) continue
+        const target = await resolveTarget(path, false)
+        if (target.kind === 'excalidraw') continue
+        const bytes = new TextEncoder().encode(target.text).byteLength
+        if (loadedBytes + bytes > AGENT_MAX_SEARCH_BYTES) {
+          sourceTruncated = true
+          break
+        }
+        loadedBytes += bytes
+        documents.push({ path, text: target.text, revision: target.revision })
+      }
+      const result = searchDocuments(documents, query, { ...options, globs: [] })
+      return { ...result, truncated: result.truncated || sourceTruncated }
+    },
+    readMany: async (files: readonly ReadManyRequest[]) => {
+      if (files.length === 0) throw new Error('files is empty.')
+      if (files.length > AGENT_MAX_READ_MANY_PATHS) {
+        throw new Error(`read_many accepts at most ${AGENT_MAX_READ_MANY_PATHS} paths.`)
+      }
+      const seen = new Set<string>()
+      let responseBytes = 0
+      let truncated = false
+      const results = []
+      for (const request of files) {
+        if (seen.has(request.path)) {
+          results.push({ path: request.path, ok: false, error: 'The path appears more than once.' })
+          continue
+        }
+        seen.add(request.path)
+        if (truncated) {
+          results.push({ path: request.path, ok: false, error: 'The response byte limit was reached.' })
+          continue
+        }
+        try {
+          const target = await resolveTarget(request.path, false)
+          requireText(target.kind)
+          const range = lineRange(target.text, request.startLine, request.endLine)
+          const bytes = new TextEncoder().encode(range.text).byteLength
+          if (responseBytes + bytes > AGENT_MAX_READ_MANY_BYTES) {
+            truncated = true
+            results.push({ path: request.path, ok: false, error: 'The response byte limit was reached.' })
+            continue
+          }
+          responseBytes += bytes
+          results.push({
+            path: request.path,
+            ok: true,
+            text: range.text,
+            kind: target.kind,
+            revision: target.revision,
+            committed: target.committed !== null && !contentDiffers(target.text, target.committed, target.kind),
+            startLine: range.startLine,
+            endLine: range.endLine,
+            lineCount: range.lineCount,
+          })
+        } catch (error) {
+          results.push({ path: request.path, ok: false, error: errorMessage(error) })
+        }
+      }
+      return { files: results, truncated }
+    },
+    applyPatch: async (workspace, patchText, expected: readonly RevisionExpectation[]) => {
+      if (workspace !== workspaceSelectionRef.current) {
+        throw new Error('Workspace changed since the manifest was read. Connect again before patching.')
+      }
+      const patches = parseUnifiedDiff(patchText)
+      const paths = patches.map(({ path }) => path)
+      const expectedByPath = new Map(expected.map((item) => [item.path, item.revision]))
+      if (expectedByPath.size !== expected.length || expected.length !== paths.length ||
+          paths.some((path) => !expectedByPath.has(path)) || expected.some((item) => !paths.includes(item.path))) {
+        throw new Error('expected must name every patched path exactly once, and no other path.')
+      }
+      const identities = paths.map((path) => identityFor(path))
+      return workspaceStore.commandMany(identities, async () => {
+        if (workspace !== workspaceSelectionRef.current) {
+          throw new Error('Workspace changed during the patch. Retry against a fresh manifest.')
+        }
+        const targets: DocTarget[] = []
+        const conflicts: PatchConflict[] = []
+        for (const filePatch of patches) {
+          const target = await resolveTarget(filePatch.path, true)
+          assertPatchableKind(filePatch.path, target.kind)
+          const actual = target.created ? 'absent' : target.revision
+          const wanted = expectedByPath.get(filePatch.path)!
+          if (wanted !== actual || (filePatch.oldPath === null) !== target.created) {
+            conflicts.push({
+              path: filePatch.path,
+              expected: wanted,
+              revision: actual,
+              excerpt: conflictExcerpt(target.text),
+              message: actual === 'absent' ? 'The file is absent; rebase the patch as a creation.' :
+                'The working revision changed; read the current content and rebase the patch.',
+            })
+          }
+          targets.push(filePatch.oldPath === null && target.created ? { ...target, text: '' } : target)
+        }
+        if (conflicts.length > 0) return { applied: false, files: [], conflicts }
+
+        const changed: PreparedPatchChange[] = []
+        for (let index = 0; index < patches.length; index += 1) {
+          const target = targets[index]!
+          try {
+            const applied = applyFilePatch(target.text, patches[index]!)
+            const diagnostics = await collectDiagnostics(applied.text, target.kind, appliedConfig)
+            changed.push({ target, ...applied, diagnostics })
+          } catch (error) {
+            const line = error instanceof PatchHunkError ? error.line : 1
+            return {
+              applied: false,
+              files: [],
+              conflicts: [{
+                path: target.path!,
+                expected: expectedByPath.get(target.path!)!,
+                revision: target.created ? 'absent' : target.revision,
+                excerpt: error instanceof PatchHunkError ? error.excerpt : conflictExcerpt(target.text, line),
+                message: errorMessage(error),
+              }],
+            }
+          }
+        }
+
+        const revisionConflicts = (): PatchConflict[] => changed.flatMap(({ target }) => {
+          const current = workspaceStore.get(documentKey(target.identity))
+          const actual = current?.revision ?? 0
+          if (actual === target.revision) return []
+          return [{
+            path: target.path!,
+            expected: expectedByPath.get(target.path!)!,
+            revision: current ? current.revision : 'absent',
+            excerpt: conflictExcerpt(current?.content ?? ''),
+            message: 'The working copy changed while the patch was being checked. Read it again and rebase.',
+          }]
+        })
+        const beforeWriteConflicts = revisionConflicts()
+        if (beforeWriteConflicts.length > 0) {
+          return { applied: false, files: [], conflicts: beforeWriteConflicts }
+        }
+
+        const persisted = await writeDraftBatchResult(changed.map(({ target, text: next }) => {
+          const dirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
+          return {
+            id: docIdForPath(target.path!),
+            content: dirty ? next : null,
+            baseRevision: draftBasesRef.current.get(docIdForPath(target.path!)) ?? target.draftBase,
+          }
+        }))
+        if (!persisted.ok) throw new Error(`Could not persist the atomic patch: browser storage is ${persisted.reason}.`)
+
+        const afterWriteConflicts = revisionConflicts()
+        if (afterWriteConflicts.length > 0) {
+          const restored = await writeDraftBatchResult(changed.map(({ target }) => {
+            const current = workspaceStore.get(documentKey(target.identity))
+            if (!current && target.created) return { id: docIdForPath(target.path!), content: null }
+            const currentText = current?.content ?? target.text
+            const dirty = target.committed === null || contentDiffers(currentText, target.committed, target.kind)
+            return {
+              id: docIdForPath(target.path!),
+              content: dirty ? currentText : null,
+              baseRevision: draftBasesRef.current.get(docIdForPath(target.path!)) ?? target.draftBase,
+            }
+          }))
+          if (!restored.ok) throw new Error(
+            `The document changed during patch persistence and its draft could not be restored: ${restored.reason}.`,
+          )
+          return { applied: false, files: [], conflicts: afterWriteConflicts }
+        }
+
+        const created: string[] = []
+        const dirty: string[] = []
+        const clean: string[] = []
+        for (const change of changed) {
+          const { target, text: next } = change
+          const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
+          if (target.created) created.push(target.path!)
+          if (isDirty) dirty.push(target.path!)
+          else clean.push(target.path!)
+          if (target.open && workspaceStore.isActive(documentKey(target.identity))) {
+            const handle = editorRef.current
+            if (handle) handle.replaceText(next)
+            else setText(next)
+          } else workspaceStore.editIfRevision(target.identity, target.revision, next)
+        }
+        if (created.length > 0) setCreatedPaths((previous) => {
+          const next = new Set(previous)
+          for (const path of created) next.add(path)
+          return next
+        })
+        setDirtyPaths((previous) => {
+          const next = new Set(previous)
+          for (const path of dirty) next.add(path)
+          for (const path of clean) next.delete(path)
+          return next
+        })
+        return {
+          applied: true,
+          files: changed.map(({ target, added, deleted, diagnostics }) => ({
+            path: target.path!,
+            revision: workspaceStore.get(documentKey(target.identity))!.revision,
+            created: target.created,
+            added,
+            deleted,
+            diagnostics,
+          })),
+          conflicts: [],
+        }
+      })
+    },
     read: async (path) => {
       const target = await resolveTarget(path, false)
       return {
         path: target.path,
         text: target.text,
+        kind: target.kind,
+        revision: target.revision,
         committed: target.path !== null && target.committed !== null &&
           !contentDiffers(target.text, target.committed, target.kind),
       }
@@ -431,7 +732,7 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
           ? handle.applyEdits(edits)
           : applyResolved(target.text, resolveEdits(target.text, edits))
         if (!handle) setText(next)
-        return { path: target.path, created: false, text: next }
+        return { path: target.path, created: target.created, text: next }
       }
       const next = applyResolved(target.text, resolveEdits(target.text, edits))
       await writeBack(target, next)
@@ -441,7 +742,8 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
       requirePath(path, 'ideate_write')
       const target = await resolveTarget(path, true)
       requireText(target.kind)
-      await writeBack(target, next)
+      if (target.open && editorRef.current) editorRef.current.replaceText(next)
+      else await writeBack(target, next)
       return { path: target.path, created: target.created }
     }),
     openFile: async (path) => {
@@ -502,7 +804,14 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
       const written = await createDraftResult(docIdForPath(path), drawn.text)
       if (!written.ok) throw new Error(`Could not create ${path}: browser storage is ${written.reason}.`)
       activateCreated(path, drawn.text)
-      return { path, created: true, applied: ops.length, elementCount: drawn.elementCount, warnings: drawn.warnings }
+      return {
+        path,
+        created: true,
+        applied: ops.length,
+        revision: workspaceStore.get(documentKey(identity))?.revision ?? expectedRevision + 1,
+        elementCount: drawn.elementCount,
+        warnings: drawn.warnings,
+      }
     }),
     check: async ({ text: override, path }) => {
       if (override !== undefined) {
@@ -521,18 +830,26 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
     sceneGet: async (full, path) => {
       const target = await resolveTarget(path, false)
       requireScene(target.kind)
-      return { path: target.path, ...summarizeScene(target.text, full) }
+      return { path: target.path, revision: target.revision, ...summarizeScene(target.text, full) }
     },
-    sceneEdit: async (ops, path) => commandFor(path, async () => {
+    sceneEdit: async (ops, path, expectedRevision) => commandFor(path, async () => {
       requirePath(path, 'ideate_scene_edit')
       const target = await resolveTarget(path, true)
       requireScene(target.kind)
+      const actualRevision = target.created ? 'absent' : target.revision
+      if (expectedRevision !== undefined && expectedRevision !== actualRevision) {
+        throw new Error(
+          `Scene revision conflict for ${target.path ?? 'the untitled canvas'}: ` +
+          `expected ${expectedRevision}, current ${actualRevision}. Read it again and retry.`,
+        )
+      }
       const result = await applySceneOps(target.text, ops)
       await writeBack(target, result.text)
       return {
         path: target.path,
         created: target.created,
         applied: ops.length,
+        revision: workspaceStore.get(documentKey(target.identity))!.revision,
         elementCount: result.elementCount,
         warnings: result.warnings,
       }

@@ -217,6 +217,48 @@ Round-tripping is why optionality is load-bearing on the Go side: `read` with no
 `path` and `scene_get` with `full: false` have their own fixtures precisely because a
 bare `string`/`bool` with `omitempty` round-trips both of them wrong.
 
+### The workspace loop is manifest → search/read → atomic patch
+
+Protocol 7 adds a workspace-oriented layer without removing the original tools.
+`ideate_connect` deliberately attaches first, then asks the tab for a manifest. The
+manifest carries an opaque full-workspace identity, the active path, and each known
+file's kind, byte size, dirty/new state, and monotonic working revision. It contains
+no document bodies. Unattached `ideate_status` remains metadata-only.
+
+`ideate_search` is literal and searches effective text working copies, including
+background drafts; scenes remain behind the scene tools. Optional globs use only
+`*`, `**`, and `?`. `ideate_read_many` returns requested text files or line ranges in
+request order and reports failures per path. Neither operation may substitute saved
+content for a draft. Both return the revisions an agent must carry into a mutation.
+
+`ideate_apply_patch` accepts a unified diff, the manifest's workspace identity, and
+exactly one expected revision for every touched path (`"absent"` for a new file).
+It rejects deletes, renames, canvas JSON, duplicate paths, stale revisions, and hunks
+whose context does not match. All paths are reserved in stable identity order; all
+hunks and diagnostics are computed before mutation; draft puts/deletes share one
+IndexedDB transaction; only then do the `WorkspaceStore` records advance. An open
+text document receives one CodeMirror transaction and background files do not steal
+focus. A conflict is a normal structured result with the current revision and a
+bounded excerpt, so the caller can rebase without a guessing loop. No patch path can
+commit, rename, or delete saved files.
+
+`ideate_scene_get` reports a scene revision and `ideate_scene_edit` accepts an
+expected revision (or `"absent"` when creating). The check happens before the async
+font/geometry work and `writeBack` checks it again before settlement, so a human edit
+during computation is never overwritten.
+
+Limits exist on both sides of the relay: 500 manifest entries; 2 MiB searched and
+200 matches with at most five context lines; 32 patterns; 32 grouped reads and a
+1 MiB read body; and 32 patched paths with a 1 MiB diff. Search output has its own
+512 KiB ceiling. The enclosing WebSocket frame remains capped at 8 MiB.
+
+Every command response carries browser execution time. The relay emits one
+structured log record per forwarded command with command name, request/response
+bytes, browser time, relay time, and end-to-end time. It logs no content, path,
+pairing code, or other credential; the only session identifier remains the permitted
+eight-character hash prefix. These measurements compare real agent task traces
+before any relay mirror or transport redesign is considered.
+
 ### Every document tool takes a path, and the mutating ones require one
 
 Each document tool accepts a `path`, so an agent can work on background files
@@ -291,11 +333,10 @@ Two safeguards are required:
   next render — reading state back here reported on the document as it was *before*
   the edit, so breaking a diagram looked clean and fixing it looked broken.
 
-**Known limitation:** `ideate_write` immediately followed by `ideate_edit` can race.
-`writeText` goes through React state while `applyEdits` resolves anchors against the
-*live* CodeMirror document, so the edit can look for text the editor has not received
-yet and fail with "oldText not found". The fix is to route
-`writeText` through the editor handle when one is mounted.
+Whole-document writes now route through the editor handle when it is mounted. The
+CodeMirror transaction and its synchronous `WorkspaceStore` update complete before
+the tool acknowledges, so an immediately following `ideate_edit` observes the text
+that `ideate_write` produced.
 
 ### Scene edits go through `setText`, and route their own arrows
 
@@ -649,6 +690,24 @@ which typechecking can see:
 - **edits sent faster than React commits** — chain each edit's anchor on what the
   previous one produced, so a dropped edit makes the *next* one fail loudly rather
   than quietly ending up short
+- **`ideate_connect` manifest** — it names the full workspace, active path, kinds,
+  sizes, dirty/new state, and revisions without including any file body. Compare a
+  representative multi-file task's command count and the relay timing records with
+  the legacy list/read/edit loop
+- **`ideate_search` over a background draft and an empty new file** — the draft's
+  match and revision are returned, the empty file stays in the manifest, globs and
+  case sensitivity work, and byte/result truncation is stated rather than silent
+- **`ideate_read_many` with ranges, a missing path, and a canvas** — order is
+  preserved, the text ranges succeed, and both failures stay attached to their own
+  requested path without committed content being substituted
+- **a two-file `ideate_apply_patch`** — both dirty dots appear without navigation,
+  the open file changes in one undo step, diagnostics accompany each result, and a
+  bad second hunk changes neither file. Repeat while typing in the open file during
+  diagnostics/storage: the tool returns the newer revision and excerpt, preserves
+  the human edit durably, and applies none of the patch
+- **a stale `ideate_scene_edit` expected revision** — refused before geometry is
+  applied; with the current revision it returns the next revision and the usual
+  warnings
 - **Safari**, which is the reason for the break
 - a `.excalidraw` scene through the scene tools, and a markdown document with a
   broken ```mermaid fence

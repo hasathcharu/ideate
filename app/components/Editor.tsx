@@ -866,6 +866,8 @@ const EMITTED_HISTORY = 8
 export interface EditorHandle {
   /** Apply anchored replacements as one transaction, scrolling the last one into view. */
   applyEdits: (edits: readonly TextEdit[]) => string
+  /** Replace the whole document as one deliberate, undoable transaction. */
+  replaceText: (text: string) => string
   /** 1-based cursor position, for `ideate_status`. */
   cursor: () => { line: number; column: number } | null
   /** Put the cursor on a 1-based line and scroll it into view — the editor half
@@ -1241,6 +1243,15 @@ export default function Editor({
           changes: set,
           selection: { anchor, head: anchor + last.insert.length },
           scrollIntoView: true,
+        })
+        return view.state.doc.toString()
+      },
+      replaceText: (text) => {
+        const view = viewRef.current
+        if (!view) throw new Error('The text editor is not mounted.')
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: text },
+          selection: { anchor: Math.min(text.length, view.state.selection.main.head) },
         })
         return view.state.doc.toString()
       },

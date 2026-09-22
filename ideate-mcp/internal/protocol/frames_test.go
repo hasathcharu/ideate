@@ -77,6 +77,10 @@ func TestServerFramesRoundTrip(t *testing.T) {
 	for _, name := range []string{
 		"server-req-status",
 		"server-req-list-files",
+		"server-req-manifest",
+		"server-req-search",
+		"server-req-read-many",
+		"server-req-apply-patch",
 		"server-req-read-path",
 		"server-req-edit",
 		"server-req-write",
@@ -87,6 +91,7 @@ func TestServerFramesRoundTrip(t *testing.T) {
 		"server-req-check",
 		"server-req-scene-edit",
 		"server-req-scene-edit-layout",
+		"server-req-scene-edit-revision",
 		"server-req-scene-render",
 		"server-req-scene-render-ids",
 	} {

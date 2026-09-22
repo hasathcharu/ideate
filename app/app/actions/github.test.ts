@@ -48,7 +48,9 @@ describe('file history pagination', () => {
 
   it('filters a rename-away record once before paginating', async () => {
     const all = Array.from({ length: 31 }, (_, index) => commit(index + 1))
-    api.repos.listCommits.mockResolvedValue({ data: all })
+    // Octokit returns a fresh response array; do the same so the implementation's
+    // filtering cannot mutate this test's expected source list.
+    api.repos.listCommits.mockResolvedValue({ data: [...all] })
     api.repos.getCommit.mockImplementation(async ({ ref }: { ref: string }) => ({ data: {
       files: ref === 'sha-1'
         ? [{ status: 'renamed', previous_filename: 'a.mmd', filename: 'b.mmd' }]
