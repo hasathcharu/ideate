@@ -135,6 +135,12 @@ relative links and images the way GitHub does:
   scroll event.
 - A **relative image** is rewritten to raw.githubusercontent.com, since a
   repo-relative `src` would otherwise resolve against the app's own origin.
+  Supported repository image assets (PNG, JPG, GIF, and SVG) also appear in the
+  sidebar, so the same relative target can be inspected directly in the app.
+  Repository images are fetched through the authenticated Server Action and
+  substituted as inert data URLs, so private-repository images render too;
+  external image URLs stay unchanged. The authenticated render refuses images
+  above 30 MB.
 - `#anchor` links scroll the reading pane, using the heading slugs.
 
 ### Full-window markdown gets an outline

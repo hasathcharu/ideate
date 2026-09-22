@@ -34,6 +34,8 @@ export interface MarkdownRenderOptions {
   basePath?: string | null
   /** The repository the document lives in, for blob/raw URLs. */
   repo?: MarkdownRepoLocator | null
+  /** Resolve authenticated repository images. External URLs never pass through this hook. */
+  resolveImage?: (path: string) => Promise<string | null>
 }
 
 /**
@@ -427,7 +429,10 @@ md.core.ruler.after('inline', 'md-repo-links', (state) => {
         const src = attrText(child, 'src')
         if (!src || isExternalHref(src) || src.startsWith('#') || !repo) continue
         const path = resolveRepoPath(basePath, src)
-        if (path) child.attrSet('src', rawUrl(repo, path))
+        if (path) {
+          child.attrSet('src', rawUrl(repo, path))
+          child.attrSet('data-md-repo-image', path)
+        }
         continue
       }
       if (child.type !== 'link_open') continue
@@ -581,10 +586,24 @@ export async function renderMarkdown(
   text: string,
   options: MarkdownRenderOptions = {},
 ): Promise<MarkdownRender> {
-  const { config = null, basePath = null, repo = null } = options
+  const { config = null, basePath = null, repo = null, resolveImage } = options
   const env: RenderEnv = { basePath, repo }
   let html = sanitizeHtml(md.render(text, env))
   const headings = env.headings ?? []
+
+  if (resolveImage && html) {
+    const container = document.createElement('div')
+    container.innerHTML = html
+    const images = Array.from(container.querySelectorAll<HTMLImageElement>('img[data-md-repo-image]'))
+    await Promise.all(images.map(async (image) => {
+      const path = image.dataset.mdRepoImage
+      if (!path) return
+      const resolved = await resolveImage(path)
+      if (resolved) image.src = resolved
+      else image.src = 'data:,'
+    }))
+    html = container.innerHTML
+  }
 
   /* Code fences: highlight in parallel, then substitute. */
   const codeFences = env.code ?? []

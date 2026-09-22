@@ -43,9 +43,11 @@ It feeds three surfaces:
   whole pane row) and by version history's Preview/Diff toggle, which compares the
   selected version either with the one before it or with the working copy.
 
-Scenes are excluded everywhere: a `.excalidraw` file is JSON whose bytes churn
+Scenes and raster images are excluded everywhere: a `.excalidraw` file is JSON whose bytes churn
 without the drawing changing (rule 9), so a line diff of one shows changes that
-aren't there.
+aren't there, while PNG/JPG/GIF revisions are binary and have no meaningful line
+representation. Raster history is preview-only and reads revisions as Blobs;
+SVG remains text-backed and supports preview and diff.
 
 In version history, "previous version" is the next commit in the **loaded** page.
 "No older commit here" is ambiguous — first commit of the path, or next page not

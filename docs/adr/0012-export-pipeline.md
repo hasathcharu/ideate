@@ -9,15 +9,28 @@
 ## Export
 
 mermaid bakes literal colors and a self-contained `<style>` block into the SVG at
-render time, so the markup already stands alone — `lib/export.ts` only normalizes
-dimensions (mermaid emits `width="100%"` + a viewBox), adds XML namespaces, and
-optionally paints a background (white/black/the active theme's own background
-color). Both exporters (SVG / PNG) share the single `resolveStandaloneSvg` step;
+render time. `lib/export.ts` normalizes dimensions (mermaid emits `width="100%"`
++ a viewBox), expands the viewBox to include painted content that Mermaid placed
+outside it, adds XML namespaces, and optionally paints a background
+(white/black/the active theme's own background color). Both exporters (SVG / PNG)
+share the single `resolveStandaloneSvg` step;
 PNG rasterizes it via `Image` → `<canvas>`. Exporting the mermaid source
 (`exportSource`/`copySource`) bakes the global YAML config in as a real
 frontmatter block via `buildExportSource`, so the `.mmd` file stands alone too.
 The render wrapper serializes configuration, font readiness, rendering, and cleanup;
 an export therefore cannot inherit configuration from an overlapping preview.
+
+SVG and PNG rows may also save the generated artifact directly to the selected
+repository branch. The path prompt defaults beside the source document and the
+write remains an ordinary non-force GitHub commit. SVG uses the text path; PNG crosses
+the Server Action boundary as a Blob and is base64-encoded only on the server, so
+React does not serialize a large base64 value and binary bytes are never interpreted
+as UTF-8. This is separate from opening an image and therefore is not subject to
+the viewer's 30 MB limit.
+
+When the chosen export path already exists, the app asks for explicit replacement
+confirmation. Confirmation refetches the destination's latest blob SHA and commits
+on top of it; it never force-pushes or silently overwrites an unsaved local draft.
 
 ### Markdown exports the source, not a rendering
 
@@ -35,15 +48,11 @@ a file that no longer matches what is in their repo.
 
 PNG density comes from `resolvePngScale(spec, width, height)` (`lib/export.ts`),
 shared by both exporters so the two kinds never differ in what a given setting
-means. `rasterScale` is still there, but as the **`auto`** branch rather than the
-whole answer: it is size-aware on purpose, because a flat device-pixel multiplier
-makes output density proportional to the *diagram*, so a small diagram lands in a
-small image — which is what reads as a low-quality export. Auto scales toward a
-2400px long edge with a 3× floor for big diagrams, and stays the default.
+means. The menu offers 1×, 2×, 3×, and Custom, with 2× as the default. The retained
+`rasterScale` helper is only a defensive fallback for an invalid programmatic
+request; it is not a user-visible mode.
 
-The other modes exist because "as good as we can make it" is not what someone
-exporting for print or for a fixed slot needs. `AppConfig.pngScale` is a
-`PngScale` — `auto`, a flat `multiplier` (1×/2×/3×), a `dpi`, or an exact `width`
+`AppConfig.pngScale` is a `PngScale` — a flat `multiplier` (1×/2×/3×), a `dpi`, or an exact `width`
 or `height` in pixels — and **every one of them resolves to a multiplier at export
 time, never before**: a DPI, a target width and a target height are all ratios
 against a natural size that does not exist until the diagram has rendered. That is
@@ -55,7 +64,7 @@ fixes whichever one is not given, so a second field could only ever be ignored o
 be a contradiction — hence one axis chosen from a segmented control, with the
 other reported in the hint underneath.
 
-The hard 8192px-per-side cap (`MAX_RASTER_DIMENSION`) applies to **every** mode, `auto` included. Browsers
+The hard 8192px-per-side cap (`MAX_RASTER_DIMENSION`) applies to every mode. Browsers
 refuse to allocate a canvas past a few thousand pixels a side and fail outright
 rather than degrading, so an over-large request has to come back as a smaller
 image: the difference between typing 40000 and getting a big PNG, and typing it
@@ -64,6 +73,22 @@ and getting an error toast.
 The control lives **under the PNG row**, not beside the shared Background
 swatches. Scope is position: next to Background it read as another global setting
 and silently exempted the SVG row above it.
+
+### SVG theme and the optional frame
+
+Mermaid SVG has two theme modes. **Forced** preserves the configured palette.
+**Dynamic** embeds independently rendered default-light and dark variants and a
+small `prefers-color-scheme` media rule, so it remains self-contained while
+following the viewer. Known preset families use their exact light/dark counterpart
+(for example GitHub Light and GitHub Dark). A custom or unpaired palette falls
+back to Mermaid's default light/dark pair because arbitrary literal colors cannot
+be reliably converted. Excalidraw SVG exposes the same modes and embeds its native
+light/dark renderings, using the paired palette backgrounds when Theme is selected.
+
+Image exports can add a 24px padded frame with a 16px rounded background. The
+same choice reaches SVG, PNG, Mermaid, and Excalidraw paths. Without the option,
+Mermaid still expands its export bounds enough to cover overflowed labels; the
+frame is presentation, not a workaround for clipping.
 
 ### Scenes export through Excalidraw's own exporters
 

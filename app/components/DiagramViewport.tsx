@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useInnerHtml } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 
-/** A zoomable, pannable box around one rendered mermaid SVG. */
+/** A zoomable, pannable box around a rendered SVG or repository image. */
 
 interface View {
   scale: number
@@ -41,8 +41,11 @@ function clampScale(s: number): number {
 }
 
 export interface DiagramViewportProps {
-  /** Rendered mermaid SVG markup. */
-  svg: string
+  /** Rendered mermaid SVG markup. Omit when `imageSrc` is supplied. */
+  svg?: string
+  /** Inert image URL for raster files and repository SVGs. */
+  imageSrc?: string
+  imageAlt?: string
   /** Painted behind the diagram — also fills the screen when maximized. May be
    *  omitted (or `'transparent'`) for an inline figure that should show the
    *  document through it; maximizing then falls back to {@link OPAQUE_FALLBACK}. */
@@ -67,6 +70,8 @@ export interface DiagramViewportProps {
 
 export default function DiagramViewport({
   svg,
+  imageSrc,
+  imageAlt = '',
   background,
   variant = 'pane',
   className,
@@ -104,7 +109,7 @@ export default function DiagramViewport({
   // state so the host box is sized in React-controlled px — this must not depend on mutating the
   // mermaid <svg> node, whose attributes are wiped whenever React re-inserts the
   // dangerouslySetInnerHTML subtree.
-  const svgHtml = useInnerHtml(svg)
+  const svgHtml = useInnerHtml(svg ?? '')
   const naturalRef = useRef({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   // Once the user zooms/pans, stop auto-refitting on resize so we don't fight them.
@@ -154,6 +159,14 @@ export default function DiagramViewport({
     naturalRef.current = { w, h }
     setNatural({ w, h })
   }, [svg])
+
+  const measureImage = useCallback((image: HTMLImageElement) => {
+    const w = image.naturalWidth
+    const h = image.naturalHeight
+    if (!w || !h) return
+    naturalRef.current = { w, h }
+    setNatural({ w, h })
+  }, [])
 
   // Fit once the measured size has actually been committed to the DOM — an
   // embedded box takes its height from `natural`, so fitting inside the effect
@@ -266,6 +279,11 @@ export default function DiagramViewport({
       Math.max(EMBEDDED_MIN_HEIGHT, natural.h || EMBEDDED_MIN_HEIGHT),
     )
   }
+  const contentStyle: CSSProperties = {
+    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+    width: natural.w || undefined,
+    height: natural.h || undefined,
+  }
 
   return (
     <div
@@ -290,19 +308,25 @@ export default function DiagramViewport({
         onPointerCancel={endDrag}
         onDoubleClick={fit}
       >
-        <div
-          ref={svgHostRef}
-          className="preview-svg absolute top-0 left-0 origin-top-left"
-          style={{
-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-            // Explicit natural-size box so the SVG (forced to 100% in CSS)
-            // renders at full size regardless of mermaid's own width/max-width.
-            width: natural.w || undefined,
-            height: natural.h || undefined,
-          }}
-          // eslint-disable-next-line react/no-danger
-          dangerouslySetInnerHTML={svgHtml}
-        />
+        {imageSrc ? (
+          <div className="absolute top-0 left-0 origin-top-left" style={contentStyle}>
+            <img
+              src={imageSrc}
+              alt={imageAlt}
+              draggable={false}
+              onLoad={(event) => measureImage(event.currentTarget)}
+              className="block h-full w-full max-w-none select-none"
+            />
+          </div>
+        ) : (
+          <div
+            ref={svgHostRef}
+            className="preview-svg absolute top-0 left-0 origin-top-left"
+            style={contentStyle}
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={svgHtml}
+          />
+        )}
       </div>
 
       {/* An embedded figure keeps its controls out of the way until the diagram is

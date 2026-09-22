@@ -1,11 +1,11 @@
 'use client'
 
-import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ImageIcon, Pencil, Plus, Trash2 } from 'lucide-react'
 import NewFileMenu from './NewFileMenu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { DIAGRAM_EXTENSIONS, fileKind, type FileKind } from '@/lib/tree'
+import { DIAGRAM_EXTENSIONS, fileKind, isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
 
 /** Shared styling for the hover-revealed row actions. Extracted so the "new file"
@@ -72,6 +72,7 @@ export interface FileTreeProps {
   onDelete: (node: TreeNode) => void
   /** Create a new file of `kind` inside this directory (path prefilled). */
   onNewFile: (dirPath: string, kind: FileKind) => void
+  onUploadImage: (dirPath: string) => void
   onRename: (node: TreeNode) => void
 }
 
@@ -87,6 +88,7 @@ export default function FileTree({
   onDelete,
   onNewFile,
   onRename,
+  onUploadImage,
 }: FileTreeProps) {
   if (nodes.length === 0 && searchQuery) {
     return (
@@ -135,6 +137,7 @@ export default function FileTree({
           onDelete={onDelete}
           onNewFile={onNewFile}
           onRename={onRename}
+          onUploadImage={onUploadImage}
         />
       ))}
     </ul>
@@ -152,6 +155,7 @@ interface ItemProps {
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string, kind: FileKind) => void
   onRename: (node: TreeNode) => void
+  onUploadImage: (dirPath: string) => void
 }
 
 function TreeItem(props: ItemProps) {
@@ -166,6 +170,7 @@ function TreeItem(props: ItemProps) {
     onDelete,
     onNewFile,
     onRename,
+    onUploadImage,
   } = props
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
@@ -191,7 +196,7 @@ function TreeItem(props: ItemProps) {
           </button>
           <div className="relative flex shrink-0 items-center">
             {dirty ? <UnsavedDot /> : null}
-            <NewFileMenu onSelect={(kind) => onNewFile(node.path, kind)}>
+            <NewFileMenu onSelect={(kind) => onNewFile(node.path, kind)} onUploadImage={() => onUploadImage(node.path)}>
               <button
                 type="button"
                 className={ICON_ACTION_CLASS}
@@ -238,7 +243,9 @@ function TreeItem(props: ItemProps) {
           title={node.path}
           onClick={() => onOpenFile(node.path)}
         >
-          <FileKindIcon kind={fileKind(node.path)} />
+          {isRasterImageFile(node.path) || isSvgFile(node.path)
+            ? <ImageIcon className="size-3.5 shrink-0" />
+            : <FileKindIcon kind={fileKind(node.path)} />}
           <span className="truncate">{node.name}</span>
         </button>
         <div className="relative flex shrink-0 items-center">

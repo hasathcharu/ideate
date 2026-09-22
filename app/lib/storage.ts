@@ -66,7 +66,9 @@ export type StorageWrite = { ok: true } | { ok: false; reason: WriteReason }
 const DEFAULT_CONFIG: AppConfig = {
   repo: null,
   exportBackground: 'white',
-  pngScale: { mode: 'auto' },
+  pngScale: { mode: 'multiplier', value: 2 },
+  svgTheme: 'forced',
+  exportFrame: false,
   splitRatio: 0.5,
   sidebarWidth: 256,
   wrapLines: false,
@@ -100,6 +102,10 @@ export function loadConfig(): AppConfig {
     // than showing up as a bad value anywhere — so it is validated here, not
     // trusted at the canvas. Same defensive shape as the guards above.
     if (!isPngScale(merged.pngScale)) merged.pngScale = { ...DEFAULT_CONFIG.pngScale }
+    if (merged.svgTheme !== 'forced' && merged.svgTheme !== 'dynamic') {
+      merged.svgTheme = DEFAULT_CONFIG.svgTheme
+    }
+    if (typeof merged.exportFrame !== 'boolean') merged.exportFrame = DEFAULT_CONFIG.exportFrame
     // An MCP origin that no longer passes the TLS rule is dropped back to the default rather than
     // kept.
     if (typeof merged.mcpOrigin === 'string' && validateMcpOrigin(merged.mcpOrigin)) {
@@ -115,12 +121,10 @@ export function loadConfig(): AppConfig {
   }
 }
 
-/** Whether a stored value is a usable {@link PngScale}. A finite, positive
- *  number is the whole of it for every mode but `auto`, which carries none. */
+/** Whether a stored value is a usable {@link PngScale}. */
 function isPngScale(value: unknown): value is PngScale {
   if (typeof value !== 'object' || value === null) return false
   const spec = value as { mode?: unknown; value?: unknown }
-  if (spec.mode === 'auto') return true
   if (
     spec.mode !== 'multiplier' &&
     spec.mode !== 'dpi' &&

@@ -75,3 +75,12 @@ it in a ```mermaid fence or use `.mmd`.
 All three are plain text on disk, which is why they share *every* GitHub path
 (read/commit/rename/delete/history/conflicts) with no branching. Only the editing
 surface and the export pipeline differ.
+
+PNG, JPG, GIF, and SVG repository assets are also surfaced in the file tree so
+documents can keep their referenced images alongside their source. They are not
+additional document kinds: raster assets are read-only image previews, while SVG
+is text-backed and uses the editor/preview split. Both image previews reuse the
+diagram viewport's zoom, pan, fit, and full-window controls. Opening an image is refused
+above 30 MB; generating and committing an export has no such render-time limit.
+The new-file menu also accepts these four formats through a drop zone. Uploads
+preserve the original bytes and prompt for a repository-relative destination.

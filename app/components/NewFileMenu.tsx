@@ -7,11 +7,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
+import { ImageUp } from 'lucide-react'
 import type { FileKind } from '@/lib/tree'
 
 export interface NewFileMenuProps {
   /** Which kind of file to start. The caller turns this into a path prompt. */
   onSelect: (kind: FileKind) => void
+  onUploadImage: () => void
   /** The trigger element — passed through `asChild`, so each call site keeps its
    *  own styling (the sidebar header's button looks nothing like the file tree's
    *  hover-revealed row actions). Must not set its own `onClick`; Radix owns it. */
@@ -22,7 +24,7 @@ export interface NewFileMenuProps {
  * The "new file" kind picker, shared by the sidebar's root **+** and every folder's **+** so the
  * two can't drift apart.
  */
-export default function NewFileMenu({ onSelect, children }: NewFileMenuProps) {
+export default function NewFileMenu({ onSelect, onUploadImage, children }: NewFileMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
@@ -41,6 +43,9 @@ export default function NewFileMenu({ onSelect, children }: NewFileMenuProps) {
         </DropdownMenuItem>
         <DropdownMenuItem className="whitespace-nowrap" onSelect={() => onSelect('excalidraw')}>
           <ExcalidrawIcon /> Excalidraw canvas
+        </DropdownMenuItem>
+        <DropdownMenuItem className="whitespace-nowrap" onSelect={onUploadImage}>
+          <ImageUp /> Upload image
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

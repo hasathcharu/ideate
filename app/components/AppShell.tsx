@@ -56,6 +56,8 @@ import {
   fileExtension,
   fileKind,
   isDiagramFile,
+  isRasterImageFile,
+  isSvgFile,
   DIAGRAM_EXTENSIONS_LABEL,
   EXCALIDRAW_EXTENSION,
   type FileKind,
@@ -67,6 +69,9 @@ import {
   listTree,
   readFile,
   commitFile,
+  commitBinaryFile,
+  replaceExportFile,
+  readBinaryFile,
   deletePaths,
   renameFile,
   createBranch,
@@ -216,13 +221,21 @@ type PromptSpec = Pick<
   | 'onSubmit'
 >
 
+interface PendingExport {
+  format: 'SVG' | 'PNG'
+  path: string
+  create: () => Promise<{ content: string | Blob; encoding: 'utf8' | 'binary' }>
+}
+
 export default function AppShell({ user, mode }: AppShellProps) {
   const githubEnabled = mode === 'github' && !!user
 
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
     exportBackground: 'white',
-    pngScale: { mode: 'auto' },
+    pngScale: { mode: 'multiplier', value: 2 },
+    svgTheme: 'forced',
+    exportFrame: false,
     splitRatio: 0.5,
     sidebarWidth: 256,
     wrapLines: false,
@@ -344,6 +357,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [branchBusy, setBranchBusy] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
+  const [imageUploadOpen, setImageUploadOpen] = useState(false)
+  const [imageUploadDirectory, setImageUploadDirectory] = useState('')
+  const [imageUploadBusy, setImageUploadBusy] = useState(false)
+  const [pendingExportReplace, setPendingExportReplace] = useState<PendingExport | null>(null)
+  const [replaceExportBusy, setReplaceExportBusy] = useState(false)
   const openPrompt = useCallback((spec: PromptSpec) => {
     setPrompt(spec)
     setPromptOpen(true)
@@ -392,6 +410,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Which editor the current document gets. For a repo file the extension decides; with nothing
   // open (local mode, or before picking a file) it's the user's scratch choice.
   const kind: FileKind = openPath ? fileKind(openPath) : config.scratchKind
+  const assetKind = openPath
+    ? isRasterImageFile(openPath) ? 'raster' as const : isSvgFile(openPath) ? 'svg' as const : null
+    : null
 
   const dirty = needsDraft(contentDiffers(text, baseline, kind), openPath !== null && loadedSha === null)
   // Each scratch kind gets its own draft slot, so toggling between diagram,
@@ -820,7 +841,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         }
         return { ok: true, content: file.value.content, sha: LOCAL_SAVED }
       }
-      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      const res = isRasterImageFile(path)
+        ? await readBinaryFile(repo.owner, repo.name, path, repo.branch)
+        : await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
         return {
           ok: false,
@@ -1789,7 +1812,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
   const canSave =
-    hasWorkspace && dirty && ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving
+    assetKind !== 'raster' && hasWorkspace && dirty &&
+    ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving
   /**
    * Whether the save control splits. Not simply "more than one file is dirty": the condition is
    * that there is unsaved work the primary button would *not* reach.
@@ -1799,7 +1823,117 @@ export default function AppShell({ user, mode }: AppShellProps) {
     (saveAllPaths.length > 1 || (saveAllPaths.length === 1 && saveAllPaths[0] !== openPath))
   // A canvas has no text to diff, and a file with nothing saved behind it has
   // nothing to diff against.
-  const canDiff = kind !== 'excalidraw' && loadedSha !== null
+  const canDiff = assetKind !== 'raster' && kind !== 'excalidraw' && loadedSha !== null
+
+  const writeExport = useCallback(async (pending: PendingExport, replace: boolean) => {
+    if (!repo) return
+    setSaving(true)
+    if (replace) setReplaceExportBusy(true)
+    try {
+      const generated = await pending.create()
+      const result = replace
+        ? await replaceExportFile(repo.owner, repo.name, pending.path, generated.content, repo.branch)
+        : generated.encoding === 'binary'
+          ? await commitBinaryFile(repo.owner, repo.name, pending.path, generated.content as Blob, repo.branch)
+          : await commitFile(repo.owner, repo.name, pending.path, generated.content as string, repo.branch)
+      if (!result.ok) {
+        if (!handleExpiredSession(result.error)) toast.error(result.error.message)
+        return
+      }
+      setTree((prev) => prev ? treeWithPath(prev, pending.path) : prev)
+      setPendingExportReplace(null)
+      toast.success(`${replace ? 'Replaced' : 'Committed'} ${pending.path}`)
+      void refreshTree(repo)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Could not generate ${pending.format}.`)
+    } finally {
+      setSaving(false)
+      setReplaceExportBusy(false)
+    }
+  }, [repo, refreshTree])
+
+  const saveExportToRepository = useCallback((
+    format: 'SVG' | 'PNG',
+    extension: '.svg' | '.png',
+    create: () => Promise<{ content: string | Blob; encoding: 'utf8' | 'binary' }>,
+  ) => {
+    if (!repo) return
+    const stem = openPath
+      ? openPath.slice(0, openPath.length - fileExtension(openPath).length)
+      : 'diagram'
+    openPrompt({
+      title: `Save ${format} to repository`,
+      description: `Choose a path on ${repo.branch}.`,
+      label: 'File path',
+      defaultValue: `${stem}${extension}`,
+      submitLabel: 'Generate and commit',
+      validate: (value) => {
+        if (!value || value.startsWith('/') || value.includes('..')) return 'Use a repo-relative path.'
+        return value.toLowerCase().endsWith(extension) ? null : `Use the ${extension} extension.`
+      },
+      onSubmit: async (path) => {
+        if (pendingPaths.has(path)) {
+          toast.error(`${path} has an unsaved draft. Save or rename it first.`)
+          return
+        }
+        setPromptOpen(false)
+        const pending = { format, path, create }
+        if (savedPaths?.has(path)) {
+          setPendingExportReplace(pending)
+          return
+        }
+        await writeExport(pending, false)
+      },
+    })
+  }, [repo, openPath, openPrompt, savedPaths, pendingPaths, writeExport])
+
+  const requestImageUpload = useCallback((directory = '') => {
+    setImageUploadDirectory(directory)
+    setImageUploadOpen(true)
+  }, [])
+
+  const uploadImage = useCallback(async (file: File, path: string) => {
+    if (savedPaths?.has(path) || pendingPaths.has(path) ||
+        (localMode && (await readLocalFileResult(path)).status !== 'missing')) {
+      toast.error(`${path} already exists.`)
+      return
+    }
+    setImageUploadBusy(true)
+    try {
+      const svg = isSvgFile(path)
+      const content = svg ? await file.text() : null
+      if (repo) {
+        const result = svg
+          ? await commitFile(repo.owner, repo.name, path, content ?? '', repo.branch)
+          : await commitBinaryFile(repo.owner, repo.name, path, file, repo.branch)
+        if (!result.ok) {
+          if (!handleExpiredSession(result.error)) toast.error(result.error.message)
+          return
+        }
+        setTree((prev) => prev ? treeWithPath(prev, path) : prev)
+        void refreshTree(repo)
+      } else {
+        const localContent = content ?? await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onerror = () => reject(new Error('Could not read the selected image.'))
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+          reader.readAsDataURL(file)
+        })
+        const result = await saveLocalFileAndClearDraft(path, localContent, docIdForPath(path))
+        if (!result.ok) {
+          toast.error(`Could not upload ${path} — browser storage is ${result.reason}.`)
+          return
+        }
+        void refreshLocalFiles()
+      }
+      setImageUploadOpen(false)
+      toast.success(`Uploaded ${path}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not upload the image.')
+    } finally {
+      setImageUploadBusy(false)
+    }
+  }, [savedPaths, pendingPaths, localMode, repo, refreshTree, refreshLocalFiles, docIdForPath])
   const showSidebar = hasWorkspace && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
@@ -1839,6 +1973,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
           appliedConfig={appliedConfig}
           kind={kind}
           user={user}
+          onSaveExport={repo && !assetKind ? saveExportToRepository : undefined}
+          showExport={!assetKind}
         />
       }
       sidebar={
@@ -1853,6 +1989,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             }}
             newHint={newHint}
             onNewFile={(dir, selectedKind) => newDiagram(dir, selectedKind)}
+            onUploadImage={requestImageUpload}
             hasDisplayNodes={displayNodes.length > 0}
             fileFilter={fileFilter}
             onFileFilterChange={setFileFilter}
@@ -1928,6 +2065,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
             setMobileWarningOpen(nextOpen)
             if (!nextOpen) setMobileWarningDismissed(true)
           }}
+          imageUploadOpen={imageUploadOpen}
+          onImageUploadOpenChange={setImageUploadOpen}
+          imageUploadDirectory={imageUploadDirectory}
+          imageUploadBusy={imageUploadBusy}
+          onUploadImage={(file, path) => void uploadImage(file, path)}
+          replaceExportOpen={pendingExportReplace !== null}
+          onReplaceExportOpenChange={(open) => {
+            if (!open && !replaceExportBusy) setPendingExportReplace(null)
+          }}
+          replaceExportPath={pendingExportReplace?.path ?? null}
+          replaceExportBusy={replaceExportBusy}
+          onConfirmReplaceExport={() => {
+            if (pendingExportReplace) void writeExport(pendingExportReplace, true)
+          }}
         />
       }
     >
@@ -1987,6 +2138,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
         linkTrail={linkTrail}
         markdownScrollTop={markdownScrollTop}
         onBack={goBack}
+        assetKind={assetKind}
       />
     </AppLayout>
   )

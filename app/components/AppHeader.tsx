@@ -13,7 +13,7 @@ import {
   SquareArrowOutUpRight,
 } from 'lucide-react'
 import AuthButton from './AuthButton'
-import ExportMenu from './ExportMenu'
+import ExportMenu, { type ExportMenuProps } from './ExportMenu'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -62,6 +62,8 @@ export interface AppHeaderProps {
   appliedConfig: MermaidUserConfig | null
   kind: FileKind
   user: SessionUser | null
+  onSaveExport?: ExportMenuProps['onSaveToRepository']
+  showExport?: boolean
 }
 
 /** Global app header. It receives UI state and intent callbacks, not document-store access. */
@@ -96,6 +98,8 @@ export default function AppHeader({
   appliedConfig,
   kind,
   user,
+  onSaveExport,
+  showExport = true,
 }: AppHeaderProps) {
   return (
     <header className="flex flex-none items-center justify-between gap-4 border-b bg-card px-4 py-2">
@@ -238,7 +242,7 @@ export default function AppHeader({
             <Separator orientation="vertical" className="h-6" />
           </>
         ) : null}
-        <ExportMenu
+        {showExport ? <ExportMenu
           text={exportText}
           baseName={baseName}
           configYaml={config.mermaidConfig}
@@ -246,9 +250,14 @@ export default function AppHeader({
           onBackgroundChange={(value) => updateConfig({ exportBackground: value })}
           pngScale={config.pngScale}
           onPngScaleChange={(value) => updateConfig({ pngScale: value })}
+          svgTheme={config.svgTheme}
+          onSvgThemeChange={(value) => updateConfig({ svgTheme: value })}
+          exportFrame={config.exportFrame}
+          onExportFrameChange={(value) => updateConfig({ exportFrame: value })}
           config={appliedConfig}
           kind={kind}
-        />
+          onSaveToRepository={onSaveExport}
+        /> : null}
         <Separator orientation="vertical" className="h-6" />
         <AuthButton user={user} />
       </div>

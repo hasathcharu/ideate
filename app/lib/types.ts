@@ -41,11 +41,14 @@ export type ExportBackground = 'white' | 'black' | 'none' | 'theme'
  * a number.
  */
 export type PngScale =
-  | { mode: 'auto' }
   | { mode: 'multiplier'; value: number }
   | { mode: 'dpi'; value: number }
   | { mode: 'width'; value: number }
   | { mode: 'height'; value: number }
+
+/** SVGs can either keep the configured Mermaid palette or carry light and dark
+ * variants that follow the viewer's `prefers-color-scheme`. */
+export type SvgThemeMode = 'forced' | 'dynamic'
 
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
@@ -56,6 +59,10 @@ export interface AppConfig {
    *  like the background choice beside it: someone exporting for print wants the
    *  next export at the same density, not back at the default. */
   pngScale: PngScale
+  /** Whether SVG exports keep the configured palette or follow the viewer. */
+  svgTheme: SvgThemeMode
+  /** Add breathing room and rounded clipping to image exports. */
+  exportFrame: boolean
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
   /** File-tree sidebar width in pixels. */

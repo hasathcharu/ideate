@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { readBinaryFile } from '@/app/actions/github'
 import {
   COPY_BUTTON_ATTR,
   COPY_SOURCE_ATTR,
@@ -169,7 +170,23 @@ export default function MarkdownPreview({
   // render just because a fresh object literal was passed down.
   const repoKey = repo ? `${repo.owner}/${repo.name}@${repo.branch}` : null
   const options = useMemo(
-    () => ({ config, basePath: path, repo }),
+    () => ({
+      config,
+      basePath: path,
+      repo,
+      resolveImage: repo ? async (imagePath: string) => {
+        const result = await readBinaryFile(repo.owner, repo.name, imagePath, repo.branch)
+        if (!result.ok) {
+          toast.error(`Could not render ${imagePath}: ${result.error.message}`)
+          return null
+        }
+        const extension = imagePath.split('.').pop()?.toLowerCase()
+        const mime = extension === 'svg' ? 'image/svg+xml'
+          : extension === 'jpg' ? 'image/jpeg'
+            : extension === 'gif' ? 'image/gif' : 'image/png'
+        return `data:${mime};base64,${result.data.content}`
+      } : undefined,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [config, path, repoKey],
   )

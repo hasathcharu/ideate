@@ -3,7 +3,7 @@
 import { Octokit } from '@octokit/rest'
 import { getGitHubToken } from '@/lib/session.server'
 import { APP_NAME } from '@/lib/config'
-import { buildTree, isDiagramFile } from '@/lib/tree'
+import { buildTree, isDiagramFile, isSvgFile } from '@/lib/tree'
 import type {
   ActionError,
   ActionResult,
@@ -280,7 +280,37 @@ export async function readFile(
     if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
       return err({ kind: 'not_found', message: 'That path is not a file.', status: 404 })
     }
-    return ok({ path, content: decodeBase64(data.content), sha: data.sha })
+    if (isSvgFile(path) && data.size > 30 * 1024 * 1024) {
+      return err({ kind: 'unknown', message: 'Images larger than 30 MB cannot be opened.' })
+    }
+    const encoded = isSvgFile(path) && data.encoding !== 'base64'
+      ? (await octokit.git.getBlob({ owner, repo, file_sha: data.sha })).data.content
+      : data.content
+    return ok({ path, content: decodeBase64(encoded), sha: data.sha })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** Open a binary repository file without decoding it as UTF-8. */
+export async function readBinaryFile(
+  owner: string,
+  repo: string,
+  path: string,
+  branch: string,
+): Promise<ActionResult<FileContent>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    const { data } = await octokit.repos.getContent({ owner, repo, path, ref: branch })
+    if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
+      return err({ kind: 'not_found', message: 'That path is not a file.', status: 404 })
+    }
+    if (data.size > 30 * 1024 * 1024) {
+      return err({ kind: 'unknown', message: 'Images larger than 30 MB cannot be opened.' })
+    }
+    const blob = await octokit.git.getBlob({ owner, repo, file_sha: data.sha })
+    return ok({ path, content: blob.data.content.replace(/\s/g, ''), sha: data.sha })
   } catch (error) {
     return err(mapError(error))
   }
@@ -300,7 +330,40 @@ export async function readFileAtRef(
     if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
       return err({ kind: 'not_found', message: 'That path is not a file at this version.', status: 404 })
     }
-    return ok(decodeBase64(data.content))
+    if (isSvgFile(path) && data.size > 30 * 1024 * 1024) {
+      return err({ kind: 'unknown', message: 'Images larger than 30 MB cannot be opened.' })
+    }
+    const encoded = isSvgFile(path) && data.encoding !== 'base64'
+      ? (await octokit.git.getBlob({ owner, repo, file_sha: data.sha })).data.content
+      : data.content
+    return ok(decodeBase64(encoded))
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** Binary content at a commit, returned as a Blob so React never serializes it as a huge string. */
+export async function readBinaryFileAtRef(
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<ActionResult<Blob>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    const { data } = await octokit.repos.getContent({ owner, repo, path, ref })
+    if (Array.isArray(data) || data.type !== 'file') {
+      return err({ kind: 'not_found', message: 'That path is not a file at this version.', status: 404 })
+    }
+    if (data.size > 30 * 1024 * 1024) {
+      return err({ kind: 'unknown', message: 'Images larger than 30 MB cannot be opened.' })
+    }
+    const blob = await octokit.git.getBlob({ owner, repo, file_sha: data.sha })
+    const bytes = Buffer.from(blob.data.content.replace(/\s/g, ''), 'base64')
+    const extension = path.split('.').pop()?.toLowerCase()
+    const type = extension === 'jpg' ? 'image/jpeg' : extension === 'gif' ? 'image/gif' : 'image/png'
+    return ok(new Blob([bytes], { type }))
   } catch (error) {
     return err(mapError(error))
   }
@@ -507,6 +570,63 @@ export async function commitFile(
       return err({ kind: 'unknown', message: 'Commit succeeded but returned no sha.' })
     }
     return ok({ path, content, sha: newSha })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** Commit content that is already base64 encoded, used for binary exports. */
+export async function commitBinaryFile(
+  owner: string,
+  repo: string,
+  path: string,
+  content: Blob,
+  branch: string,
+): Promise<ActionResult<{ path: string; sha: string }>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    const contentBase64 = Buffer.from(await content.arrayBuffer()).toString('base64')
+    const { data } = await octokit.repos.createOrUpdateFileContents({
+      owner, repo, path, branch,
+      message: `Create ${path} via ${APP_NAME}`,
+      content: contentBase64,
+    })
+    const sha = data.content?.sha
+    if (!sha) return err({ kind: 'unknown', message: 'Commit succeeded but returned no sha.' })
+    return ok({ path, sha })
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
+/** Replace an existing generated export after explicit user confirmation. */
+export async function replaceExportFile(
+  owner: string,
+  repo: string,
+  path: string,
+  content: string | Blob,
+  branch: string,
+): Promise<ActionResult<{ path: string; sha: string }>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    const current = await octokit.repos.getContent({ owner, repo, path, ref: branch })
+    if (Array.isArray(current.data) || current.data.type !== 'file') {
+      return err({ kind: 'conflict', message: `${path} is not a file.`, status: 409 })
+    }
+    const encoded = typeof content === 'string'
+      ? encodeBase64(content)
+      : Buffer.from(await content.arrayBuffer()).toString('base64')
+    const { data } = await octokit.repos.createOrUpdateFileContents({
+      owner, repo, path, branch,
+      sha: current.data.sha,
+      message: `Update ${path} via ${APP_NAME}`,
+      content: encoded,
+    })
+    const sha = data.content?.sha
+    if (!sha) return err({ kind: 'unknown', message: 'Commit succeeded but returned no sha.' })
+    return ok({ path, sha })
   } catch (error) {
     return err(mapError(error))
   }

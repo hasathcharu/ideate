@@ -7,8 +7,10 @@ import ConflictModal from './ConflictModal'
 import DeleteModal from './DeleteModal'
 import HistoryPanel from './HistoryPanel'
 import MobileWarningModal from './MobileWarningModal'
+import ImageUploadModal from './ImageUploadModal'
 import PromptModal, { type PromptModalProps } from './PromptModal'
 import RepoPicker from './RepoPicker'
+import ReplaceExportModal from './ReplaceExportModal'
 import type { HistoryController } from './useHistoryController'
 import { collectFilePaths, type FileKind } from '@/lib/tree'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
@@ -63,6 +65,16 @@ export interface AppDialogsProps {
   canvasBackground: string | undefined
   mobileWarningOpen: boolean
   onMobileWarningOpenChange: (open: boolean) => void
+  imageUploadOpen: boolean
+  onImageUploadOpenChange: (open: boolean) => void
+  imageUploadDirectory: string
+  imageUploadBusy: boolean
+  onUploadImage: (file: File, path: string) => void
+  replaceExportOpen: boolean
+  onReplaceExportOpenChange: (open: boolean) => void
+  replaceExportPath: string | null
+  replaceExportBusy: boolean
+  onConfirmReplaceExport: () => void
 }
 
 /** Modal/sheet composition kept separate from working-copy commands. */
@@ -112,6 +124,16 @@ export default function AppDialogs({
   canvasBackground,
   mobileWarningOpen,
   onMobileWarningOpenChange,
+  imageUploadOpen,
+  onImageUploadOpenChange,
+  imageUploadDirectory,
+  imageUploadBusy,
+  onUploadImage,
+  replaceExportOpen,
+  onReplaceExportOpenChange,
+  replaceExportPath,
+  replaceExportBusy,
+  onConfirmReplaceExport,
 }: AppDialogsProps) {
   return (
     <>
@@ -144,6 +166,21 @@ export default function AppDialogs({
         />
       ) : null}
       {prompt ? <PromptModal open={promptOpen} onOpenChange={onPromptOpenChange} {...prompt} /> : null}
+      <ImageUploadModal
+        open={imageUploadOpen}
+        onOpenChange={onImageUploadOpenChange}
+        directory={imageUploadDirectory}
+        busy={imageUploadBusy}
+        onUpload={onUploadImage}
+      />
+      <ReplaceExportModal
+        open={replaceExportOpen}
+        onOpenChange={onReplaceExportOpenChange}
+        path={replaceExportPath}
+        branch={repo?.branch ?? ''}
+        busy={replaceExportBusy}
+        onConfirm={onConfirmReplaceExport}
+      />
       <ConfigModal
         open={configOpen}
         onOpenChange={onConfigOpenChange}
@@ -190,6 +227,7 @@ export default function AppDialogs({
           canGoBack={history.canGoBack}
           selectedSha={history.selectedSha}
           versionContent={history.versionContent}
+          versionBlob={history.versionBlob}
           versionLoading={history.versionLoading}
           config={appliedConfig}
           kind={kind}

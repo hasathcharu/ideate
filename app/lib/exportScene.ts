@@ -6,9 +6,9 @@ import {
 import { parseScene } from './excalidraw'
 import { isDarkColor, resolveThemeMode, themeBackgroundColor } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
-import { resolvePngScale } from './export'
+import { resolveDynamicThemeConfigs, resolvePngScale } from './export'
 import type { StandaloneSvg } from './export'
-import type { ExportBackground, PngScale } from './types'
+import type { ExportBackground, PngScale, SvgThemeMode } from './types'
 
 /**
  * Export pipeline for Excalidraw scenes — the counterpart to `lib/export.ts`, which handles
@@ -65,6 +65,7 @@ function sceneExportInput(
   sceneText: string,
   background: ExportBackground,
   config: MermaidUserConfig | null | undefined,
+  forcedMode?: 'light' | 'dark',
 ) {
   const scene = parseScene(sceneText)
   if (!scene) throw new Error('This file is not a valid Excalidraw scene.')
@@ -79,6 +80,9 @@ function sceneExportInput(
     config,
     typeof rawBackground === 'string' ? rawBackground : undefined,
   )
+  if (forcedMode) {
+    resolved.dark = forcedMode === 'dark'
+  }
 
   const appState = {
     ...scene.appState,
@@ -105,11 +109,36 @@ export async function resolveSceneSvg(
   sceneText: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  themeMode: SvgThemeMode = 'forced',
+  framed = false,
+): Promise<StandaloneSvg> {
+  if (themeMode === 'dynamic') {
+    const dynamicConfigs = resolveDynamicThemeConfigs(config)
+    const [light, dark] = await Promise.all([
+      resolveSceneSvgVariant(sceneText, background, dynamicConfigs.light, framed, 'light'),
+      resolveSceneSvgVariant(sceneText, background, dynamicConfigs.dark, framed, 'dark'),
+    ])
+    return combineDynamicSceneSvg(light, dark)
+  }
+  return resolveSceneSvgVariant(sceneText, background, config, framed)
+}
+
+async function resolveSceneSvgVariant(
+  sceneText: string,
+  background: ExportBackground,
+  config: MermaidUserConfig | null | undefined,
+  framed: boolean,
+  forcedMode?: 'light' | 'dark',
 ): Promise<StandaloneSvg> {
   const { exportToSvg } = await import('@excalidraw/excalidraw')
-  const { background: resolved, ...input } = sceneExportInput(sceneText, background, config)
+  const { background: resolved, ...input } = sceneExportInput(
+    sceneText,
+    background,
+    config,
+    forcedMode,
+  )
 
-  const svg = await exportToSvg({ ...input, exportPadding: 16 })
+  const svg = await exportToSvg({ ...input, exportPadding: framed ? 24 : 0 })
 
   const width = parseFloat(svg.getAttribute('width') ?? '') || svg.viewBox?.baseVal?.width || 0
   const height = parseFloat(svg.getAttribute('height') ?? '') || svg.viewBox?.baseVal?.height || 0
@@ -118,10 +147,39 @@ export async function resolveSceneSvg(
   // rect added inside it would be filtered too. Nesting that whole element inside
   // a plain outer <svg> keeps the filter scoped to the drawing while the rect
   // behind it renders in exactly the requested color.
-  const root = resolved.color ? withBackgroundRect(svg, resolved.color, width, height) : svg
+  const root = resolved.color ? withBackgroundRect(svg, resolved.color, width, height, framed) : svg
 
   const markup = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`
   return { markup, width, height }
+}
+
+function combineDynamicSceneSvg(light: StandaloneSvg, dark: StandaloneSvg): StandaloneSvg {
+  const width = Math.max(light.width, dark.width)
+  const height = Math.max(light.height, dark.height)
+  const root = document.createElementNS(SVG_NS, 'svg')
+  root.setAttribute('xmlns', SVG_NS)
+  root.setAttribute('width', String(width))
+  root.setAttribute('height', String(height))
+  root.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  const style = document.createElementNS(SVG_NS, 'style')
+  style.textContent = '.km-dark{display:none}@media(prefers-color-scheme:dark){.km-light{display:none}.km-dark{display:inline}}'
+  root.append(style, parseExportedSvg(light.markup, 'km-light'), parseExportedSvg(dark.markup, 'km-dark'))
+  return {
+    markup: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`,
+    width,
+    height,
+  }
+}
+
+function parseExportedSvg(markup: string, className: string): SVGSVGElement {
+  const host = document.createElement('div')
+  host.innerHTML = markup.replace(/^<\?xml[^>]*>\s*/, '')
+  const svg = host.querySelector('svg')
+  if (!svg) throw new Error('Exporter produced no <svg> element.')
+  svg.setAttribute('class', className)
+  svg.setAttribute('width', '100%')
+  svg.setAttribute('height', '100%')
+  return svg
 }
 
 function withBackgroundRect(
@@ -129,6 +187,7 @@ function withBackgroundRect(
   color: string,
   width: number,
   height: number,
+  rounded: boolean,
 ): SVGSVGElement {
   const outer = document.createElementNS(SVG_NS, 'svg')
   outer.setAttribute('xmlns', SVG_NS)
@@ -143,6 +202,10 @@ function withBackgroundRect(
   rect.setAttribute('width', String(width))
   rect.setAttribute('height', String(height))
   rect.setAttribute('fill', color)
+  if (rounded) {
+    rect.setAttribute('rx', '16')
+    rect.setAttribute('ry', '16')
+  }
 
   drawing.setAttribute('x', '0')
   drawing.setAttribute('y', '0')
@@ -169,8 +232,10 @@ export async function exportSceneSVG(
   filename: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  themeMode: SvgThemeMode = 'forced',
+  framed = false,
 ): Promise<void> {
-  const { markup } = await resolveSceneSvg(sceneText, background, config)
+  const { markup } = await resolveSceneSvg(sceneText, background, config, themeMode, framed)
   triggerDownload(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
@@ -178,26 +243,29 @@ export async function copySceneSVG(
   sceneText: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  themeMode: SvgThemeMode = 'forced',
+  framed = false,
 ): Promise<void> {
-  const { markup } = await resolveSceneSvg(sceneText, background, config)
+  const { markup } = await resolveSceneSvg(sceneText, background, config, themeMode, framed)
   await navigator.clipboard.writeText(markup)
 }
 
 /** Rasterize a scene to a PNG blob (shared by download/copy), resolving the
  *  requested density through the same `resolvePngScale` the mermaid path uses so
  *  the two kinds never differ in what "2×" or "300 DPI" means. */
-async function renderScenePngBlob(
+export async function renderScenePngBlob(
   sceneText: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<Blob> {
   const { exportToCanvas } = await import('@excalidraw/excalidraw')
   const { background: resolved, ...input } = sceneExportInput(sceneText, background, config)
 
   const drawing = await exportToCanvas({
     ...input,
-    exportPadding: 16,
+    exportPadding: framed ? 24 : 0,
     // The returned width/height size the canvas *verbatim* — Excalidraw does not multiply them by
     // `scale` (only its `maxWidthOrHeight` branch does that).
     getDimensions: (width: number, height: number) => {
@@ -220,7 +288,14 @@ async function renderScenePngBlob(
   const ctx = composed.getContext('2d')
   if (!ctx) throw new Error('Could not acquire a 2D canvas context.')
   ctx.fillStyle = resolved.color
-  ctx.fillRect(0, 0, composed.width, composed.height)
+  if (framed) {
+    ctx.beginPath()
+    ctx.roundRect(0, 0, composed.width, composed.height, 16 * (composed.width / drawing.width))
+    ctx.fill()
+    ctx.clip()
+  } else {
+    ctx.fillRect(0, 0, composed.width, composed.height)
+  }
   ctx.drawImage(drawing, 0, 0)
   return canvasToPngBlob(composed)
 }
@@ -237,8 +312,9 @@ export async function exportScenePNG(
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<void> {
-  triggerDownload(await renderScenePngBlob(sceneText, background, config, pngScale), filename)
+  triggerDownload(await renderScenePngBlob(sceneText, background, config, pngScale, framed), filename)
 }
 
 export async function copyScenePNG(
@@ -246,8 +322,9 @@ export async function copyScenePNG(
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<void> {
-  const blob = await renderScenePngBlob(sceneText, background, config, pngScale)
+  const blob = await renderScenePngBlob(sceneText, background, config, pngScale, framed)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
 

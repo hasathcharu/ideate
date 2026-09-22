@@ -6,6 +6,8 @@ import DiffView from './DiffView'
 import Editor, { type EditorHandle } from './Editor'
 import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
 import Preview from './Preview'
+import ImagePreview from './ImagePreview'
+import SvgPreview from './SvgPreview'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import type { FileKind } from '@/lib/tree'
 import type { RepoRef } from '@/lib/types'
@@ -41,6 +43,7 @@ export interface DocumentSurfaceProps {
   linkTrail: ReadonlyArray<{ path: string; scrollTop: number }>
   markdownScrollTop: number
   onBack: () => void
+  assetKind?: 'raster' | 'svg' | null
 }
 
 /** Active editor/preview surface. Document state and commands remain owned by AppShell. */
@@ -75,7 +78,9 @@ export default function DocumentSurface({
   linkTrail,
   markdownScrollTop,
   onBack,
+  assetKind = null,
 }: DocumentSurfaceProps) {
+  if (assetKind === 'raster' && openPath) return <ImagePreview path={openPath} base64={text} />
   if (kind === 'excalidraw') {
     return (
       <section className="min-h-0 flex-1" aria-label="Canvas">
@@ -141,7 +146,9 @@ export default function DocumentSurface({
         <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
       </div>
       <section className="min-h-0 overflow-auto" aria-label="Preview">
-        {kind === 'markdown' ? (
+        {assetKind === 'svg' ? (
+          <SvgPreview source={renderedText} />
+        ) : kind === 'markdown' ? (
           <MarkdownPreview
             ref={markdownPreviewRef}
             onRevealSource={onRevealEditor}

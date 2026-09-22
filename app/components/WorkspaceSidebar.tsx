@@ -18,6 +18,7 @@ export interface WorkspaceSidebarProps {
   onRefresh: () => void
   newHint: string
   onNewFile: (dir: string | undefined, kind: FileKind) => void
+  onUploadImage: (dir?: string) => void
   hasDisplayNodes: boolean
   fileFilter: string
   onFileFilterChange: (value: string) => void
@@ -45,6 +46,7 @@ export default function WorkspaceSidebar({
   onRefresh,
   newHint,
   onNewFile,
+  onUploadImage,
   hasDisplayNodes,
   fileFilter,
   onFileFilterChange,
@@ -83,7 +85,7 @@ export default function WorkspaceSidebar({
               <RefreshCw className={cn(treeLoading && 'animate-spin')} />
             </Button>
           ) : null}
-          <NewFileMenu onSelect={(kind) => onNewFile(undefined, kind)}>
+          <NewFileMenu onSelect={(kind) => onNewFile(undefined, kind)} onUploadImage={() => onUploadImage()}>
             <Button size="icon-xs" variant="ghost" title={`New file at root (${newHint})`}>
               <Plus />
             </Button>
@@ -147,6 +149,7 @@ export default function WorkspaceSidebar({
             onOpenFile={onOpenFile}
             onDelete={onDelete}
             onNewFile={onNewFile}
+            onUploadImage={onUploadImage}
             onRename={onRename}
           />
         )}

@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { listFileCommits, readFileAtRef } from '@/app/actions/github'
+import { listFileCommits, readBinaryFileAtRef, readFileAtRef } from '@/app/actions/github'
+import { isRasterImageFile } from '@/lib/tree'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
 import { RequestGate } from '@/lib/workspaceStore'
 import type { FileCommit, RepoRef } from '@/lib/types'
@@ -32,6 +33,7 @@ export interface HistoryController {
   canGoBack: boolean
   selectedSha: string | null
   versionContent: string | null
+  versionBlob: Blob | null
   versionLoading: boolean
   view: HistoryView
   onViewChange: (view: HistoryView) => void
@@ -78,6 +80,7 @@ export function useHistoryController({
   const [error, setError] = useState<string | null>(null)
   const [selectedSha, setSelectedSha] = useState<string | null>(null)
   const [versionContent, setVersionContent] = useState<string | null>(null)
+  const [versionBlob, setVersionBlob] = useState<Blob | null>(null)
   const [versionLoading, setVersionLoading] = useState(false)
   const [view, setView] = useState<HistoryView>('preview')
   const [compare, setCompare] = useState<HistoryCompare>('previous')
@@ -94,6 +97,7 @@ export function useHistoryController({
     setHistoryPathStack([])
     setCommits(null)
     setVersionContent(null)
+    setVersionBlob(null)
     setError(null)
     setVersionLoading(false)
     setLoadingMore(false)
@@ -109,13 +113,20 @@ export function useHistoryController({
     setSelectedSha(commit.sha)
     setVersionLoading(true)
     setVersionContent(null)
+    setVersionBlob(null)
     setPreviousContent(null)
     setDiffNote(null)
-    const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
+    const raster = isRasterImageFile(commit.path)
+    const res = raster
+      ? await readBinaryFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
+      : await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
     const currentKey = JSON.stringify([workspaceRef.current, historyTarget.current])
     if (!versionRequests.current.accepts(request, currentKey)) return
     setVersionLoading(false)
-    if (res.ok) setVersionContent(res.data)
+    if (res.ok) {
+      if (raster) setVersionBlob(res.data as Blob)
+      else setVersionContent(res.data as string)
+    }
     else if (!handleExpiredSession(res.error)) setError(res.error.message)
   }, [repo])
 
@@ -156,6 +167,7 @@ export function useHistoryController({
     setError(null)
     setSelectedSha(null)
     setVersionContent(null)
+    setVersionBlob(null)
     setHasMore(false)
     setRenamedFrom(null)
     await loadHistoryPage(openPath, 1, false)
@@ -207,6 +219,7 @@ export function useHistoryController({
   useEffect(() => {
     if (!open || view !== 'diff' || compare !== 'previous') return
     if (!repo || !selectedSha) return
+    if (openPath && isRasterImageFile(openPath)) return
     if (!olderCommit) {
       if (selectedIsOldestLoaded && (hasMore || renamedFrom)) {
         setPreviousContent(null)
@@ -239,6 +252,7 @@ export function useHistoryController({
     selectedIsOldestLoaded,
     hasMore,
     renamedFrom,
+    openPath,
   ])
 
   const diff = useMemo(() => {
@@ -274,6 +288,7 @@ export function useHistoryController({
     canGoBack: historyPathStack.length > 0,
     selectedSha,
     versionContent,
+    versionBlob,
     versionLoading,
     view,
     onViewChange: setView,
