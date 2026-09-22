@@ -349,15 +349,17 @@ export default function DiagramViewport({
         >
           <ZoomOut />
         </Button>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
           onClick={resetZoom}
           onDoubleClick={fit}
-          className="min-w-11 rounded px-1 text-center text-xs tabular-nums text-muted-foreground hover:text-foreground"
+          className="h-6 min-w-11 px-1 text-xs tabular-nums text-muted-foreground"
           title="Reset to 100% (double-click to fit)"
         >
           {Math.round(view.scale * 100)}%
-        </button>
+        </Button>
         <Button
           size="icon-xs"
           variant="ghost"

@@ -44,6 +44,7 @@ import { isDiagramFile } from '@/lib/tree'
 import DiagramViewport from './DiagramViewport'
 import FileHoverCard from './FileHoverCard'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
 // Pass these valid selectors straight to the browser: the build's CSS parser
@@ -275,7 +276,7 @@ export default function MarkdownPreview({
     paintFindHighlights(ranges, active)
     const container = scrollRef.current
     if (container && active) {
-      scrollRangeIntoView(container, active, FIND_SCROLL_OFFSET, isMaximized ? 'auto' : 'smooth')
+      scrollRangeIntoView(container, active, FIND_SCROLL_OFFSET)
     }
   }, [findIndex, findCount, isMaximized])
 
@@ -347,9 +348,9 @@ export default function MarkdownPreview({
       container.getBoundingClientRect().top +
       container.scrollTop -
       16
-    container.scrollTo({ top, behavior: isMaximized ? 'auto' : 'smooth' })
+    container.scrollTo({ top })
     setActiveHeading(id)
-  }, [isMaximized])
+  }, [])
 
   /* ---------------------------------------------------------------- */
   /* Scroll sync with the editor                                       */
@@ -371,9 +372,9 @@ export default function MarkdownPreview({
           container.getBoundingClientRect().top +
           container.scrollTop -
           SYNC_SCROLL_OFFSET
-        container.scrollTo({ top, behavior: isMaximized ? 'auto' : 'smooth' })
-        // A moment of emphasis, because a smooth scroll that lands mid-document
-        // leaves no clue which of the blocks now on screen was the one asked for.
+        container.scrollTo({ top })
+        // A moment of emphasis, because a jump that lands mid-document leaves no
+        // clue which of the blocks now on screen was the one asked for.
         target.classList.remove('md-sync-flash')
         // Reading `offsetWidth` restarts the animation: without the reflow the
         // class comes off and goes back on inside one frame and the browser sees
@@ -383,7 +384,7 @@ export default function MarkdownPreview({
         window.setTimeout(() => target.classList.remove('md-sync-flash'), 1200)
       },
     }),
-    [isMaximized],
+    [],
   )
 
   // Double-clicking a block asks the editor for the line it was written on.
@@ -616,21 +617,24 @@ export default function MarkdownPreview({
         >
           <p className="px-2 pb-2 text-sm font-medium text-muted-foreground">Contents</p>
           {headings.map((heading) => (
-            <button
-              key={heading.id}
-              type="button"
-              onClick={() => scrollToHeading(heading.id)}
-              className={cn(
-                'block w-full truncate rounded-md px-2 py-1 text-left text-sm hover:bg-accent hover:text-accent-foreground',
-                activeHeading === heading.id
-                  ? 'bg-accent font-medium text-accent-foreground'
-                  : 'text-muted-foreground',
-              )}
-              style={{ paddingLeft: `${0.5 + Math.min(heading.level - 1, 3) * 0.75}rem` }}
-              title={heading.text}
-            >
-              {heading.text}
-            </button>
+            <Tooltip key={heading.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => scrollToHeading(heading.id)}
+                  className={cn(
+                    'block w-full truncate rounded-md px-2 py-1 text-left text-sm hover:bg-accent hover:text-accent-foreground',
+                    activeHeading === heading.id
+                      ? 'bg-accent font-medium text-accent-foreground'
+                      : 'text-muted-foreground',
+                  )}
+                  style={{ paddingLeft: `${0.5 + Math.min(heading.level - 1, 3) * 0.75}rem` }}
+                >
+                  {heading.text}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{heading.text}</TooltipContent>
+            </Tooltip>
           ))}
         </nav>
       ) : null}

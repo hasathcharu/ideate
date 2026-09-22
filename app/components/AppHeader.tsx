@@ -17,6 +17,7 @@ import ExportMenu, { type ExportMenuProps } from './ExportMenu'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -24,7 +25,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { APP_NAME } from '@/lib/config'
+import { cn, HEADER_ACTION_BUTTON } from '@/lib/utils'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import type { FileKind } from '@/lib/tree'
 import type { AppConfig, RepoRef, SessionUser } from '@/lib/types'
@@ -44,6 +47,7 @@ export interface AppHeaderProps {
   canRestore: boolean
   localMode: boolean
   onSave: () => void
+  onCommitWithMessage: () => void
   canSave: boolean
   saving: boolean
   showSaveAll: boolean
@@ -51,6 +55,7 @@ export interface AppHeaderProps {
   saveHint: string
   isMac: boolean
   onSaveAll: () => void
+  onCommitAllWithMessage: () => void
   onOpenPath: (path: string) => void
   dirty: boolean
   openPath: string | null
@@ -80,6 +85,7 @@ export default function AppHeader({
   canRestore,
   localMode,
   onSave,
+  onCommitWithMessage,
   canSave,
   saving,
   showSaveAll,
@@ -87,6 +93,7 @@ export default function AppHeader({
   saveHint,
   isMac,
   onSaveAll,
+  onCommitAllWithMessage,
   onOpenPath,
   dirty,
   openPath,
@@ -101,6 +108,12 @@ export default function AppHeader({
   onSaveExport,
   showExport = true,
 }: AppHeaderProps) {
+  const primaryCommitIsCustom = !localMode && config.preferredCommitAction === 'custom'
+  /** The commit control is a split button: a primary action plus a menu half. The two
+   *  halves drop the default `bg-clip-padding` gutter so the page colour can't bleed
+   *  through their transparent borders and read as a hard seam down the middle. */
+  const splitCommit = !localMode || showSaveAll
+
   return (
     <header className="flex flex-none items-center justify-between gap-4 border-b bg-card px-4 py-2">
       <div className="flex items-center gap-2">
@@ -118,11 +131,11 @@ export default function AppHeader({
           {APP_NAME}
         </Link>
         {githubEnabled ? (
-          <div className="ml-1 flex items-center gap-1 rounded-full border border-border bg-background p-0.5 dark:border-input dark:bg-input/30">
+          <div className="ml-1 flex h-7 items-center gap-0.5 rounded-full border border-border bg-background p-px dark:border-input dark:bg-input/30">
             <Button
               size="sm"
               variant="ghost"
-              className="rounded-full"
+              className="h-6 rounded-full px-2 text-xs"
               onClick={onOpenRepoPicker}
               title={repo ? 'Switch repository' : 'Connect a repository'}
             >
@@ -133,7 +146,7 @@ export default function AppHeader({
               <Button
                 size="icon-sm"
                 variant="ghost"
-                className="size-7 shrink-0 rounded-full"
+                className="size-6 shrink-0 rounded-full"
                 onClick={() =>
                   window.open(
                     `https://github.com/${repo.owner}/${repo.name}/tree/${encodeURIComponent(repo.branch)}`,
@@ -144,13 +157,13 @@ export default function AppHeader({
                 title={`Open ${repo.owner}/${repo.name} on GitHub`}
                 aria-label={`Open ${repo.owner}/${repo.name} on GitHub`}
               >
-                <SquareArrowOutUpRight />
+                <SquareArrowOutUpRight className="size-3" strokeWidth={2.5} />
               </Button>
             ) : null}
           </div>
         ) : null}
         {githubEnabled && repo ? (
-          <Button size="sm" variant="outline" className="h-8 rounded-full" onClick={onOpenBranchPicker}>
+          <Button size="sm" variant="outline" className="h-7 rounded-full text-xs" onClick={onOpenBranchPicker}>
             <GitBranch /> {repo.branch}
           </Button>
         ) : null}
@@ -187,47 +200,76 @@ export default function AppHeader({
             <div className="flex items-center">
               <Button
                 size="sm"
-                onClick={onSave}
+                onClick={primaryCommitIsCustom ? onCommitWithMessage : onSave}
                 disabled={!canSave}
-                className={showSaveAll ? 'rounded-r-none' : undefined}
+                className={cn(HEADER_ACTION_BUTTON, splitCommit && 'rounded-r-none')}
                 title={`${localMode ? 'Save' : 'Commit'} this file (${saveHint})`}
               >
                 {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
-                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
+                <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 py-[3px] text-[10px] leading-none font-medium opacity-70">
                   {isMac ? <><Command className="size-2.5" /> <span>S</span></> : <span>Ctrl + S</span>}
                 </kbd>
               </Button>
-              {showSaveAll ? (
+              {splitCommit ? (
                 <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      size="sm"
-                      disabled={saving}
-                      className="rounded-l-none border-l border-primary-foreground/30 px-1.5"
-                      aria-label={`More save actions — ${saveAllPaths.length} unsaved files`}
-                      title={`${saveAllPaths.length} unsaved files`}
-                    >
-                      <ChevronDown />
-                    </Button>
-                  </DropdownMenuTrigger>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="sm"
+                          disabled={saving}
+                          className={cn(HEADER_ACTION_BUTTON, 'rounded-l-none border-l-primary-foreground/20 px-1.5')}
+                          aria-label={localMode ? 'More save actions' : 'More commit actions'}
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>{localMode ? 'More save actions' : 'More commit actions'}</TooltipContent>
+                  </Tooltip>
                   <DropdownMenuContent align="end" className="w-64">
-                    <DropdownMenuItem onClick={onSaveAll} className="flex-col items-start gap-0.5">
-                      <span>{localMode ? 'Save all' : 'Commit all'} ({saveAllPaths.length} files)</span>
-                      <span className="text-xs text-muted-foreground">
-                        {localMode ? 'Writes every changed file to this browser.' : 'All of them in a single commit.'}
-                      </span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Unsaved</DropdownMenuLabel>
-                    {saveAllPaths.slice(0, MAX_LISTED_UNSAVED).map((path) => (
+                    {showSaveAll ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={primaryCommitIsCustom ? onCommitAllWithMessage : onSaveAll}
+                          className="flex-col items-start gap-0.5"
+                        >
+                          <span>{localMode ? 'Save all' : 'Commit all'} ({saveAllPaths.length} files)</span>
+                          <span className="text-xs text-muted-foreground">
+                            {localMode
+                              ? 'Writes every changed file to this browser.'
+                              : 'All of them in a single commit.'}
+                          </span>
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    {showSaveAll ? <DropdownMenuSeparator /> : null}
+                    {showSaveAll ? <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Unsaved</DropdownMenuLabel> : null}
+                    {showSaveAll ? saveAllPaths.slice(0, MAX_LISTED_UNSAVED).map((path) => (
                       <DropdownMenuItem key={path} onClick={() => onOpenPath(path)} className="text-xs">
                         <span className="truncate">{path}</span>
                       </DropdownMenuItem>
-                    ))}
+                    )) : null}
                     {saveAllPaths.length > MAX_LISTED_UNSAVED ? (
                       <p className="px-2 py-1.5 text-xs text-muted-foreground">
                         and {saveAllPaths.length - MAX_LISTED_UNSAVED} more
                       </p>
+                    ) : null}
+                    {!localMode ? (
+                      <>
+                        {showSaveAll ? <DropdownMenuSeparator /> : null}
+                        <DropdownMenuCheckboxItem
+                          checked={primaryCommitIsCustom}
+                          // Toggling the preference is not a save action, so keep the menu
+                          // open — it reads as a setting, and closing on it hides the result.
+                          onSelect={(e) => e.preventDefault()}
+                          onCheckedChange={(checked) => updateConfig({
+                            preferredCommitAction: checked ? 'custom' : 'generated',
+                          })}
+                        >
+                          Custom commit message
+                        </DropdownMenuCheckboxItem>
+                      </>
                     ) : null}
                   </DropdownMenuContent>
                 </DropdownMenu>

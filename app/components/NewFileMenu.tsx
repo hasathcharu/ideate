@@ -6,6 +6,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { ImageUp } from 'lucide-react'
 import type { FileKind } from '@/lib/tree'
@@ -14,6 +15,7 @@ export interface NewFileMenuProps {
   /** Which kind of file to start. The caller turns this into a path prompt. */
   onSelect: (kind: FileKind) => void
   onUploadImage: () => void
+  triggerTooltip?: string
   /** The trigger element — passed through `asChild`, so each call site keeps its
    *  own styling (the sidebar header's button looks nothing like the file tree's
    *  hover-revealed row actions). Must not set its own `onClick`; Radix owns it. */
@@ -24,10 +26,19 @@ export interface NewFileMenuProps {
  * The "new file" kind picker, shared by the sidebar's root **+** and every folder's **+** so the
  * two can't drift apart.
  */
-export default function NewFileMenu({ onSelect, onUploadImage, children }: NewFileMenuProps) {
+export default function NewFileMenu({ onSelect, onUploadImage, triggerTooltip, children }: NewFileMenuProps) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+      {triggerTooltip ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent>{triggerTooltip}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
+      )}
       {/* `align="start"` anchors the menu's *left* edge to the trigger so it opens
           rightward; `end` would anchor the right edge and push it back over the
           sidebar. `min-w-52` + non-wrapping items keep each label on one line — at

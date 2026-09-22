@@ -148,7 +148,6 @@ export function scrollRangeIntoView(
   container: HTMLElement,
   range: Range,
   offset: number,
-  behavior: ScrollBehavior = 'smooth',
 ): void {
   const rect = range.getBoundingClientRect()
   // A range inside a collapsed or not-yet-laid-out subtree measures as zero on
@@ -160,5 +159,5 @@ export function scrollRangeIntoView(
   // keystroke of a query that keeps matching the same place.
   const relative = rect.top - containerRect.top
   if (relative >= offset && relative <= containerRect.height - offset) return
-  container.scrollTo({ top: Math.max(0, top), behavior })
+  container.scrollTo({ top: Math.max(0, top) })
 }

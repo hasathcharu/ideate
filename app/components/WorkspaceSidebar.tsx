@@ -6,6 +6,7 @@ import NewFileMenu from './NewFileMenu'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import type { FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
@@ -72,11 +73,15 @@ export default function WorkspaceSidebar({
         <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
           Files
           {dirtyCount > 0 ? (
-            <span
-              className="size-1.5 shrink-0 rounded-full bg-amber-500"
-              title={`${dirtyCount} unsaved file${dirtyCount === 1 ? '' : 's'}`}
-              aria-label={`${dirtyCount} unsaved file${dirtyCount === 1 ? '' : 's'}`}
-            />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className="size-1.5 shrink-0 rounded-full bg-amber-500"
+                  aria-label={`${dirtyCount} unsaved file${dirtyCount === 1 ? '' : 's'}`}
+                />
+              </TooltipTrigger>
+              <TooltipContent>{dirtyCount} unsaved file{dirtyCount === 1 ? '' : 's'}</TooltipContent>
+            </Tooltip>
           ) : null}
         </span>
         <div className="flex items-center gap-0.5">
@@ -85,8 +90,12 @@ export default function WorkspaceSidebar({
               <RefreshCw className={cn(treeLoading && 'animate-spin')} />
             </Button>
           ) : null}
-          <NewFileMenu onSelect={(kind) => onNewFile(undefined, kind)} onUploadImage={() => onUploadImage()}>
-            <Button size="icon-xs" variant="ghost" title={`New file at root (${newHint})`}>
+          <NewFileMenu
+            onSelect={(kind) => onNewFile(undefined, kind)}
+            onUploadImage={() => onUploadImage()}
+            triggerTooltip={`New file at root (${newHint})`}
+          >
+            <Button size="icon-xs" variant="ghost">
               <Plus />
             </Button>
           </NewFileMenu>
@@ -110,15 +119,17 @@ export default function WorkspaceSidebar({
               className="h-7 bg-background pr-7 pl-7 text-xs"
             />
             {searching ? (
-              <button
+              <Button
+                size="icon-xs"
+                variant="ghost"
                 type="button"
                 onClick={clearFilter}
                 aria-label="Clear search"
                 title="Clear search"
-                className="absolute top-1/2 right-1.5 flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                className="absolute top-1/2 right-1.5 size-4 -translate-y-1/2 text-muted-foreground"
               >
                 <X className="size-3" />
-              </button>
+              </Button>
             ) : null}
           </div>
         </div>

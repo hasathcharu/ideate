@@ -8,6 +8,7 @@ import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/ty
 import '@excalidraw/excalidraw/index.css'
 import { parseScene, scenesEqual } from '@/lib/excalidraw'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 /**
  * The real Excalidraw editor. Loaded only through `Canvas.tsx`'s dynamic import — never import this
@@ -242,15 +243,19 @@ export default function CanvasInner({
           viewMode
             ? undefined
             : () => (
-                <button
-                  type="button"
-                  className="canvas-fullscreen-button"
-                  onClick={toggleMaximized}
-                  title={isMaximized ? 'Exit full window' : 'Fill window'}
-                  aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
-                >
-                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="canvas-fullscreen-button"
+                      onClick={toggleMaximized}
+                      aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
+                    >
+                      {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isMaximized ? 'Exit full window' : 'Fill window'}</TooltipContent>
+                </Tooltip>
               )
         }
         onChange={viewMode ? undefined : handleChange}

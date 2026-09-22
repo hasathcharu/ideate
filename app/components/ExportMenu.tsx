@@ -45,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { cn } from '@/lib/utils'
+import { cn, HEADER_ACTION_BUTTON } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const BACKGROUND_OPTIONS: ReadonlyArray<{ value: ExportBackground; label: string }> = [
@@ -372,7 +372,7 @@ export default function ExportMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="secondary" disabled={disabled}>
+        <Button size="sm" variant="secondary" className={HEADER_ACTION_BUTTON} disabled={disabled}>
           Export <ChevronDown />
         </Button>
       </DropdownMenuTrigger>

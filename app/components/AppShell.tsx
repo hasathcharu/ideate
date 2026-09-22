@@ -93,6 +93,17 @@ const SAMPLE = `flowchart TD
   E --> D
 `
 
+function generatedCommitMessage(path: string, sha?: string): string {
+  return `${sha ? 'Update' : 'Create'} ${path} via ${APP_NAME}`
+}
+
+function generatedBatchCommitMessage(paths: readonly string[]): string {
+  const summary = paths.length === 1
+    ? `Update ${paths[0]} via ${APP_NAME}`
+    : `Update ${paths.length} files via ${APP_NAME}`
+  return paths.length === 1 ? summary : `${summary}\n\n${paths.map((path) => `- ${path}`).join('\n')}`
+}
+
 // Starter diagram for a new mermaid file. A worked example rather than a bare
 // `A --> B`: the fastest way to learn the syntax is to edit something that
 // already uses branches, labelled edges and a few node shapes.
@@ -216,6 +227,7 @@ type PromptSpec = Pick<
   | 'prefix'
   | 'suffix'
   | 'selection'
+  | 'multiline'
   | 'submitLabel'
   | 'validate'
   | 'onSubmit'
@@ -240,6 +252,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     sidebarWidth: 256,
     wrapLines: false,
     minimap: true,
+    preferredCommitAction: 'generated',
     scratchKind: 'mermaid',
     mcpOrigin: null,
     mermaidConfig: '',
@@ -1368,7 +1381,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   openPathRef.current = openPath
 
   const commitCurrent = useCallback(
-    async (path: string, sha: string | undefined, content: string) => {
+    async (path: string, sha: string | undefined, content: string, message?: string) => {
       if (!repo) return
       // Which document this commit came from, so the result can tell whether it is
       // still the one on screen. Compared rather than `path`: committing an
@@ -1383,7 +1396,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       const submittedWorkspace = workspaceSelectionRef.current
       const submittedDraftId = docIdForFile(repo.owner, repo.name, repo.branch, path)
       setSaving(true)
-      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
+      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha, message)
       setSaving(false)
       if (res.ok) {
         const sameWorkspace = submittedWorkspace === workspaceSelectionRef.current
@@ -1461,7 +1474,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       docIdForPath, setCreatedPaths],
   )
 
-  const onSave = useCallback(async () => {
+  const onSave = useCallback(async (message?: string, requestCustomMessage = false) => {
     if (!hasWorkspace || !dirty || saving) return
     if (openPath && draftConflictKey === documentKey(identityFor(openPath))) {
       setConflictOpen(true)
@@ -1484,15 +1497,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
             toast.error(`${path} already exists or its draft cannot be checked.`)
             return
           }
-          setPromptOpen(false)
-          if (localMode) await saveLocal(path, text, true)
-          else void commitCurrent(path, undefined, text)
+          if (localMode) {
+            setPromptOpen(false)
+            await saveLocal(path, text, true)
+          } else if (requestCustomMessage) {
+            openPrompt({
+              title: 'Commit with message',
+              description: `Enter the commit message for ${path}.`,
+              label: 'Commit message',
+              defaultValue: generatedCommitMessage(path),
+              multiline: true,
+              submitLabel: 'Commit',
+              onSubmit: (customMessage) => {
+                setPromptOpen(false)
+                void commitCurrent(path, undefined, text, customMessage)
+              },
+            })
+          } else {
+            setPromptOpen(false)
+            void commitCurrent(path, undefined, text, message)
+          }
         },
       })
       return
     }
     if (localMode) await saveLocal(openPath, text)
-    else void commitCurrent(openPath, loadedSha ?? undefined, text)
+    else void commitCurrent(openPath, loadedSha ?? undefined, text, message)
   }, [
     hasWorkspace,
     localMode,
@@ -1513,6 +1543,26 @@ export default function AppShell({ user, mode }: AppShellProps) {
     identityFor,
   ])
 
+  const onCommitWithMessage = useCallback(() => {
+    if (!githubEnabled || !hasWorkspace || !dirty || saving) return
+    if (!openPath) {
+      void onSave(undefined, true)
+      return
+    }
+    openPrompt({
+      title: 'Commit with message',
+      description: `Enter the commit message for ${openPath}.`,
+      label: 'Commit message',
+      defaultValue: generatedCommitMessage(openPath, loadedSha ?? undefined),
+      multiline: true,
+      submitLabel: 'Commit',
+      onSubmit: (message) => {
+        setPromptOpen(false)
+        void onSave(message)
+      },
+    })
+  }, [githubEnabled, hasWorkspace, dirty, saving, openPath, loadedSha, openPrompt, onSave])
+
   /* ---------------------------------------------------------------- */
   /* Save all                                                          */
   /* ---------------------------------------------------------------- */
@@ -1531,7 +1581,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   /** Save every changed file — **one** commit, not one per file. */
-  const onSaveAll = useCallback(async () => {
+  const onSaveAll = useCallback(async (customMessage?: string) => {
     if (!hasWorkspace || saving || saveAllPaths.length === 0) return
 
     if (localMode) {
@@ -1633,14 +1683,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       return
     }
 
-    const summary =
-      writes.length === 1
-        ? `Update ${writes[0]!.path} via ${APP_NAME}`
-        : `Update ${writes.length} files via ${APP_NAME}`
-    const message =
-      writes.length === 1
-        ? summary
-        : `${summary}\n\n${writes.map((w) => `- ${w.path}`).join('\n')}`
+    const message = customMessage ?? generatedBatchCommitMessage(writes.map((write) => write.path))
 
     const res = await commitFiles(repo.owner, repo.name, writes, repo.branch, message)
     setSaving(false)
@@ -1704,6 +1747,22 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setCreatedPaths,
   ])
 
+  const onCommitAllWithMessage = useCallback(() => {
+    if (!githubEnabled || saving || saveAllPaths.length === 0) return
+    openPrompt({
+      title: 'Commit all with message',
+      description: `Enter the commit message for ${saveAllPaths.length} changed ${saveAllPaths.length === 1 ? 'file' : 'files'}.`,
+      label: 'Commit message',
+      defaultValue: generatedBatchCommitMessage(saveAllPaths),
+      multiline: true,
+      submitLabel: 'Commit all',
+      onSubmit: (message) => {
+        setPromptOpen(false)
+        void onSaveAll(message)
+      },
+    })
+  }, [githubEnabled, saving, saveAllPaths, openPrompt, onSaveAll])
+
   // Discard uncommitted edits, resetting the editor back to the last-loaded
   // commit. Only meaningful once there is an actual commit to fall back to
   // (loadedSha !== null) — a never-committed file has no "last commit" state.
@@ -1731,7 +1790,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.code === 'KeyS' && !e.altKey) {
         e.preventDefault()
-        onSave()
+        if (githubEnabled && config.preferredCommitAction === 'custom') onCommitWithMessage()
+        else onSave()
       } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
@@ -1742,7 +1802,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [hasWorkspace, onSave, newDiagram])
+  }, [hasWorkspace, githubEnabled, config.preferredCommitAction, onSave, onCommitWithMessage, newDiagram])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
@@ -1955,6 +2015,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           canRestore={canRestore}
           localMode={localMode}
           onSave={() => void onSave()}
+          onCommitWithMessage={onCommitWithMessage}
           canSave={canSave}
           saving={saving}
           showSaveAll={showSaveAll}
@@ -1962,6 +2023,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
           saveHint={saveHint}
           isMac={isMac}
           onSaveAll={() => void onSaveAll()}
+          onCommitAllWithMessage={onCommitAllWithMessage}
           onOpenPath={openFromTree}
           dirty={dirty}
           openPath={openPath}

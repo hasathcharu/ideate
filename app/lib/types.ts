@@ -50,6 +50,9 @@ export type PngScale =
  * variants that follow the viewer's `prefers-color-scheme`. */
 export type SvgThemeMode = 'forced' | 'dynamic'
 
+/** Action used by the primary half of the GitHub commit split button. */
+export type PreferredCommitAction = 'generated' | 'custom'
+
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
   repo: RepoRef | null
@@ -72,6 +75,8 @@ export interface AppConfig {
   wrapLines: boolean
   /** Show the viewfinder (minimap) column beside the text editor. */
   minimap: boolean
+  /** Last commit action chosen from the split button. */
+  preferredCommitAction: PreferredCommitAction
   /** Which editor the unsaved scratch document uses (local mode, or before a
    *  file is opened). Persisted so a reload reopens the same surface. Mirrors
    *  `FileKind` (lib/tree.ts), spelled out here so the storage layer doesn't

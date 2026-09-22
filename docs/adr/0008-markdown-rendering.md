@@ -154,9 +154,12 @@ shifts the prose and re-fits every diagram in it each time the panel is toggled 
 and it sits at the top right, directly under the window controls, so the panel and
 the button that opens it are in the same place.
 
-The reading column has generous top padding beneath those controls. Programmatic
-scrolls in full-window reading view are immediate rather than smooth, so direct
-navigation does not make a long document feel as though it resists the reader.
+The reading column has generous top padding beneath those controls. Every
+programmatic scroll the preview makes — outline, editor line sync, find — is
+immediate rather than smooth, beside the editor as well as in the reading view,
+so direct navigation does not make a long document feel as though it resists the
+reader. `scrollRangeIntoView` takes no behaviour argument, because no caller
+wants an animated scroll.
 
 Filling the window covers the toolbar, so the reading view carries its own **Back**
 button (`onBack`/`backLabel`) for the link trail described above. Anything else the

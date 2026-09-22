@@ -68,6 +68,7 @@ import Minimap from './Minimap'
 import type { FileKind } from '@/lib/tree'
 import type { TextEdit } from '@/lib/agentProtocol'
 import { resolveEdits } from '@/lib/textEdit'
+import { Button } from '@/components/ui/button'
 
 /** A small stream tokenizer that gives Mermaid source enough structure to read
  *  well in the editor. Not a full grammar — just keywords, arrows, labels. */
@@ -1373,14 +1374,16 @@ export default function Editor({
                     : 'Changed since the last commit'}
               </span>
               <span className="flex items-center gap-1">
-                <button
+                <Button
+                  variant="ghost"
+                  size="xs"
                   type="button"
-                  className="flex items-center gap-1 rounded px-1.5 py-0.5 font-sans hover:bg-accent hover:text-accent-foreground"
+                  className="h-5 gap-1 px-1.5 font-sans"
                   onClick={revertPeek}
                   title="Discard this change and restore the committed text"
                 >
                   <Undo2 className="size-3" /> Revert
-                </button>
+                </Button>
                 <button
                   type="button"
                   className="rounded px-1 hover:bg-accent hover:text-accent-foreground"

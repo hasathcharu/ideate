@@ -34,7 +34,8 @@ export default function AuthButton({ user }: AuthButtonProps) {
 
   return (
     <>
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-accent"
@@ -53,7 +54,7 @@ export default function AuthButton({ user }: AuthButtonProps) {
         <span className="max-w-35 truncate text-sm text-muted-foreground">
           {user.login ?? user.name ?? 'Signed in'}
         </span>
-      </button>
+      </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-xs">

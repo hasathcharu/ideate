@@ -12,7 +12,7 @@ import { packetThemeVariables, type MermaidUserConfig } from './mermaidConfig'
 export type LayoutEngine = 'dagre' | 'elk'
 
 export const LAYOUT_ENGINES: ReadonlyArray<{ value: LayoutEngine; label: string }> = [
-  { value: 'dagre', label: 'Dagre (default)' },
+  { value: 'dagre', label: 'Dagre' },
   { value: 'elk', label: 'ELK' },
 ]
 

@@ -551,11 +551,12 @@ export async function commitFile(
   content: string,
   branch: string,
   sha?: string,
+  customMessage?: string,
 ): Promise<ActionResult<FileContent>> {
   const octokit = await getOctokit()
   if (!octokit) return err(UNAUTHENTICATED)
   try {
-    const message = `${sha ? 'Update' : 'Create'} ${path} via ${APP_NAME}`
+    const message = customMessage ?? `${sha ? 'Update' : 'Create'} ${path} via ${APP_NAME}`
     const { data } = await octokit.repos.createOrUpdateFileContents({
       owner,
       repo,

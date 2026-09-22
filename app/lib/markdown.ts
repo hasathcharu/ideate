@@ -545,7 +545,7 @@ function copyWrapper(markup: string, source: string, line: number | null): strin
   return (
     `<div class="md-copyable"${lineAttr} ${COPY_SOURCE_ATTR}="${escapeHtml(source)}">` +
     `<button type="button" class="md-copy-button" ${COPY_BUTTON_ATTR} ` +
-    `aria-label="Copy to clipboard" title="Copy">${COPY_ICON}${CHECK_ICON}</button>` +
+    `aria-label="Copy to clipboard">${COPY_ICON}${CHECK_ICON}</button>` +
     markup +
     `</div>`
   )

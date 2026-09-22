@@ -73,6 +73,7 @@ const DEFAULT_CONFIG: AppConfig = {
   sidebarWidth: 256,
   wrapLines: false,
   minimap: true,
+  preferredCommitAction: 'generated',
   scratchKind: 'mermaid',
   mcpOrigin: null,
   mermaidConfig: '',
@@ -106,6 +107,9 @@ export function loadConfig(): AppConfig {
       merged.svgTheme = DEFAULT_CONFIG.svgTheme
     }
     if (typeof merged.exportFrame !== 'boolean') merged.exportFrame = DEFAULT_CONFIG.exportFrame
+    if (merged.preferredCommitAction !== 'generated' && merged.preferredCommitAction !== 'custom') {
+      merged.preferredCommitAction = DEFAULT_CONFIG.preferredCommitAction
+    }
     // An MCP origin that no longer passes the TLS rule is dropped back to the default rather than
     // kept.
     if (typeof merged.mcpOrigin === 'string' && validateMcpOrigin(merged.mcpOrigin)) {

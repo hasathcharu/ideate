@@ -4,6 +4,7 @@ import { ChevronDown, ChevronRight, ImageIcon, Pencil, Plus, Trash2 } from 'luci
 import NewFileMenu from './NewFileMenu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { DIAGRAM_EXTENSIONS, fileKind, isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
@@ -196,11 +197,14 @@ function TreeItem(props: ItemProps) {
           </button>
           <div className="relative flex shrink-0 items-center">
             {dirty ? <UnsavedDot /> : null}
-            <NewFileMenu onSelect={(kind) => onNewFile(node.path, kind)} onUploadImage={() => onUploadImage(node.path)}>
+            <NewFileMenu
+              onSelect={(kind) => onNewFile(node.path, kind)}
+              onUploadImage={() => onUploadImage(node.path)}
+              triggerTooltip={`New file in ${node.name}`}
+            >
               <button
                 type="button"
                 className={ICON_ACTION_CLASS}
-                title={`New file in ${node.name}`}
                 aria-label={`New file in ${node.name}`}
               >
                 <Plus className="size-3.5" />
@@ -236,18 +240,22 @@ function TreeItem(props: ItemProps) {
           active && 'bg-primary/15 text-primary hover:bg-primary/20',
         )}
       >
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
-          style={pad}
-          title={node.path}
-          onClick={() => onOpenFile(node.path)}
-        >
-          {isRasterImageFile(node.path) || isSvgFile(node.path)
-            ? <ImageIcon className="size-3.5 shrink-0" />
-            : <FileKindIcon kind={fileKind(node.path)} />}
-          <span className="truncate">{node.name}</span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
+              style={pad}
+              onClick={() => onOpenFile(node.path)}
+            >
+              {isRasterImageFile(node.path) || isSvgFile(node.path)
+                ? <ImageIcon className="size-3.5 shrink-0" />
+                : <FileKindIcon kind={fileKind(node.path)} />}
+              <span className="truncate">{node.name}</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{node.path}</TooltipContent>
+        </Tooltip>
         <div className="relative flex shrink-0 items-center">
           {dirty ? <UnsavedDot /> : null}
           <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
@@ -265,13 +273,17 @@ function TreeItem(props: ItemProps) {
 /** Amber dot marking unsaved changes; overlays the action buttons, hidden on hover to reveal them. */
 function UnsavedDot() {
   return (
-    <span
-      className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
-      title="Unsaved changes"
-      aria-label="Unsaved changes"
-    >
-      <span className="size-1.5 rounded-full bg-amber-500" />
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
+          aria-label="Unsaved changes"
+        >
+          <span className="size-1.5 rounded-full bg-amber-500" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Unsaved changes</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -287,20 +299,24 @@ function IconAction({
   children: React.ReactNode
 }) {
   return (
-    <button
-      type="button"
-      className={cn(
-        ICON_ACTION_CLASS,
-        danger && 'hover:bg-destructive/15 hover:text-destructive',
-      )}
-      title={title}
-      aria-label={title}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            ICON_ACTION_CLASS,
+            danger && 'hover:bg-destructive/15 hover:text-destructive',
+          )}
+          aria-label={title}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{title}</TooltipContent>
+    </Tooltip>
   )
 }

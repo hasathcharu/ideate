@@ -19,6 +19,12 @@ surface, and no server-side PR/merge logic of any kind.
 
 ### Save All is one commit
 
+The commit split button has a persisted custom-message toggle. Its primary
+single-file action and its Commit All action both honor that preference. Custom
+message prompts start with the generated message selected. This UI preference
+does not alter conflict handling or the branch/ref rules below; Commit All still
+uses the same atomic multi-file commit path.
+
 Saving several changed files has to produce **one** commit, so `commitFiles`
 builds a single tree and a single commit and fast-forwards the ref with
 `force: false` — the same shape `renameFile` uses, and a normal ref advance
