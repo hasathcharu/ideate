@@ -31,6 +31,7 @@ import { RequestGate, WorkspaceStore, documentKey, workspaceKey, type DocumentId
 import {
   loadAgentLink,
   loadConfig,
+  rememberLastOpen,
   openDocumentStorage,
   saveAgentLink,
   saveConfig,
@@ -254,10 +255,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
     minimap: true,
     preferredCommitAction: 'generated',
     scratchKind: 'mermaid',
+    lastOpenPaths: {},
     mcpOrigin: null,
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
+  /** Whether the "reopen the last file" pass has finished deciding — see the effect
+   *  below `openFile`. Separate from `hydrated`, which only says config and storage
+   *  have been read, not that the document to show has been chosen. */
+  const [restoreSettled, setRestoreSettled] = useState(false)
   const configRef = useRef(config)
   const workspaceStoreRef = useRef<WorkspaceStore | null>(null)
   if (!workspaceStoreRef.current) workspaceStoreRef.current = new WorkspaceStore()
@@ -318,7 +324,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
     onSidebarDividerKeyDown,
   } = useResizableLayout(updateConfig)
 
-  const [text, setTextState] = useState(SAMPLE)
+  // Blank, not `SAMPLE`: in GitHub mode the start state is not knowable until the
+  // tree has loaded, and seeding the sample here painted it for the length of that
+  // fetch before `showRepoStartState` replaced it with an empty editor. The
+  // bootstrap below puts the sample in once there is an answer.
+  const [text, setTextState] = useState('')
   const liveTextRef = useRef(text)
   const workingRevisionRef = useRef(0)
   const openPathRef = useRef<string | null>(null)
@@ -330,7 +340,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     workspaceStore.edit(activeIdentityRef.current, next)
     setTextState(next)
   }, [workspaceStore])
-  const [baseline, setBaseline] = useState(SAMPLE)
+  const [baseline, setBaseline] = useState('')
   const [openPath, setOpenPathState] = useState<string | null>(null)
   const setOpenPath = useCallback((next: string | null) => {
     openRequestRef.current += 1
@@ -536,6 +546,36 @@ export default function AppShell({ user, mode }: AppShellProps) {
     workspaceStore,
   })
 
+  /**
+   * Whether the workspace's file list has actually answered — `localPaths` is null
+   * and `tree` is null until their respective reads land. Start-state affordances
+   * hang off this rather than off an empty path list, because an empty list is also
+   * what "not loaded yet" looks like, and hanging them off that flashed them on and
+   * then off for the length of the load.
+   */
+  const workspaceKnown = localMode ? localPaths !== null : tree !== null
+  const workspaceEmpty = workspaceKnown && repoFilePaths.length === 0
+  /**
+   * Nothing open, the workspace has files to open, and no parked scratch work to
+   * show — so the surface would otherwise be an empty mermaid document nobody asked
+   * for. It shows a prompt to pick or create a file instead.
+   *
+   * Gated on `text` as well so a scratch draft that *does* have content stays
+   * reachable: with the kind picker gone there would be no other way back to it.
+   */
+  const awaitingFileChoice =
+    hasWorkspace && workspaceKnown && !openPath && repoFilePaths.length > 0 && text.length === 0
+  /**
+   * Nothing about the document is decided yet, so the surface shows a skeleton
+   * instead of guessing. Three separate things have to land — config and storage
+   * (`hydrated`), the workspace's file list (`workspaceKnown`), and the last-file
+   * restore (`restoreSettled`) — and each used to paint its own intermediate
+   * answer on the way through: an empty untitled editor, then the pick-a-file
+   * prompt, then the document. Without a workspace there is no file list coming
+   * and nothing to wait for.
+   */
+  const surfaceLoading = hasWorkspace && (!hydrated || !workspaceKnown || !restoreSettled)
+
   /** Fetch the tree and swap it in once it arrives. */
   const treeRequestRef = useRef(new RequestGate())
   const refreshTree = useCallback(async (target: RepoRef) => {
@@ -588,6 +628,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // that fetch is slow or fails.
   const resetForRepoSwitch = useCallback(() => {
     resetHistory()
+    // The incoming workspace has its own last file and its own list to check it
+    // against, so the surface goes back to a skeleton rather than showing the
+    // outgoing repo's answer while the new tree is still in flight.
+    setRestoreSettled(false)
     updateConfig({ scratchKind: 'mermaid' })
     setOpenPath(null)
     setLoadedSha(null)
@@ -633,10 +677,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // The local store is the file system in local mode, so read it now rather than
     // leave `localPaths` null — every "does this file exist" question below waits on
     // it, the agent's included.
+    let hasLocalFiles = false
     if (!githubEnabled && storageReady.ok) {
       const local = await listLocalFilesResult()
-      if (local.status === 'ok') setLocalPaths(local.value)
-      else toast.error('Could not list files in browser storage.')
+      if (local.status === 'ok') {
+        hasLocalFiles = local.value.length > 0
+        setLocalPaths(local.value)
+      } else toast.error('Could not list files in browser storage.')
     }
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
@@ -658,13 +705,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
         if (restorable === null && data) showRepoStartState(data)
       })
     } else if (stored.scratchKind === 'excalidraw') {
+      // Not gated on `hasLocalFiles` like the two below: an empty scene is already
+      // the blank start state rather than a sample to learn from, and `''` is not a
+      // scene the canvas can parse.
       setText(restorable ?? EMPTY_SCENE)
       setBaseline(EMPTY_SCENE)
     } else if (stored.scratchKind === 'markdown') {
-      setText(restorable ?? NEW_MARKDOWN_TEMPLATE)
-      setBaseline(NEW_MARKDOWN_TEMPLATE)
+      const start = hasLocalFiles ? '' : NEW_MARKDOWN_TEMPLATE
+      setText(restorable ?? start)
+      setBaseline(start)
     } else if (restorable !== null && restorable !== SAMPLE) {
       setText(restorable)
+      setBaseline(SAMPLE)
+    } else if (hasLocalFiles) {
+      // A workspace that already has files opens blank so the user picks one from
+      // the tree, and only an empty one gets the starter example — the rule
+      // `showRepoStartState` applies to a connected repo. Local mode used to show
+      // the example however many files were saved in the browser.
+      setText('')
+      setBaseline('')
+    } else {
+      // Nothing saved and nothing to restore, so this is the empty start state the
+      // example is for. Stated here rather than seeded into `useState` so it lands
+      // only once the workspace has actually answered.
+      setText(SAMPLE)
       setBaseline(SAMPLE)
     }
     setHydrated(true)
@@ -712,6 +776,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
     })
     })()
   }, [hasWorkspace, savedPaths, repo, setCreatedPaths, setDirtyPaths])
+
+  /**
+   * Remember the file each workspace was last on, so a reload lands back on it.
+   * Recorded on the way *out* of a document rather than on open, so a path that
+   * turned out to be unreadable is never the one restored.
+   */
+  useEffect(() => {
+    if (!hydrated || !hasWorkspace || !openPath) return
+    const key = workspaceKey(currentWorkspace())
+    updateConfig({ lastOpenPaths: rememberLastOpen(configRef.current.lastOpenPaths, key, openPath) })
+  }, [hydrated, hasWorkspace, openPath, currentWorkspace, updateConfig])
 
   /** Verify the GitHub session before the user relies on it. */
   const sessionChecked = useRef(false)
@@ -925,6 +1000,30 @@ export default function AppShell({ user, mode }: AppShellProps) {
     },
     [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
   )
+
+  /**
+   * Reopen that file once the workspace's file list has arrived — the list is what
+   * says whether the remembered path still exists, and a path that has been renamed,
+   * deleted or committed away has to fall through to the pick-a-file prompt rather
+   * than to an error. Runs at most once per workspace, and never over a document the
+   * user or a draft recovery already put on screen.
+   */
+  const restoredWorkspaceRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!hydrated || !hasWorkspace || !workspaceKnown) return
+    const key = workspaceKey(currentWorkspace())
+    if (restoredWorkspaceRef.current === key) return
+    restoredWorkspaceRef.current = key
+    const remembered = configRef.current.lastOpenPaths[key]
+    // Settled either way, and only once the answer is known: the surface waits on
+    // this, so resolving it early is what let the empty editor and then the
+    // pick-a-file prompt paint before the restored document arrived.
+    if (openPathRef.current || !remembered || !repoFilePaths.includes(remembered)) {
+      setRestoreSettled(true)
+      return
+    }
+    void openFile(remembered).finally(() => setRestoreSettled(true))
+  }, [hydrated, hasWorkspace, workspaceKnown, repoFilePaths, currentWorkspace, openFile])
 
   /** Open a file the user picked from the tree — the start of a new trail. */
   const openFromTree = useCallback(
@@ -1224,12 +1323,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Reset the editor to a fresh scratch doc — used when the file being edited is
   // deleted out from under it. Baseline is left empty (not equal to the text) so
   // the doc reads as unsaved and Save is enabled, prompting for a new path.
+  /** Let go of the open document — the file under it has just been deleted.
+   *
+   *  Leaves the surface *empty* rather than seeding a starter template: with other
+   *  files still in the workspace, `awaitingFileChoice` then offers the pick-a-file
+   *  prompt, which is the same answer a reload would give. Handing back an untitled
+   *  scratch document instead made a delete look like it had opened something. */
   const detachEditor = useCallback(() => {
     updateConfig({ scratchKind: 'mermaid' })
     setOpenPath(null)
     setLoadedSha(null)
     setBaseline('')
-    setText(NEW_TEMPLATE)
+    setText('')
     setLinkTrail([])
   }, [updateConfig, setOpenPath, setText])
 
@@ -2152,6 +2257,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         localMode={localMode}
         kind={kind}
         onSwitchScratchKind={(nextKind) => void switchScratchKind(nextKind)}
+        workspaceEmpty={workspaceEmpty}
+        awaitingFileChoice={awaitingFileChoice}
+        loading={surfaceLoading}
         showDiff={showDiff}
         canDiff={canDiff}
         onToggleDiff={() => setShowDiff((value) => !value)}
@@ -2201,6 +2309,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
         markdownScrollTop={markdownScrollTop}
         onBack={goBack}
         assetKind={assetKind}
+        awaitingFileChoice={awaitingFileChoice}
+        loading={surfaceLoading}
       />
     </AppLayout>
   )

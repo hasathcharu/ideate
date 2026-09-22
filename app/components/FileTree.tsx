@@ -6,7 +6,7 @@ import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { DIAGRAM_EXTENSIONS, fileKind, isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
+import { fileKind, isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
 
 /** Shared styling for the hover-revealed row actions. Extracted so the "new file"
@@ -101,14 +101,10 @@ export default function FileTree({
   if (nodes.length === 0) {
     return (
       <p className="px-2 py-3 text-sm leading-relaxed text-muted-foreground">
-        No{' '}
-        {DIAGRAM_EXTENSIONS.map((ext, i) => (
-          <span key={ext}>
-            {i > 0 ? ' / ' : ''}
-            <code>{ext}</code>
-          </span>
-        ))}{' '}
-        files{' '}
+        {/* Deliberately not a list of the nine accepted extensions: an empty tree is
+            not the moment to enumerate them, and the new-file menu and the path
+            prompt's own validation message both name them where they apply. */}
+        No files{' '}
         {branch ? (
           <>
             found on <code>{branch}</code>

@@ -10,7 +10,8 @@
 
 **IndexedDB stores document content**: local-mode saved files in `local-files` and uncommitted drafts in `drafts`. **localStorage stores only app config**
 (selected repo, active theme, export prefs, scratch-document kind, preferred commit action, editor
-line-wrap and viewfinder, **and the Agent Link service origin**). Never
+line-wrap and viewfinder, the last file open in each workspace, **and the Agent Link service
+origin**). Never
 tokens/secrets. Two pieces of Agent Link state are deliberately *not* in
 `AppConfig` and live in `sessionStorage` instead, because config is shared by
 every tab on the origin:

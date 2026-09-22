@@ -75,8 +75,29 @@ const DEFAULT_CONFIG: AppConfig = {
   minimap: true,
   preferredCommitAction: 'generated',
   scratchKind: 'mermaid',
+  lastOpenPaths: {},
   mcpOrigin: null,
   mermaidConfig: '',
+}
+
+/** How many workspaces' last-open files are remembered, most recent first. Config is
+ *  a single localStorage value, and every repo *and branch* a user visits is its own
+ *  workspace key, so this map is the one part of it that grows on its own. */
+export const LAST_OPEN_LIMIT = 20
+
+/** Record `path` as the file `workspace` was last on — newest first, and capped. */
+export function rememberLastOpen(
+  paths: Readonly<Record<string, string>>,
+  workspace: string,
+  path: string,
+): Record<string, string> {
+  const next: Record<string, string> = { [workspace]: path }
+  for (const [key, value] of Object.entries(paths)) {
+    if (key === workspace) continue
+    if (Object.keys(next).length >= LAST_OPEN_LIMIT) break
+    next[key] = value
+  }
+  return next
 }
 
 export function loadConfig(): AppConfig {
@@ -115,6 +136,11 @@ export function loadConfig(): AppConfig {
     if (typeof merged.mcpOrigin === 'string' && validateMcpOrigin(merged.mcpOrigin)) {
       merged.mcpOrigin = null
     }
+    // Anything but a map of non-empty strings here would reach `openFile` as a path,
+    // so it is filtered rather than trusted — the same defensive shape as above.
+    merged.lastOpenPaths = isRecordOfStrings(merged.lastOpenPaths)
+      ? Object.fromEntries(Object.entries(merged.lastOpenPaths).slice(0, LAST_OPEN_LIMIT))
+      : {}
     // A build that stored `agentLink` in here left a stray key behind. Drop it, or
     // an old `true` would keep arming tabs that never asked — the exact behaviour
     // moving it to sessionStorage exists to stop.
@@ -123,6 +149,12 @@ export function loadConfig(): AppConfig {
   } catch {
     return { ...DEFAULT_CONFIG }
   }
+}
+
+/** Whether a stored value is a plain object whose values are all non-empty strings. */
+function isRecordOfStrings(value: unknown): value is Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  return Object.values(value).every((entry) => typeof entry === 'string' && entry !== '')
 }
 
 /** Whether a stored value is a usable {@link PngScale}. */
