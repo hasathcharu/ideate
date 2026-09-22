@@ -196,3 +196,31 @@ describe('document storage boundary', () => {
     await expect(unavailable.writeDraftResult('a', 'only copy')).resolves.toEqual({ ok: false, reason: 'unavailable' })
   })
 })
+
+describe('last-open file memory', () => {
+  it('keys by workspace, so a path from one repo cannot reopen in another', () => {
+    const paths = storage.rememberLastOpen({}, 'owner/a@main', 'README.md')
+    const both = storage.rememberLastOpen(paths, 'owner/b@main', 'docs/spec.mmd')
+    expect(both).toEqual({ 'owner/b@main': 'docs/spec.mmd', 'owner/a@main': 'README.md' })
+  })
+
+  it('moves the touched workspace to the front and replaces its path', () => {
+    let paths = storage.rememberLastOpen({}, 'w1', 'a.mmd')
+    paths = storage.rememberLastOpen(paths, 'w2', 'b.mmd')
+    paths = storage.rememberLastOpen(paths, 'w1', 'c.mmd')
+    expect(Object.keys(paths)).toEqual(['w1', 'w2'])
+    expect(paths.w1).toBe('c.mmd')
+  })
+
+  // Config is one localStorage value and every branch is its own workspace key, so
+  // this map is the only part of it that would grow on its own.
+  it('caps the map, dropping the least recently used workspace', () => {
+    let paths: Record<string, string> = {}
+    for (let i = 0; i < storage.LAST_OPEN_LIMIT + 5; i++) {
+      paths = storage.rememberLastOpen(paths, `w${i}`, `${i}.mmd`)
+    }
+    expect(Object.keys(paths)).toHaveLength(storage.LAST_OPEN_LIMIT)
+    expect(paths[`w${storage.LAST_OPEN_LIMIT + 4}`]).toBe(`${storage.LAST_OPEN_LIMIT + 4}.mmd`)
+    expect(paths.w0).toBeUndefined()
+  })
+})

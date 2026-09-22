@@ -83,6 +83,16 @@ export interface AppConfig {
    *  depend on the tree module. */
   scratchKind: 'mermaid' | 'markdown' | 'excalidraw'
   /**
+   * The file each workspace was last working on, keyed by `workspaceKey`
+   * (lib/workspaceStore), so a reload reopens it rather than dropping the user on
+   * an empty scratch document. Keyed rather than a single path because config is
+   * shared by every workspace on the origin, and a path remembered from one repo
+   * can exist in another — `README.md` would reopen the wrong file. Bounded on
+   * write: a user with many branches would otherwise grow one localStorage value
+   * without limit.
+   */
+  lastOpenPaths: Record<string, string>
+  /**
    * Origin of the Agent Link service this deployment's tabs dial, overriding `DEFAULT_MCP_ORIGIN`
    * (lib/config.ts).
    */

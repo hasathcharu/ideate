@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select'
 import { LAYOUT_ENGINES } from '@/lib/mermaid'
 import { setLayoutInYaml } from '@/lib/mermaidConfig'
+import { Skeleton } from '@/components/ui/skeleton'
 import { THEME_PRESETS } from '@/lib/themes'
 import type { AgentLink } from '@/lib/agentLink'
 import type { AppConfig } from '@/lib/types'
@@ -28,6 +29,16 @@ export interface DocumentToolbarProps {
   localMode: boolean
   kind: FileKind
   onSwitchScratchKind: (kind: FileKind) => void
+  /** The workspace has answered *and* holds no files. The scratch-kind picker is a
+   *  start-state affordance, so it appears only then — never on a workspace with
+   *  files, and never during the load that would otherwise flash it on and off. */
+  workspaceEmpty: boolean
+  /** No file open and no scratch document behind the surface either, so the usual
+   *  "untitled (unsaved)" would name a document that isn't there. */
+  awaitingFileChoice: boolean
+  /** Which document to show is still being resolved — see `surfaceLoading`. Until it
+   *  is, this bar has no name to print and no kind to offer. */
+  loading: boolean
   showDiff: boolean
   canDiff: boolean
   onToggleDiff: () => void
@@ -55,6 +66,9 @@ export default function DocumentToolbar({
   localMode,
   kind,
   onSwitchScratchKind,
+  workspaceEmpty,
+  awaitingFileChoice,
+  loading,
   showDiff,
   canDiff,
   onToggleDiff,
@@ -81,13 +95,22 @@ export default function DocumentToolbar({
           <ArrowLeft />
         </Button>
       ) : null}
-      {hasWorkspace ? (
-        <span>{openPath ?? (localMode ? 'untitled (unsaved)' : 'untitled (unsaved local draft)')}</span>
+      {loading ? (
+        <Skeleton className="h-3.5 w-40" />
+      ) : hasWorkspace ? (
+        <span>
+          {openPath ??
+            (awaitingFileChoice
+              ? 'No file open'
+              : localMode
+                ? 'untitled (unsaved)'
+                : 'untitled (unsaved local draft)')}
+        </span>
       ) : (
         <span>Connect a repository to browse and commit your diagrams.</span>
       )}
-      {localMode ? <span className="text-muted-foreground/70">· local mode, files stay in this browser</span> : null}
-      {!openPath ? (
+      {localMode && !loading ? <span className="text-muted-foreground/70">· local mode, files stay in this browser</span> : null}
+      {!loading && !openPath && workspaceEmpty ? (
         <div className="ml-1 flex items-center gap-0.5 rounded-md border p-0.5">
           <Button size="sm" variant={kind === 'markdown' ? 'secondary' : 'ghost'} className="h-6 gap-1 px-2 text-xs" onClick={() => onSwitchScratchKind('markdown')}>
             <MarkdownIcon className="size-3" /> Markdown

@@ -22,14 +22,51 @@ without a selected repository has neither workspace.
 With a file open, its extension picks the editing surface. With nothing open,
 there is no extension to read, so the user
 chooses via a Diagram/Markdown/Canvas toggle backed by `AppConfig.scratchKind`.
+
+**That toggle is a start-state affordance, offered only while the workspace is
+empty** (`workspaceEmpty` in `AppShell`). A workspace that already holds files is
+one where the answer to "what am I editing" is a file in the tree, not a kind of
+untitled document. It hangs off *"the file list has answered and is empty"*, never
+off an empty path list alone: an empty list is also what "still loading" looks
+like, and gating on that flashed the toggle on and then off for the length of the
+load.
+
+For the same reason, a workspace with files and nothing open does **not** fall back
+to an untitled mermaid document. `awaitingFileChoice` puts a **No file open** prompt
+on the surface instead, pointing at the sidebar and its "+". It is additionally
+gated on the scratch document being empty, so parked scratch work stays reachable —
+with the kind toggle gone there would be no other route back to it.
+
+### The last file open is remembered per workspace
+
+`AppConfig.lastOpenPaths` maps a `workspaceKey` to the path that workspace was last
+editing, so a reload lands back on the file the user was working on rather than on
+the prompt above. It is **keyed by workspace, not a single path**, because config is
+shared by every workspace on the origin and a bare path from one repo can exist in
+another — a remembered `README.md` would reopen the wrong file after a repo switch.
+
+Three properties hold it together:
+
+- **Restoration waits for the file list, and verifies against it.** A path that has
+  been renamed, deleted or committed away must fall through to the prompt, not to a
+  failed read. It runs at most once per workspace and never over a document that the
+  user or the draft recovery already put on screen.
+- **It is recorded from the open document, not from the act of opening**, so a path
+  that turned out to be unreadable is never the one restored next time.
+- **The map is bounded** (`LAST_OPEN_LIMIT`, newest first). Every repo *and branch*
+  is its own workspace key, so this is the only part of a single localStorage value
+  that would otherwise grow without limit.
 **Each kind gets its own IndexedDB draft slot** (`SCRATCH_DOC_ID` /
 `SCRATCH_MARKDOWN_DOC_ID` / `SCRATCH_SCENE_DOC_ID`, resolved through
 `scratchDocIdFor`), so toggling parks the current work instead of overwriting it
 with content the other surface can't read. Route every scratch-slot lookup through
 `scratchDocIdFor` rather than re-deriving it — a fourth kind must not be able to
-silently land in another kind's slot. Anything that forces mermaid content into the
+silently land in another kind's slot. Anything that puts the user back on the
 scratch doc (`showRepoStartState`, `resetForRepoSwitch`, `detachEditor`) also
-resets `scratchKind` to `'mermaid'`.
+resets `scratchKind` to `'mermaid'`. None of them seeds content into it: each
+leaves the surface empty and lets the rules below decide what belongs there —
+`detachEditor` in particular runs after a **delete**, and handing back a starter
+template there made the delete look like it had opened something.
 
 ### Creating a file: only the name is typed
 
