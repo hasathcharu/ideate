@@ -5,6 +5,8 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Eye,
+  EyeOff,
   Loader2,
   OctagonAlert,
   Plug,
@@ -195,6 +197,8 @@ function PairingCode({
   onRegenerate: () => void
   disabled: boolean
 }) {
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => setRevealed(false), [code])
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex items-center justify-between gap-2">
@@ -215,8 +219,19 @@ function PairingCode({
           ref={codeRef}
           className="min-w-0 flex-1 overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-xl tracking-widest text-foreground"
         >
-          {code || '········'}
+          {code ? (revealed ? code : '••••-••••') : '····-····'}
         </code>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="mt-0.5 flex-none"
+          onClick={() => setRevealed((value) => !value)}
+          disabled={!code}
+          aria-label={revealed ? 'Hide pairing code' : 'Show pairing code'}
+          title={revealed ? 'Hide pairing code' : 'Show pairing code'}
+        >
+          {revealed ? <EyeOff /> : <Eye />}
+        </Button>
         <CopyButton text={code} target={codeRef} label="pairing code" />
       </div>
       {/* A second copy affordance rather than a second thing to read: the code row

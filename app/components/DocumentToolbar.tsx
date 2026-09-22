@@ -22,7 +22,7 @@ import type { FileKind } from '@/lib/tree'
 
 export interface DocumentToolbarProps {
   hasWorkspace: boolean
-  linkTrail: readonly string[]
+  linkTrail: ReadonlyArray<{ path: string; scrollTop: number }>
   onBack: () => void
   openPath: string | null
   localMode: boolean
@@ -72,7 +72,7 @@ export default function DocumentToolbar({
   agentLink,
   onOpenAgentLink,
 }: DocumentToolbarProps) {
-  const backPath = linkTrail[linkTrail.length - 1]
+  const backPath = linkTrail[linkTrail.length - 1]?.path
 
   return (
     <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">

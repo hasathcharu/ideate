@@ -94,7 +94,7 @@ interface AgentLinkControllerOptions {
   setBaseline: (content: string) => void
   setCreatedPaths: Dispatch<SetStateAction<ReadonlySet<string>>>
   setDirtyPaths: Dispatch<SetStateAction<ReadonlySet<string>>>
-  setLinkTrail: Dispatch<SetStateAction<string[]>>
+  clearLinkTrail: () => void
   openFile: (path: string) => Promise<boolean>
   flushOutgoingDraft: () => Promise<boolean>
 }
@@ -235,7 +235,7 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
     setBaseline,
     setCreatedPaths,
     setDirtyPaths,
-    setLinkTrail,
+    clearLinkTrail,
     openFile,
     flushOutgoingDraft,
   } = options
@@ -446,7 +446,7 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
   }
 
   const activateCreated = (path: string, body: string) => {
-    setLinkTrail([])
+    clearLinkTrail()
     setCreatedPaths((prev) => withPath(prev, path))
     setOpenPath(path)
     setLoadedSha(null)
@@ -751,7 +751,7 @@ export function useAgentLinkController(options: AgentLinkControllerOptions): Age
       if (!repoFilePaths.includes(path)) {
         throw new Error(`No such file in ${workspaceLabel}: ${path}. Call ideate_list_files to see what is there.`)
       }
-      setLinkTrail([])
+      clearLinkTrail()
       if (!await openFile(path)) {
         throw new Error(`Could not open ${path}; the workspace changed or its content could not be loaded.`)
       }

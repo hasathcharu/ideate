@@ -117,7 +117,9 @@ relative links and images the way GitHub does:
   relative path, an "open in new tab" would navigate to a 404 *under `/editor`*,
   which is why a click is `preventDefault`ed outright when no repo is connected.
 - **Following a link is undoable.** `AppShell` keeps a `linkTrail` of the files a
-  link was followed *from*, and shows a Back button while it is non-empty. Only
+  link was followed *from* together with each reading-pane scroll offset, and
+  shows a Back button while it is non-empty. A followed destination starts at the
+  top; Back restores the previous document's offset. Only
   link navigation pushes onto it — opening a file from the tree clears it, because
   a Back button that then jumped to an unrelated file is worse than none.
 - **Resting on such a link previews the file** (`components/FileHoverCard.tsx`):
@@ -128,6 +130,9 @@ relative links and images the way GitHub does:
   and its fonts (rule 8) for a hover preview. Scrolling **re-measures** the card's
   anchor rather than dismissing it: dismissing while the pointer still rested on
   the link left the next mouse event free to schedule it again, which flickers.
+  The card updates its fixed coordinates directly on an animation frame; putting
+  the rect in `MarkdownPreview` state would reconcile the whole document on every
+  scroll event.
 - A **relative image** is rewritten to raw.githubusercontent.com, since a
   repo-relative `src` would otherwise resolve against the app's own origin.
 - `#anchor` links scroll the reading pane, using the heading slugs.
@@ -142,6 +147,10 @@ panel **floats over** the document rather than taking a column of it — a colum
 shifts the prose and re-fits every diagram in it each time the panel is toggled —
 and it sits at the top right, directly under the window controls, so the panel and
 the button that opens it are in the same place.
+
+The reading column has generous top padding beneath those controls. Programmatic
+scrolls in full-window reading view are immediate rather than smooth, so direct
+navigation does not make a long document feel as though it resists the reader.
 
 Filling the window covers the toolbar, so the reading view carries its own **Back**
 button (`onBack`/`backLabel`) for the link trail described above. Anything else the

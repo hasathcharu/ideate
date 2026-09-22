@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
 import { APP_NAME } from '@/lib/config'
-import { cn } from '@/lib/utils'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import type { FileKind } from '@/lib/tree'
 import type { AppConfig, RepoRef, SessionUser } from '@/lib/types'
@@ -115,11 +114,11 @@ export default function AppHeader({
           {APP_NAME}
         </Link>
         {githubEnabled ? (
-          <div className="ml-1 flex items-center rounded-full border border-border bg-background dark:border-input dark:bg-input/30">
+          <div className="ml-1 flex items-center gap-1 rounded-full border border-border bg-background p-0.5 dark:border-input dark:bg-input/30">
             <Button
               size="sm"
               variant="ghost"
-              className={cn('rounded-full', repo && 'rounded-r-none pr-1.5')}
+              className="rounded-full"
               onClick={onOpenRepoPicker}
               title={repo ? 'Switch repository' : 'Connect a repository'}
             >
@@ -128,9 +127,9 @@ export default function AppHeader({
             </Button>
             {repo ? (
               <Button
-                size="sm"
+                size="icon-sm"
                 variant="ghost"
-                className="rounded-full rounded-l-none px-2"
+                className="size-7 shrink-0 rounded-full"
                 onClick={() =>
                   window.open(
                     `https://github.com/${repo.owner}/${repo.name}/tree/${encodeURIComponent(repo.branch)}`,
@@ -147,7 +146,7 @@ export default function AppHeader({
           </div>
         ) : null}
         {githubEnabled && repo ? (
-          <Button size="sm" variant="outline" className="rounded-full" onClick={onOpenBranchPicker}>
+          <Button size="sm" variant="outline" className="h-8 rounded-full" onClick={onOpenBranchPicker}>
             <GitBranch /> {repo.branch}
           </Button>
         ) : null}

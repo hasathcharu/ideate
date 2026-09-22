@@ -318,7 +318,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // Only link navigation pushes: picking a file in the tree is a fresh start, not
   // a step in a trail, and a Back button that then jumped somewhere unrelated
   // would be worse than none.
-  const [linkTrail, setLinkTrail] = useState<string[]>([])
+  const [linkTrail, setLinkTrail] = useState<Array<{ path: string; scrollTop: number }>>([])
+  const [markdownScrollTop, setMarkdownScrollTop] = useState(0)
+  const clearLinkTrail = useCallback(() => setLinkTrail([]), [])
 
   const [tree, setTree] = useState<TreeResult | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
@@ -609,9 +611,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const draft = storageReady.ok
       ? await readDraftResult(scratchDocIdFor(stored.scratchKind))
       : { status: 'unavailable' as const }
-    if (storageReady.ok && (draft.status === 'invalid' || draft.status === 'unavailable')) {
-      toast.error(`Could not restore the scratch draft: ${draft.status}.`)
-    }
     const restorable = draft.status === 'ok' && draft.value.content.trim().length > 0
       ? draft.value.content : null
 
@@ -895,6 +894,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const openFromTree = useCallback(
     (path: string) => {
       setLinkTrail([])
+      setMarkdownScrollTop(0)
       void openFile(path)
     },
     [openFile],
@@ -902,10 +902,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   /** Open a file by following a link inside the open document. */
   const openLinkedFile = useCallback(
-    (path: string) => {
+    (path: string, scrollTop: number) => {
       if (path === openPath) return
-      setLinkTrail((prev) => (openPath ? [...prev, openPath] : prev))
-      void openFile(path)
+      void openFile(path).then((opened) => {
+        if (!opened) return
+        setLinkTrail((prev) => (openPath ? [...prev, { path: openPath, scrollTop }] : prev))
+        setMarkdownScrollTop(0)
+      })
     },
     [openFile, openPath],
   )
@@ -913,8 +916,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const goBack = useCallback(() => {
     const target = linkTrail[linkTrail.length - 1]
     if (!target) return
-    setLinkTrail(linkTrail.slice(0, -1))
-    void openFile(target)
+    void openFile(target.path).then((opened) => {
+      if (!opened) return
+      setLinkTrail(linkTrail.slice(0, -1))
+      setMarkdownScrollTop(target.scrollTop)
+    })
   }, [linkTrail, openFile])
 
   const agentController = useAgentLinkController({
@@ -957,7 +963,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setBaseline,
     setCreatedPaths,
     setDirtyPaths,
-    setLinkTrail,
+    clearLinkTrail,
     openFile,
     flushOutgoingDraft,
   })
@@ -1977,8 +1983,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         onRevealEditor={revealInEditor}
         config={appliedConfig}
         repo={repo}
-        onOpenLinkedFile={(path) => void openLinkedFile(path)}
+        onOpenLinkedFile={openLinkedFile}
         linkTrail={linkTrail}
+        markdownScrollTop={markdownScrollTop}
         onBack={goBack}
       />
     </AppLayout>

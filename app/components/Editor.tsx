@@ -94,6 +94,77 @@ const mermaidLanguage = StreamLanguage.define<unknown>({
   },
 })
 
+type CommentTokens = { line?: string; block?: { open: string; close: string } }
+
+/** Comment syntax for fenced languages we can identify without loading a full
+ * parser for every language Markdown may contain. CodeMirror's native comment
+ * command reads this language data, so selections, indentation, and toggling
+ * remain its responsibility. */
+const FENCE_COMMENT_TOKENS: Record<string, CommentTokens> = {
+  javascript: { line: '//', block: { open: '/*', close: '*/' } },
+  js: { line: '//', block: { open: '/*', close: '*/' } },
+  jsx: { line: '//', block: { open: '/*', close: '*/' } },
+  typescript: { line: '//', block: { open: '/*', close: '*/' } },
+  ts: { line: '//', block: { open: '/*', close: '*/' } },
+  tsx: { line: '//', block: { open: '/*', close: '*/' } },
+  java: { line: '//', block: { open: '/*', close: '*/' } },
+  c: { line: '//', block: { open: '/*', close: '*/' } },
+  cpp: { line: '//', block: { open: '/*', close: '*/' } },
+  csharp: { line: '//', block: { open: '/*', close: '*/' } },
+  cs: { line: '//', block: { open: '/*', close: '*/' } },
+  go: { line: '//', block: { open: '/*', close: '*/' } },
+  rust: { line: '//', block: { open: '/*', close: '*/' } },
+  swift: { line: '//', block: { open: '/*', close: '*/' } },
+  kotlin: { line: '//', block: { open: '/*', close: '*/' } },
+  css: { block: { open: '/*', close: '*/' } },
+  scss: { line: '//', block: { open: '/*', close: '*/' } },
+  less: { line: '//', block: { open: '/*', close: '*/' } },
+  html: { block: { open: '<!--', close: '-->' } },
+  xml: { block: { open: '<!--', close: '-->' } },
+  svg: { block: { open: '<!--', close: '-->' } },
+  python: { line: '#' },
+  py: { line: '#' },
+  ruby: { line: '#' },
+  rb: { line: '#' },
+  bash: { line: '#' },
+  sh: { line: '#' },
+  shell: { line: '#' },
+  zsh: { line: '#' },
+  yaml: { line: '#' },
+  yml: { line: '#' },
+  toml: { line: '#' },
+  r: { line: '#' },
+  perl: { line: '#' },
+  sql: { line: '--', block: { open: '/*', close: '*/' } },
+  lua: { line: '--', block: { open: '--[[', close: ']]' } },
+  clojure: { line: ';' },
+  lisp: { line: ';' },
+  scheme: { line: ';' },
+  haskell: { line: '--', block: { open: '{-', close: '-}' } },
+  elm: { line: '--', block: { open: '{-', close: '-}' } },
+}
+
+const fenceCommentLanguages = new Map<string, StreamLanguage<unknown>>([
+  ['mermaid', mermaidLanguage],
+])
+
+function fencedCodeLanguage(info: string) {
+  const name = info.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? ''
+  const existing = fenceCommentLanguages.get(name)
+  if (existing) return existing
+  const commentTokens = FENCE_COMMENT_TOKENS[name]
+  if (!commentTokens) return null
+  const language = StreamLanguage.define<unknown>({
+    languageData: { commentTokens },
+    token(stream) {
+      stream.skipToEnd()
+      return null
+    },
+  })
+  fenceCommentLanguages.set(name, language)
+  return language
+}
+
 /**
  * Syntax colors reference the shadcn design tokens (`--primary`, `--foreground`,
  * `--muted-foreground`) defined statically in globals.css, so highlighting stays consistent with
@@ -223,7 +294,12 @@ function linkTargetCompletions(context: CompletionContext): CompletionResult | n
 /* Languages                                                           */
 /* ------------------------------------------------------------------ */
 
-const markdownSupport = markdownLanguage()
+const markdownSupport = markdownLanguage({
+  // A fenced block is source in its declared language even though its container
+  // is Markdown. Supplying nested comment data makes Mod-/ choose that
+  // language's syntax instead of the Markdown default.
+  codeLanguages: fencedCodeLanguage,
+})
 
 /** Markdown, plus the link-target completions — registered as *language* data so
  *  the source is only consulted while editing markdown, and mermaid source is
@@ -650,7 +726,10 @@ function editorTheme(dark: boolean) {
         lineHeight: '1.6',
       },
       '.cm-content': { padding: '12px 0', caretColor: 'var(--primary)' },
-      '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--primary)' },
+      '.cm-cursor, .cm-dropCursor': {
+        borderLeftColor: 'var(--primary)',
+        borderLeftWidth: '2px',
+      },
       // The gutter sits on the editor's own surface, like VS Code's. On
       // `--secondary` (a mid-tone from the diagram palette) the line numbers were
       // muted text on a surface `--muted-foreground` is not measured against — as

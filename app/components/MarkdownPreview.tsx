@@ -75,7 +75,10 @@ export interface MarkdownPreviewProps {
   /** Open another file from the repo in the editor — what a click on an in-repo
    *  link does. Omitted (e.g. the read-only history preview) leaves such links
    *  pointing at their GitHub page. */
-  onOpenFile?: (path: string) => void
+  onOpenFile?: (path: string, scrollTop: number) => void
+  /** Offset to apply when a link navigation changes `path`: zero when moving
+   *  forward, or the saved position when returning. */
+  navigationScrollTop?: number
   /** Go back to the file this one was opened from. Present only when there is
    *  somewhere to go back to; the reading view needs its own copy of this because
    *  filling the window covers the toolbar that otherwise carries it. */
@@ -140,7 +143,7 @@ const FIND_SCROLL_OFFSET = 96
 /** An in-repo link the pointer is resting on. */
 interface HoverTarget {
   path: string
-  rect: DOMRect
+  anchor: HTMLElement
 }
 
 /** Rendered markdown, beside the editor exactly like the diagram preview. */
@@ -151,6 +154,7 @@ export default function MarkdownPreview({
   path = null,
   repo = null,
   onOpenFile,
+  navigationScrollTop = 0,
   onBack,
   backLabel,
   onRevealSource,
@@ -201,6 +205,12 @@ export default function MarkdownPreview({
    *  matching the table of contents would double every heading hit. */
   const documentRef = useRef<HTMLDivElement | null>(null)
 
+  // A linked document starts at the top. Returning through the link trail
+  // supplies the position that document had before the reader left it.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = navigationScrollTop
+  }, [path, navigationScrollTop])
+
   /* ---------------------------------------------------------------- */
   /* Find in document (full-window reading view)                       */
   /* ---------------------------------------------------------------- */
@@ -247,8 +257,10 @@ export default function MarkdownPreview({
     const active = ranges[findIndex] ?? null
     paintFindHighlights(ranges, active)
     const container = scrollRef.current
-    if (container && active) scrollRangeIntoView(container, active, FIND_SCROLL_OFFSET)
-  }, [findIndex, findCount])
+    if (container && active) {
+      scrollRangeIntoView(container, active, FIND_SCROLL_OFFSET, isMaximized ? 'auto' : 'smooth')
+    }
+  }, [findIndex, findCount, isMaximized])
 
   // Highlights are global to the page, so they have to go when this pane stops
   // showing them — closing the reading view included, which `closeFind` is not
@@ -318,9 +330,9 @@ export default function MarkdownPreview({
       container.getBoundingClientRect().top +
       container.scrollTop -
       16
-    container.scrollTo({ top, behavior: 'smooth' })
+    container.scrollTo({ top, behavior: isMaximized ? 'auto' : 'smooth' })
     setActiveHeading(id)
-  }, [])
+  }, [isMaximized])
 
   /* ---------------------------------------------------------------- */
   /* Scroll sync with the editor                                       */
@@ -342,7 +354,7 @@ export default function MarkdownPreview({
           container.getBoundingClientRect().top +
           container.scrollTop -
           SYNC_SCROLL_OFFSET
-        container.scrollTo({ top, behavior: 'smooth' })
+        container.scrollTo({ top, behavior: isMaximized ? 'auto' : 'smooth' })
         // A moment of emphasis, because a smooth scroll that lands mid-document
         // leaves no clue which of the blocks now on screen was the one asked for.
         target.classList.remove('md-sync-flash')
@@ -354,7 +366,7 @@ export default function MarkdownPreview({
         window.setTimeout(() => target.classList.remove('md-sync-flash'), 1200)
       },
     }),
-    [],
+    [isMaximized],
   )
 
   // Double-clicking a block asks the editor for the line it was written on.
@@ -453,30 +465,6 @@ export default function MarkdownPreview({
     }
   }, [clearHoverTimer, cancelClose])
 
-  // The card is placed from the link's screen rect, so scrolling has to move it.
-  // Re-measuring rather than dismissing matters for more than smoothness: closing
-  // it on scroll while the pointer still rests on the link left the next mouse
-  // event free to schedule it all over again, which is a flicker loop.
-  useEffect(() => {
-    if (!hover) return
-    const container = scrollRef.current
-    const remeasure = () => {
-      const link = hoveredLinkRef.current
-      if (!link?.isConnected) {
-        closeHover()
-        return
-      }
-      const rect = link.getBoundingClientRect()
-      setHover((prev) =>
-        prev && (prev.rect.top !== rect.top || prev.rect.left !== rect.left)
-          ? { ...prev, rect }
-          : prev,
-      )
-    }
-    container?.addEventListener('scroll', remeasure, { passive: true })
-    return () => container?.removeEventListener('scroll', remeasure)
-  }, [hover, closeHover])
-
   const onPointerOver = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>) => {
       if (!repo) return
@@ -500,6 +488,7 @@ export default function MarkdownPreview({
       // whatever is on screen or already on its way is still the right preview.
       if (linkPath === hoveredPathRef.current) {
         hoveredLinkRef.current = link
+        setHover((prev) => prev && prev.anchor !== link ? { ...prev, anchor: link } : prev)
         cancelClose()
         return
       }
@@ -513,7 +502,7 @@ export default function MarkdownPreview({
       hoveredPathRef.current = linkPath
       hoverTimerRef.current = window.setTimeout(() => {
         hoverTimerRef.current = null
-        setHover({ path: linkPath, rect: link.getBoundingClientRect() })
+        setHover({ path: linkPath, anchor: link })
       }, HOVER_DELAY_MS)
     },
     [repo, scheduleClose, cancelClose, clearHoverTimer, hide],
@@ -562,7 +551,7 @@ export default function MarkdownPreview({
       if (!modified && onOpenFile && isDiagramFile(repoPath)) {
         e.preventDefault()
         closeHover()
-        onOpenFile(repoPath)
+        onOpenFile(repoPath, scrollRef.current?.scrollTop ?? 0)
         return
       }
       // Nothing here can open the file: with a repo connected the `href` is its
@@ -638,7 +627,7 @@ export default function MarkdownPreview({
           ) : (
             <div
               ref={documentRef}
-              className="mx-auto max-w-3xl px-8 py-6"
+              className={cn('mx-auto max-w-3xl px-8 pb-10', isMaximized ? 'pt-24' : 'pt-6')}
               onClick={onClick}
               onDoubleClick={onDoubleClick}
               onMouseOver={onPointerOver}
@@ -794,7 +783,7 @@ export default function MarkdownPreview({
         <FileHoverCard
           repo={repo}
           path={hover.path}
-          anchor={hover.rect}
+          anchor={hover.anchor}
           config={config}
           onPointerEnter={cancelClose}
           onPointerLeave={scheduleClose}

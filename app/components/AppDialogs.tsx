@@ -172,6 +172,7 @@ export default function AppDialogs({
         target={deleteTarget}
         fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
         branch={repo?.branch ?? ''}
+        localMode={mode === 'local'}
         busy={deleteBusy}
         onConfirm={onConfirmDelete}
       />

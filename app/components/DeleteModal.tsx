@@ -19,6 +19,7 @@ export interface DeleteModalProps {
   /** How many diagram files the delete will remove (1 for a file). */
   fileCount: number
   branch: string
+  localMode: boolean
   busy: boolean
   onConfirm: () => void
 }
@@ -29,6 +30,7 @@ export default function DeleteModal({
   target,
   fileCount,
   branch,
+  localMode,
   busy,
   onConfirm,
 }: DeleteModalProps) {
@@ -41,20 +43,27 @@ export default function DeleteModal({
           <DialogDescription>
             {isDir ? (
               <>
-                Remove <code>{target?.path}</code> and its {fileCount} diagram file
-                {fileCount === 1 ? '' : 's'} from <code>{branch}</code>.
+                Remove <code>{target?.path}</code> and its {fileCount} file
+                {fileCount === 1 ? '' : 's'} {localMode ? 'from this browser' : <>from <code>{branch}</code></>}.
               </>
             ) : (
               <>
-                Remove <code>{target?.path}</code> from <code>{branch}</code>.
+                Remove <code>{target?.path}</code> {localMode ? 'from this browser' : <>from <code>{branch}</code></>}.
               </>
             )}
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          This commits a removal to <code>{branch}</code>. The history stays in Git, you can
-          restore it on GitHub.
-        </p>
+        {localMode ? (
+          <p className="text-sm text-muted-foreground">
+            This permanently removes the saved file and its draft from this browser. There is no
+            version history in local mode.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This commits a removal to <code>{branch}</code>. The history stays in Git, you can
+            restore it on GitHub.
+          </p>
+        )}
         <DialogFooter>
           <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel

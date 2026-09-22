@@ -79,6 +79,10 @@ handing over that tab's code — hence the per-tab `sessionStorage` scoping in r
 One code holds one tab (`CLOSE_SLOT_TAKEN` turns away any second one), so the
 service never chooses.
 
+The modal masks the pairing code by default and offers an explicit reveal control.
+Copy still uses the real code while it is masked, and regenerating the credential
+masks the replacement again.
+
 **Whether to drive it** is the agent's answer, given by calling `ideate_connect`. A
 paired tab is parked as *waiting* and every command that touches the document is
 refused until then, because a pairing code existing is nobody's decision: adopting

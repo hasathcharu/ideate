@@ -37,8 +37,9 @@ export interface DocumentSurfaceProps {
   onRevealEditor: (line: number) => void
   config: MermaidUserConfig | null
   repo: RepoRef | null
-  onOpenLinkedFile: (path: string) => void
-  linkTrail: readonly string[]
+  onOpenLinkedFile: (path: string, scrollTop: number) => void
+  linkTrail: ReadonlyArray<{ path: string; scrollTop: number }>
+  markdownScrollTop: number
   onBack: () => void
 }
 
@@ -72,6 +73,7 @@ export default function DocumentSurface({
   repo,
   onOpenLinkedFile,
   linkTrail,
+  markdownScrollTop,
   onBack,
 }: DocumentSurfaceProps) {
   if (kind === 'excalidraw') {
@@ -148,8 +150,9 @@ export default function DocumentSurface({
             path={openPath}
             repo={repo}
             onOpenFile={repo ? onOpenLinkedFile : undefined}
+            navigationScrollTop={markdownScrollTop}
             onBack={linkTrail.length > 0 ? onBack : undefined}
-            backLabel={linkTrail[linkTrail.length - 1]}
+            backLabel={linkTrail[linkTrail.length - 1]?.path}
           />
         ) : (
           <Preview text={renderedText} config={config} />

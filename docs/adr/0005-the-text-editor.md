@@ -47,6 +47,12 @@ three of its pieces need configuring rather than accepting.
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
 
+Markdown fenced blocks register their declared language's comment tokens. The
+shared Mod-/ command therefore uses `%%` in Mermaid, `//` in JavaScript, `#` in
+Python, block comments in HTML/CSS, and the corresponding syntax for the other
+registered languages instead of falling back to Markdown's HTML comment. Unknown
+languages keep the Markdown fallback. The drawn caret is two pixels wide.
+
 `createEditorExtensions` groups the stable base setup, ordered gutters,
 document-specific compartments, and interaction listeners. It only assembles
 extensions; React still owns the single view lifecycle and `WorkspaceStore` remains
