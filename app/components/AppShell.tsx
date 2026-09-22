@@ -716,7 +716,6 @@ export default function AppShell({ user, mode }: AppShellProps) {
     else {
       const stored = await readDraftResult(docId)
       if (stored.status === 'ok') await clearDraft(docId)
-      else if (stored.status === 'invalid') toast.error('A damaged draft remains in browser storage; it was not deleted.')
     }
     })()
   }, [text, docId, hydrated, dirty, loadedSha, workspaceStore])
