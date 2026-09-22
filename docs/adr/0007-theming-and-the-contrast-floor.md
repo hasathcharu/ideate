@@ -60,12 +60,20 @@ object rather than text. Three properties to preserve:
 - **The lift blends toward white or black**, not toward another hue, and bisects
   for the smallest blend that clears the floor — a blue accent stays blue, it just
   stops being the same lightness as the paper.
-- **`--border` / `--input` are deliberately excluded.** A hairline you can barely
-  see is the intent there; enforcing text contrast on it would draw boxes around
-  the whole UI.
+- **`--border` / `--input` are deliberately excluded.** They use 35% of the
+  palette's outline color over the surface: discernible for neutral, purple, and
+  blue themes without becoming high-contrast boxes around the whole UI.
 
 Unparseable notations (`hsl()`, named colors) fall through unchanged — the theme
 pipeline is best-effort, and `lib/color.ts` reads only hex and `rgb()`.
+
+Code syntax colors are also derived values, exposed as `--syntax-*` tokens. Each
+keeps a semantic hue from the diagram palette but is passed through
+`ensureContrast` against both the page background and card surface before it
+reaches CodeMirror. Do not derive syntax colors later with CSS `color-mix()`:
+mixing two individually accessible colors can produce an inaccessible midpoint.
+Semantic error red (`--destructive`) is likewise adjusted against the page and
+card surfaces instead of remaining a fixed light- or dark-theme value.
 
 `--muted-foreground` is the one derived value: the palette's text blended 60% over
 the *background* (statically, via `mixColors`, because `ensureContrast` needs

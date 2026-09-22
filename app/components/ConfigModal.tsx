@@ -51,15 +51,12 @@ const yamlLanguage = StreamLanguage.define<unknown>({
 })
 
 function highlightStyle(): HighlightStyle {
-  const accent = 'var(--primary)'
-  const blend = (pct: number) => `color-mix(in oklab, var(--primary) ${pct}%, var(--foreground))`
   return HighlightStyle.define([
-    { tag: t.keyword, color: accent, fontWeight: '600' },
-    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-    { tag: t.string, color: blend(55) },
-    { tag: [t.atom, t.bool], color: blend(40) },
-    { tag: t.number, color: blend(40) },
-    { tag: t.meta, color: 'var(--muted-foreground)' },
+    { tag: t.keyword, color: 'var(--syntax-keyword)' },
+    { tag: t.comment, color: 'var(--syntax-comment)', fontStyle: 'italic' },
+    { tag: t.string, color: 'var(--syntax-string)' },
+    { tag: [t.atom, t.bool, t.number], color: 'var(--syntax-literal)' },
+    { tag: t.meta, color: 'var(--syntax-markup)' },
   ])
 }
 

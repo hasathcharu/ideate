@@ -34,6 +34,16 @@
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
+  /* Contrast-safe semantic editor colors. Active Mermaid themes replace these
+     with hues derived from their own palette. */
+  --syntax-keyword: #6d28d9;
+  --syntax-string: #9a3412;
+  --syntax-literal: #075985;
+  --syntax-operator: #6d28d9;
+  --syntax-variable: #27272a;
+  --syntax-comment: #52525b;
+  --syntax-markup: #475569;
+
   /* Diff hues (the editor's dirty gutter, and DiffView's rows). */
   --diff-add: #2f9e44;
   --diff-remove: #e5484d;
@@ -68,6 +78,13 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --syntax-keyword: #c4b5fd;
+  --syntax-string: #fdba74;
+  --syntax-literal: #7dd3fc;
+  --syntax-operator: #c4b5fd;
+  --syntax-variable: #fafafa;
+  --syntax-comment: #a1a1aa;
+  --syntax-markup: #cbd5e1;
 }
 
 @theme inline {

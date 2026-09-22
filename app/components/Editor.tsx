@@ -166,39 +166,33 @@ function fencedCodeLanguage(info: string) {
 }
 
 /**
- * Syntax colors reference the shadcn design tokens (`--primary`, `--foreground`,
- * `--muted-foreground`) defined statically in globals.css, so highlighting stays consistent with
- * the app chrome.
+ * Syntax colors are first-class theme tokens. `applyThemeToSite` derives each
+ * one from the Mermaid palette and checks it against both editor surfaces.
  */
 function highlightStyle(): HighlightStyle {
-  const accent = 'var(--primary)'
-  // Blend the accent toward the foreground for secondary token colors.
-  const blend = (pct: number) =>
-    `color-mix(in oklab, var(--primary) ${pct}%, var(--foreground))`
   return HighlightStyle.define([
-    { tag: t.keyword, color: accent, fontWeight: '600' },
-    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-    { tag: t.string, color: blend(55) },
-    { tag: t.operator, color: accent },
-    { tag: [t.atom, t.bool], color: blend(40) },
-    { tag: t.number, color: blend(40) },
-    { tag: t.variableName, color: 'var(--foreground)' },
+    { tag: t.keyword, color: 'var(--syntax-keyword)' },
+    { tag: t.comment, color: 'var(--syntax-comment)', fontStyle: 'italic' },
+    { tag: t.string, color: 'var(--syntax-string)' },
+    { tag: t.operator, color: 'var(--syntax-operator)' },
+    { tag: [t.atom, t.bool, t.number], color: 'var(--syntax-literal)' },
+    { tag: t.variableName, color: 'var(--syntax-variable)' },
     // Markdown tags. The mermaid tokenizer never emits these and the markdown
     // parser never emits most of the ones above, so one style serves both
     // languages and the two surfaces stay visually consistent.
-    { tag: t.heading, color: accent, fontWeight: '700' },
+    { tag: t.heading, color: 'var(--syntax-keyword)', fontWeight: '650' },
     { tag: t.strong, color: 'var(--foreground)', fontWeight: '700' },
     { tag: t.emphasis, color: 'var(--foreground)', fontStyle: 'italic' },
     { tag: t.strikethrough, textDecoration: 'line-through' },
-    { tag: [t.link, t.url], color: blend(55), textDecoration: 'underline' },
-    { tag: t.monospace, color: blend(55) },
-    { tag: t.quote, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-    { tag: t.list, color: accent },
+    { tag: [t.link, t.url], color: 'var(--syntax-string)', textDecoration: 'underline' },
+    { tag: t.monospace, color: 'var(--syntax-literal)' },
+    { tag: t.quote, color: 'var(--syntax-comment)', fontStyle: 'italic' },
+    { tag: t.list, color: 'var(--syntax-operator)' },
     // The syntax marks themselves (`#`, `*`, list bullets, fence delimiters) —
     // muted so the prose they wrap stays the thing you read.
     {
       tag: [t.processingInstruction, t.contentSeparator],
-      color: 'var(--muted-foreground)',
+      color: 'var(--syntax-markup)',
     },
   ])
 }

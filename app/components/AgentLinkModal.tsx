@@ -143,7 +143,7 @@ export default function AgentLinkModal({
             </>
           ) : null}
 
-          <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border bg-background p-3 text-xs text-muted-foreground">
             <p className="mb-2">
               One-time setup: register Ideate as an MCP server in your agent. Run it once —
               after that only the pairing code changes.
@@ -217,7 +217,7 @@ function PairingCode({
       <div className="flex items-center gap-2">
         <code
           ref={codeRef}
-          className="min-w-0 flex-1 overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-xl tracking-widest text-foreground"
+          className="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-3 py-2 font-mono text-xl tracking-widest text-foreground"
         >
           {code ? (revealed ? code : '••••-••••') : '····-····'}
         </code>
@@ -321,7 +321,7 @@ function AdvancedOptions({
         )}
         <p className="text-muted-foreground">Run one locally:</p>
         <div className="flex items-start gap-2">
-          <pre className="min-w-0 flex-1 overflow-x-auto rounded bg-muted/50 p-2 font-mono text-foreground">
+          <pre className="min-w-0 flex-1 overflow-x-auto rounded border bg-background p-2 font-mono text-foreground">
             <code ref={dockerRef}>{MCP_DOCKER_COMMAND}</code>
           </pre>
           <CopyButton text={MCP_DOCKER_COMMAND} target={dockerRef} label="docker command" />
@@ -472,7 +472,7 @@ function Status({
   // field that does it — is directly below.
   if (status === 'full') {
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-background p-3 text-sm">
         <ServerCrash className="mt-0.5 size-4 flex-none text-destructive" />
         <div className="flex min-w-0 flex-col items-start gap-2">
           <span className="wrap-break-word">

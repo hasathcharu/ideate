@@ -102,6 +102,11 @@ theme classes, so theme rules do reach it. Two related rules:
   is what washed the selection (and the selected text) out. Mixing into the page
   color keeps a dark palette's selection dark at the same visual strength.
 
+Syntax categories use the contrast-checked `--syntax-*` tokens produced by the
+theme pipeline. Keywords, strings, literals, operators, variables, comments, and
+markup remain distinguishable by color rather than relying on font weight;
+Markdown's strong/emphasis styling keeps its authored semantic weight/style.
+
 The gutter sits on `--background` rather than `--secondary` for both reasons: the
 line numbers are `--muted-foreground`, which is measured against the page (see the
 contrast floor), and a mid-tone band down the side of the pane was never the

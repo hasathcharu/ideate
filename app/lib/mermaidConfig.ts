@@ -319,6 +319,8 @@ const MANAGED_TOKENS = [
   '--muted-foreground',
   '--accent',
   '--accent-foreground',
+  '--destructive',
+  '--destructive-foreground',
   '--border',
   '--input',
   '--ring',
@@ -330,6 +332,13 @@ const MANAGED_TOKENS = [
   '--sidebar-accent-foreground',
   '--sidebar-border',
   '--sidebar-ring',
+  '--syntax-keyword',
+  '--syntax-string',
+  '--syntax-literal',
+  '--syntax-operator',
+  '--syntax-variable',
+  '--syntax-comment',
+  '--syntax-markup',
   '--font-sans',
   '--font-mono',
 ] as const
@@ -377,6 +386,8 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   const secondary = first('secondaryColor', 'tertiaryColor', 'mainBkg')
   const muted = first('tertiaryColor', 'secondaryColor', 'mainBkg')
   const accentLine = first('primaryBorderColor', 'lineColor', 'nodeBorder')
+  const warmAccent = first('noteBkgColor', 'secondaryBorderColor', 'primaryBorderColor')
+  const quietAccent = first('lineColor', 'clusterBorder', 'primaryBorderColor')
   const borderColor = first('primaryBorderColor', 'nodeBorder', 'clusterBorder', 'lineColor')
   const font = first('fontFamily')
 
@@ -401,12 +412,13 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
       : text
   // Dividers/panel edges/input outlines want a quiet hairline, not the bold
   // accent mermaid uses for node borders — blend it mostly toward the surface
-  // so it reads as a subtle line instead of a high-contrast stroke. Left as-is:
-  // a border is not text, and a hairline you can barely see is the intent.
+  // so it reads as a subtle line instead of a high-contrast stroke. At 35% the
+  // line remains discernible for neutral and purple palettes; 25% made those
+  // outlines disappear perceptually. Left as-is because a border is not text.
   const surfaceBg = bg ?? surface
   const softBorder =
     borderColor && surfaceBg
-      ? `color-mix(in srgb, ${borderColor} 25%, ${surfaceBg})`
+      ? `color-mix(in srgb, ${borderColor} 35%, ${surfaceBg})`
       : borderColor
 
   set('--background', bg)
@@ -421,6 +433,11 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   set('--muted-foreground', mutedText)
   set('--accent', secondary)
   set('--accent-foreground', legible(text, secondary))
+  // Error text appears in cards and dialogs as well as on the page. Preserve
+  // its semantic red while adapting its lightness to the active palette.
+  const destructive = ensureContrast('#dc2626', [bg, surface], TEXT_CONTRAST)
+  set('--destructive', destructive)
+  set('--destructive-foreground', legible(bg ?? surface, destructive))
   set('--border', softBorder)
   set('--input', softBorder)
   // A focus ring is a graphical object, not text, so it answers to the lower of
@@ -439,6 +456,19 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   set('--sidebar-accent-foreground', legible(text, secondary))
   set('--sidebar-border', softBorder)
   set('--sidebar-ring', accentLine && ensureContrast(accentLine, [bg, surface], UI_CONTRAST))
+
+  // CodeMirror is transparent in both the document pane (`background`) and the
+  // config card (`surface`). Keep each semantic hue from the authored palette,
+  // but validate the final color against both places it can actually be drawn.
+  // These must be concrete colors: deriving them later with CSS color-mix can
+  // blend two passing colors into one that no longer meets the text floor.
+  set('--syntax-keyword', legible(accentLine, bg, surface))
+  set('--syntax-string', legible(warmAccent, bg, surface))
+  set('--syntax-literal', legible(quietAccent, bg, surface))
+  set('--syntax-operator', legible(accentLine, bg, surface))
+  set('--syntax-variable', legible(text, bg, surface))
+  set('--syntax-comment', mutedText)
+  set('--syntax-markup', legible(quietAccent, bg, surface))
 
   if (font) {
     set('--font-sans', font)
