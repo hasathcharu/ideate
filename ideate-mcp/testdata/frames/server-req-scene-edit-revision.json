@@ -1,0 +1,10 @@
+{
+  "t": "req",
+  "id": 25,
+  "command": {
+    "cmd": "scene_edit",
+    "path": "canvas/sketch.excalidraw",
+    "expectedRevision": 9,
+    "ops": [{ "op": "delete", "id": "old-box" }]
+  }
+}

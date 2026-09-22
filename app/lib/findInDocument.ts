@@ -1,22 +1,4 @@
-/**
- * Find-in-page over a rendered markdown document.
- *
- * The constraint that decides the whole design: **the document must not be
- * mutated**. It is a mix of `dangerouslySetInnerHTML` runs and real React
- * components, and the usual find-in-page trick — wrapping each hit in a `<mark>`
- * — would rewrite that markup under React. Every node in a rewritten run is
- * replaced, which takes the reader's text selection with it and invalidates the
- * `<a>` the hover card is anchored to (see `useInnerHtml`). Worse, React would
- * put the original markup back on its next render and silently undo the
- * highlighting.
- *
- * So matches are `Range`s and nothing else, painted through the CSS Custom
- * Highlight API (`CSS.highlights` + `::highlight()` in globals.css), which colors
- * them without touching a single node. Where that API is missing the ranges are
- * still produced and still scrolled to — the navigation works, only the paint is
- * absent — which is a far better degradation than a highlighter that fights the
- * renderer.
- */
+/** Find-in-page over a rendered markdown document. */
 
 /** Elements whose text is a block of its own. Used to stop a match running from
  *  the end of one block into the start of the next: the DOM has no whitespace
@@ -37,13 +19,7 @@ interface Segment {
   length: number
 }
 
-/**
- * Flatten `root`'s visible text, remembering where each text node landed.
- *
- * A newline is inserted wherever the walk crosses into a different block, and a
- * query never contains one — so a match can never span two blocks, and every
- * offset inside a match is guaranteed to belong to a real text node.
- */
+/** Flatten `root`'s visible text, remembering where each text node landed. */
 function flatten(root: HTMLElement): { text: string; segments: Segment[] } {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -80,12 +56,9 @@ function flatten(root: HTMLElement): { text: string; segments: Segment[] } {
 }
 
 /**
- * The segment containing `offset`.
- *
- * `atEnd` picks the segment a boundary belongs to when it falls exactly between
- * two of them: a match's start belongs to the segment that begins there, its end
- * to the one that finishes there. Getting this backwards produces an empty range
- * at a node boundary, which paints nothing.
+ * The segment containing `offset`. `atEnd` picks the segment a boundary belongs to when it falls
+ * exactly between two of them: a match's start belongs to the segment that begins there, its end to
+ * the one that finishes there.
  */
 function segmentAt(segments: Segment[], offset: number, atEnd: boolean): Segment | null {
   let low = 0
@@ -104,13 +77,7 @@ function segmentAt(segments: Segment[], offset: number, atEnd: boolean): Segment
   return null
 }
 
-/**
- * Every occurrence of `query` inside `root`, in document order, as live ranges.
- *
- * Case-insensitive and literal — no regex, because this is a reading aid and a
- * half-typed pattern that throws (or matches everything) is worse than one that
- * simply finds nothing.
- */
+/** Every occurrence of `query` inside `root`, in document order, as live ranges. */
 export function findRanges(root: HTMLElement, query: string): Range[] {
   const needle = query.toLowerCase()
   if (!needle.trim()) return []
@@ -192,5 +159,5 @@ export function scrollRangeIntoView(
   // keystroke of a query that keeps matching the same place.
   const relative = rect.top - containerRect.top
   if (relative >= offset && relative <= containerRect.height - offset) return
-  container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+  container.scrollTo({ top: Math.max(0, top) })
 }

@@ -14,26 +14,7 @@ import { EMPTY_SCENE, parseScene } from './excalidraw'
 import { ensureExcalidrawFonts } from './excalidrawFonts'
 import { lintScene } from './sceneLint'
 
-/**
- * Element-level edits to an Excalidraw scene, for Agent Link.
- *
- * Native rather than relayed to one of the standalone Excalidraw MCP servers: a
- * `.excalidraw` file is JSON this app already holds, and every one of those
- * servers owns its own element store and its own canvas, so relaying would mean a
- * hydrate → forward → read-back round trip against state that has no business
- * existing here.
- *
- * **Rule 8 holds.** `@excalidraw/excalidraw` is reached only through a
- * per-function `await import` — the same door `lib/exportScene.ts` uses — and the
- * two imports at the top are types, which are erased. Nothing here may become a
- * module-scope value import, or every mermaid-only user starts paying for the ~1MB
- * editor bundle.
- *
- * The result is scene *text*, handed to `setText` like any other document edit.
- * That is deliberate: `CanvasInner` already ingests an external `value` through
- * `updateScene`, so dirty tracking (`scenesEqual`, rule 9) and the file's own
- * stored background (rule 10) keep working with nothing added.
- */
+/** Element-level edits to an Excalidraw scene, for Agent Link. */
 
 /** Style keys that pass straight through to the skeleton. */
 interface Styling {
@@ -54,13 +35,10 @@ export interface SceneEditOutcome {
 }
 
 /**
- * Apply `ops` to `sceneText`.
- *
- * **Adds are processed as one batch, before any update or delete.** That is what
- * lets an arrow bind to shapes created in the same call: binding is done by
- * Excalidraw's own skeleton converter, which resolves ids only within the batch it
- * is given and is also what computes the attachment geometry. It also means an
- * update in the same call can target something the call just added.
+ * Apply `ops` to `sceneText`. **Adds are processed as one batch, before any update or delete.**
+ * That is what lets an arrow bind to shapes created in the same call: binding is done by
+ * Excalidraw's own skeleton converter, which resolves ids only within the batch it is given and is
+ * also what computes the attachment geometry.
  */
 export async function applySceneOps(
   sceneText: string,
@@ -119,11 +97,8 @@ export async function applySceneOps(
     elements = bindArrows([...elements, ...created], adds, ids)
   }
 
-  // Ids whose geometry this call changed, collected rather than acted on: the
-  // arrows bound to them are re-routed once, at the end. Doing it per-op would
-  // route an arrow against a half-moved element list — an `align` over six boxes
-  // joined by five arrows moves both ends of most of them — and would re-route the
-  // same arrow as many times as the call touches either of its ends.
+  // Ids whose geometry this call changed, collected rather than acted on: the arrows bound to them
+  // are re-routed once, at the end.
   const moved = new Set<string>()
 
   for (const op of rest) {
@@ -158,11 +133,8 @@ export async function applySceneOps(
   return {
     text: JSON.stringify({ ...scene, elements }, null, 2),
     elementCount: elements.length,
-    // The whole scene, not just what this call touched: a new box overlapping an old
-    // one is a finding about both, and the caller is the only party that can move
-    // either. `font_unavailable` goes first because it explains away every
-    // `label_overflow` under it — a box measured against the wrong font is too small
-    // for reasons that have nothing to do with the number the caller passed.
+    // The whole scene, not just what this call touched: a new box overlapping an old one is a
+    // finding about both, and the caller is the only party that can move either.
     warnings: [...fontWarning(fonts, ops), ...lintScene(elements)],
   }
 }
@@ -207,11 +179,7 @@ function toSkeleton(
   }
 
   if (op.type === 'arrow' || op.type === 'line') {
-    // Geometry is computed here rather than left to Excalidraw's converter. The
-    // converter sets `startBinding`/`endBinding` but does not *route* the arrow —
-    // it refines an arrow you already drew. Handed start/end with no points it
-    // emits a 99px stub at the canvas origin: correctly bound, and invisible
-    // nowhere near the shapes it joins.
+    // Geometry is computed here rather than left to Excalidraw's converter.
     const geometry = op.start !== undefined || op.end !== undefined
       ? route(op, boxes)
       : {
@@ -262,12 +230,8 @@ const DEFAULT_SHAPE_HEIGHT = 100
 const BINDING_GAP = 8
 
 /**
- * Where an arrow between two shapes should start and end: centre to centre,
- * pulled back to each shape's edge and then by `BINDING_GAP`.
- *
- * The box edge is used for ellipses and diamonds too. It is not exact for either,
- * but Excalidraw re-derives the visible attachment point from `focus`/`gap` when
- * it renders a bound arrow, so a close start is all this has to supply.
+ * Where an arrow between two shapes should start and end: centre to centre, pulled back to each
+ * shape's edge and then by `BINDING_GAP`.
  */
 function route(
   op: SceneAddOp,
@@ -283,15 +247,7 @@ function route(
   })
 }
 
-/**
- * The geometry itself, in the absolute frame, for an arrow joining `from` to `to`.
- *
- * Split out of `route` so `rerouteBoundArrows` can reuse it: an arrow drawn between
- * two shapes and an arrow re-drawn because one of them moved want exactly the same
- * answer, and computing it twice is how the two would come to disagree. A null end
- * stands for one that is not bound, and takes the fallback point — which is what
- * keeps a half-bound arrow anchored where the human left it.
- */
+/** The geometry itself, in the absolute frame, for an arrow joining `from` to `to`. */
 function routeBetween(
   from: Box | null,
   to: Box | null,
@@ -356,13 +312,7 @@ function trim(
   return { x: from.x + dx * out, y: from.y + dy * out }
 }
 
-/**
- * Wire each new arrow to the elements it names, in both directions.
- *
- * Excalidraw needs the pairing recorded twice — `startBinding`/`endBinding` on the
- * arrow, and an entry in each target's `boundElements` — or dragging the shape
- * leaves the arrow behind.
- */
+/** Wire each new arrow to the elements it names, in both directions. */
 function bindArrows(
   elements: ExcalidrawElement[],
   adds: readonly SceneAddOp[],
@@ -418,13 +368,7 @@ function generateId(): string {
   return id
 }
 
-/**
- * Excalidraw's default font, and the fallback its font string names after it.
- *
- * Neither is configurable from a scene op — `SceneAddOp` carries no `fontFamily`
- * or `fontSize` — so this is the whole set of faces anything here measures with.
- * The third fallback (`Segoe UI Emoji`) is a local system font and needs no load.
- */
+/** Excalidraw's default font, and the fallback its font string names after it. */
 const MEASURED_FONT_FAMILIES = ['Excalifont', 'Xiaolai'] as const
 
 /** The size every label is measured at: Excalidraw's `DEFAULT_FONT_SIZE`, which
@@ -432,35 +376,7 @@ const MEASURED_FONT_FAMILIES = ['Excalifont', 'Xiaolai'] as const
  *  ignores it, but `document.fonts.load` wants a complete font shorthand. */
 const MEASURED_FONT_SIZE = 20
 
-/**
- * Load the fonts the sizing pass is about to measure with, and don't measure until
- * they are in.
- *
- * This is what keeps a generated shape from clipping its own label. Container
- * dimensions are decided at conversion time by Excalidraw's
- * `redrawTextBoundingBox`, which measures through a canvas 2D context set to
- * `20px Excalifont, Xiaolai, "Segoe UI Emoji"` — and a canvas silently falls back to
- * a generic face for a font that has not loaded. Excalifont is a handwriting font and
- * roughly 20% wider than that fallback (measured: "Authentication Service" is 184px
- * unloaded, 220px loaded), so every box came out sized for a narrower font than the
- * one it would be drawn in. Double-clicking the shape fixed it because opening the
- * text editor puts the font on screen, which loads it, and Excalidraw re-measures on
- * blur.
- *
- * **The faces come from `lib/excalidrawFonts.ts`, not from a mounted editor.** That
- * is the point of it: Excalidraw registers its own faces on mount and offers no way
- * to ask for them otherwise, so anything that waited for an editor could not serve
- * the case `scene_edit` exists for — a file the human is not looking at. Registering
- * them ourselves from the build-time manifest makes the measurement independent of
- * what is on screen, and turns this function back into a plain load.
- *
- * Everything here is best effort: with no fonts available at all the measurement
- * falls back to a narrower face, which is a slightly small box, not a refused edit.
- * **The return value is what makes that visible** — false means every box measured in
- * this call is suspect, and the caller turns it into a `font_unavailable` warning.
- * Silence was the original bug: the drawing came back looking fine to the agent and
- * clipped to the human.
- */
+/** Load the fonts the sizing pass is about to measure with, and don't measure until they are in. */
 async function awaitTextFonts(texts: readonly (string | undefined)[]): Promise<boolean> {
   if (typeof document === 'undefined' || !document.fonts) return false
   const characters = texts.filter((text): text is string => !!text).join('')
@@ -484,17 +400,9 @@ async function awaitTextFonts(texts: readonly (string | undefined)[]): Promise<b
     }),
   )
 
-  // `check` asks the question the measurement is about to ask — is there a *loaded*
-  // face for these characters — rather than whether the load resolved, which catches
-  // a subset that failed to fetch.
-  //
-  // It cannot stand alone, and must not be moved above the registration: `check`
-  // answers **true** for a family with no faces at all, because an unmatched family
-  // falls through to a system font and a system font is always ready. Verified in the
-  // browser — on a page with nothing registered,
-  // `document.fonts.check('20px Excalifont', …)` is true while Excalifont is nowhere
-  // in `document.fonts`. Only the primary family is asked about: Xiaolai is the CJK
-  // fallback, and a Latin label measures against Excalifont whether or not it came.
+  // `check` asks the question the measurement is about to ask — is there a *loaded* face for these
+  // characters — rather than whether the load resolved, which catches a subset that failed to
+  // fetch.
   return document.fonts.check(`${MEASURED_FONT_SIZE}px ${MEASURED_FONT_FAMILIES[0]}`, characters)
 }
 
@@ -546,11 +454,8 @@ async function applyUpdate(
     return next as ExcalidrawElement
   })
 
-  // Text, and the box around it, are one measurement — so anything that changes
-  // either side of it re-runs that measurement. Without this, rewriting a label
-  // left the container at whatever the *previous* text needed, which for longer
-  // replacement text is the same clipping the add path used to have; shrinking a
-  // box left its label unwrapped and hanging over the edge.
+  // Text, and the box around it, are one measurement — so anything that changes either side of it
+  // re-runs that measurement.
   const moved = dx !== 0 || dy !== 0 ? translate(updated, new Map([[op.id, { dx, dy }]])) : updated
 
   const resized = op.text !== undefined || op.width !== undefined || op.height !== undefined
@@ -565,21 +470,8 @@ async function applyUpdate(
 const LABELABLE_TYPES = ['rectangle', 'ellipse', 'diamond', 'arrow'] as const
 
 /**
- * Re-measure `id`'s text and re-fit its box, by running the same skeleton
- * conversion the add path uses.
- *
- * Deliberately delegated rather than reimplemented: Excalidraw's
- * `redrawTextBoundingBox` wraps the text to the container's inner width, grows the
- * container when the wrapped text no longer fits, and re-centres the label in
- * whatever the container became — and none of `measureText`, `wrapText` or
- * `redrawTextBoundingBox` is exported. Handing a one-element skeleton built from
- * the live element back to `convertToExcalidrawElements` gets all of it, at the
- * cost of one throwaway conversion.
- *
- * Only geometry is copied back. The throwaway carries none of the element's
- * identity, bindings or styling, and nothing but width/height/x/y/text is read off
- * it — an arrow's own `points` least of all, since the converter nudges those by a
- * half-pixel when it binds a label to a linear element.
+ * Re-measure `id`'s text and re-fit its box, by running the same skeleton conversion the add path
+ * uses.
  */
 async function refit(
   elements: ExcalidrawElement[],
@@ -641,11 +533,9 @@ async function refit(
   const fitLabel = measured.find((element) => element.type === 'text')
   if (!fitContainer || !fitLabel || fitLabel.type !== 'text') return elements
 
-  // An arrow is sized by its points, not the other way round: Excalidraw widens a
-  // *shape* to fit its label but leaves an arrow alone, and writing the measured
-  // width onto one would desync `width` from `points`. Its label's position is
-  // re-derived from the path at render time for the same reason, so only the text
-  // and its own box are worth copying back.
+  // An arrow is sized by its points, not the other way round: Excalidraw widens a *shape* to fit
+  // its label but leaves an arrow alone, and writing the measured width onto one would desync
+  // `width` from `points`.
   const isArrow = container.type === 'arrow'
 
   return elements.map((element) => {
@@ -711,16 +601,8 @@ function applyDelete(elements: ExcalidrawElement[], id: string): ExcalidrawEleme
 /* ------------------------------------------------------------------ */
 
 /**
- * `align` and `distribute` exist because the caller cannot do this arithmetic
- * safely from where it stands.
- *
- * Every coordinate an agent holds came from a `scene_get` some calls ago, and the
- * widths in it were not chosen by anyone: a shape holding a label is sized by a
- * text measurement against a font the agent never saw. So "line these three up"
- * becomes three `update` ops built from stale numbers, and `misaligned` — a lint
- * finding whose whole subject is coordinates worked out by hand — is what comes
- * back. Naming the intent moves the arithmetic to the only side holding current
- * geometry.
+ * `align` and `distribute` exist because the caller cannot do this arithmetic safely from where it
+ * stands.
  */
 function applyAlign(elements: ExcalidrawElement[], op: SceneAlignOp): ExcalidrawElement[] {
   const targets = layoutTargets(elements, op.ids, 'align')
@@ -759,12 +641,10 @@ function applyAlign(elements: ExcalidrawElement[], op: SceneAlignOp): Excalidraw
 }
 
 /**
- * Space elements evenly along one axis.
- *
- * Ordered by where the elements already are rather than by the order the ids were
- * written in: the caller is describing a row that exists, and re-ordering one by
- * accident — because it listed the ids as it found them in a `scene_get` — would be
- * a much bigger edit than it asked for.
+ * Space elements evenly along one axis. Ordered by where the elements already are rather than by
+ * the order the ids were written in: the caller is describing a row that exists, and re-ordering
+ * one by accident — because it listed the ids as it found them in a `scene_get` — would be a much
+ * bigger edit than it asked for.
  */
 function applyDistribute(
   elements: ExcalidrawElement[],
@@ -864,19 +744,7 @@ function moveElements(
   return deltas.size === 0 ? elements : translate(elements, deltas)
 }
 
-/**
- * Shift elements by their own delta, each one taking its bound label with it.
- *
- * The label is a separate element carrying absolute coordinates, so a container
- * moved without it leaves its caption sitting where the shape used to be — which is
- * what an `update` with an x/y did before this existed, silently, on exactly the
- * shapes that have something written in them.
- *
- * The delta is applied rather than the label re-centred. Where a label sits inside
- * its container was settled by the last text measurement, and re-deriving it here
- * would put this function and `refit` in disagreement about which of them owns the
- * answer — with the loser winning whenever it happened to run second.
- */
+/** Shift elements by their own delta, each one taking its bound label with it. */
 function translate(
   elements: ExcalidrawElement[],
   deltas: ReadonlyMap<string, { dx: number; dy: number }>,
@@ -894,16 +762,7 @@ function translate(
   })
 }
 
-/**
- * Redraw the arrows bound to anything this call moved or resized.
- *
- * Binding is recorded, not enforced: `startBinding`/`endBinding` say which shapes an
- * arrow belongs to, and Excalidraw re-derives the attachment point from them **while
- * a human drags the shape**. Nothing does that for a shape moved by writing new
- * coordinates into the file, so before this the arrow stayed where it was drawn and
- * the drawing came back with connectors pointing at empty canvas — a defect an agent
- * could not see, since `scene_get` reports the binding it asked for either way.
- */
+/** Redraw the arrows bound to anything this call moved or resized. */
 function rerouteBoundArrows(
   elements: ExcalidrawElement[],
   moved: ReadonlySet<string>,
@@ -970,18 +829,14 @@ function colorOf(element: ExcalidrawElement, key: 'strokeColor' | 'backgroundCol
 }
 
 /**
- * What is on the canvas, compactly. The full scene JSON is enormous — mostly
- * per-element bookkeeping an agent has no use for — so the default answer is one
- * line per element and the whole file is opt-in.
- *
- * Everything but the `path`, which this cannot know: the text may have come from
- * the open canvas, from a draft, or from a file on the branch. The caller resolved
- * the document and so owns that field.
+ * What is on the canvas, compactly. The full scene JSON is enormous — mostly per-element
+ * bookkeeping an agent has no use for — so the default answer is one line per element and the whole
+ * file is opt-in.
  */
 export function summarizeScene(
   sceneText: string,
   full = false,
-): Omit<SceneGetResult, 'path'> {
+): Omit<SceneGetResult, 'path' | 'revision'> {
   const scene = parseScene(sceneText)
   if (!scene) throw new Error('That document is not a readable Excalidraw scene.')
 
@@ -1005,11 +860,8 @@ export function summarizeScene(
       width: Math.round(element.width),
       height: Math.round(element.height),
       text: labels.get(element.id) ?? (element as { text?: string }).text ?? null,
-      // A scene *is* its colors — there is no theme layer over a canvas the way
-      // there is over a mermaid diagram — so an agent adding to an existing drawing
-      // has to see them to match them. Nullable rather than defaulted: a scene file
-      // written by another tool may not carry them, and inventing Excalidraw's
-      // default here would report a color the element does not have.
+      // A scene *is* its colors — there is no theme layer over a canvas the way there is over a
+      // mermaid diagram — so an agent adding to an existing drawing has to see them to match them.
       strokeColor: colorOf(element, 'strokeColor'),
       backgroundColor: colorOf(element, 'backgroundColor'),
     }))

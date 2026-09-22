@@ -7,7 +7,9 @@ import Preview from './Preview'
 import MarkdownPreview from './MarkdownPreview'
 import Canvas from './Canvas'
 import DiffView from './DiffView'
-import type { FileKind } from '@/lib/tree'
+import ImagePreview from './ImagePreview'
+import SvgPreview from './SvgPreview'
+import { isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
 import { cn } from '@/lib/utils'
 import {
   Sheet,
@@ -52,6 +54,7 @@ export interface HistoryPanelProps {
   canGoBack: boolean
   selectedSha: string | null
   versionContent: string | null
+  versionBlob: Blob | null
   versionLoading: boolean
   config: MermaidUserConfig | null
   /** Which renderer previews a selected version — scenes get a read-only canvas
@@ -91,10 +94,9 @@ function noop(): void {}
 const COMMIT_SKELETON_WIDTHS = ['w-40', 'w-28', 'w-44', 'w-32', 'w-36'] as const
 
 /**
- * Placeholder commit rows. Returns a fragment rather than a wrapper so each row is
- * a direct child of the list's flex container and picks up its `gap-1`; geometry
- * matches the real commit button (`p-2.5`, message line over a meta line) so the
- * list doesn't jump when the data lands.
+ * Placeholder commit rows. Returns a fragment rather than a wrapper so each row is a direct child
+ * of the list's flex container and picks up its `gap-1`; geometry matches the real commit button
+ * (`p-2.5`, message line over a meta line) so the list doesn't jump when the data lands.
  */
 function CommitSkeleton({ rows }: { rows: number }) {
   return (
@@ -135,6 +137,7 @@ export default function HistoryPanel({
   canGoBack,
   selectedSha,
   versionContent,
+  versionBlob,
   versionLoading,
   config,
   kind,
@@ -154,6 +157,9 @@ export default function HistoryPanel({
   onRecover,
   onFork,
 }: HistoryPanelProps) {
+  const raster = isRasterImageFile(path)
+  const svg = isSvgFile(path)
+  const versionReady = raster ? versionBlob !== null : versionContent !== null
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -239,7 +245,7 @@ export default function HistoryPanel({
               <p className="p-6 text-sm text-muted-foreground">
                 Select a version to preview it read-only.
               </p>
-            ) : versionLoading || versionContent === null ? (
+            ) : versionLoading || !versionReady ? (
               <div className="min-h-0 flex-1 p-6" aria-hidden>
                 <Skeleton className="size-full" />
               </div>
@@ -248,7 +254,7 @@ export default function HistoryPanel({
                 {/* Preview / Diff, and what the diff compares against. Both are
                     per-version choices, so they live over the content rather than
                     in the sheet header. */}
-                {kind === 'excalidraw' ? null : (
+                {kind === 'excalidraw' || raster ? null : (
                   <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
                     <div className="flex items-center gap-0.5 rounded-md border p-0.5">
                       <Button
@@ -299,7 +305,7 @@ export default function HistoryPanel({
                   </div>
                 )}
                 <div className="min-h-0 flex-1 overflow-auto">
-                  {view === 'diff' && kind !== 'excalidraw' ? (
+                  {view === 'diff' && kind !== 'excalidraw' && !raster ? (
                     diffNote ? (
                       <p className="p-6 text-sm text-muted-foreground">{diffNote}</p>
                     ) : diffLoading || diff === null ? (
@@ -321,7 +327,11 @@ export default function HistoryPanel({
                         }
                       />
                     )
-                  ) : kind === 'excalidraw' ? (
+                  ) : raster && versionBlob ? (
+                    <ImagePreview path={path} blob={versionBlob} />
+                  ) : svg && versionContent !== null ? (
+                    <SvgPreview source={versionContent} />
+                  ) : kind === 'excalidraw' && versionContent !== null ? (
                     // Keyed on the sha so selecting another version remounts the
                     // canvas rather than diffing one historical scene into another.
                     <Canvas
@@ -333,12 +343,12 @@ export default function HistoryPanel({
                       viewMode
                     />
                   ) : kind === 'markdown' ? (
-                    <MarkdownPreview text={versionContent} config={config} />
+                    <MarkdownPreview text={versionContent ?? ''} config={config} />
                   ) : (
-                    <Preview text={versionContent} config={config} />
+                    <Preview text={versionContent ?? ''} config={config} />
                   )}
                 </div>
-                <div className="flex justify-end gap-2 border-t p-3">
+                {raster ? null : <div className="flex justify-end gap-2 border-t p-3">
                   <Button variant="secondary" onClick={onFork}>
                     {kind === 'excalidraw'
                       ? 'Create new canvas from this'
@@ -347,7 +357,7 @@ export default function HistoryPanel({
                         : 'Create new diagram from this'}
                   </Button>
                   <Button onClick={onRecover}>Recover to working tree</Button>
-                </div>
+                </div>}
               </>
             )}
           </div>

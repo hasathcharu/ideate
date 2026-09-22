@@ -12,11 +12,7 @@ import {
 import { APP_NAME } from '@/lib/config'
 import { Button } from '@/components/ui/button'
 
-/**
- * The three document kinds, in the order the editor's own toggle lists them.
- * Each carries its project's own mark (see `components/icons.tsx`) — bare glyphs
- * in `currentColor`, so the row reads as one family under the active theme.
- */
+/** The three document kinds, in the order the editor's own toggle lists them. */
 const KINDS = [
   { icon: MermaidIcon, label: 'Mermaid', ext: '.mmd' },
   { icon: MarkdownIcon, label: 'Markdown', ext: '.md' },

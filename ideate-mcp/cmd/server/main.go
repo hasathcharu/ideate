@@ -1,19 +1,5 @@
-// Command server is the Ideate Agent Link service: one process that is both the
-// MCP server an agent talks to and the relay that reaches the browser tab.
-//
-//	agent ──MCP Streamable HTTP──► server ──WebSocket──► browser tab
-//
-// It replaces a Node MCP server that ran on the user's own machine and *listened*
-// on loopback while the tab dialled out to it. That arrangement could not work in
-// Safari at all — no loopback exemption for mixed content, so ws://127.0.0.1 from
-// an https page is blocked outright — and it confined the feature to an agent
-// sitting on the same machine as the browser, ruling out containers, Codespaces,
-// SSH boxes and browser-based agents. Inverting it costs the ability to work
-// offline and gains everything else.
-//
-// Run it with no configuration at all and it listens on :7391 with defaults sized
-// for a 512MB / 0.5-vCPU box. That is deliberate: the capacity error tells users to
-// run their own, and that has to be true without a page of setup.
+// Command server is the Ideate Agent Link service: one process that is both the MCP server an agent
+// talks to and the relay that reaches the browser tab.
 package main
 
 import (

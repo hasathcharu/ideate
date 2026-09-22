@@ -18,13 +18,7 @@ export interface PreviewProps {
   config?: MermaidUserConfig | null
 }
 
-/**
- * The live diagram pane: mermaid source in, rendered diagram out.
- *
- * The zoom/pan/fit interaction lives in `DiagramViewport`, shared with the
- * diagrams embedded in a markdown document. What stays here is the render
- * lifecycle and the empty/error states, which only the pane has.
- */
+/** The live diagram pane: mermaid source in, rendered diagram out. */
 export default function Preview({
   text,
   paintBackground = true,

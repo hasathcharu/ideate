@@ -1,142 +1,84 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
-import {
-  ArrowLeft,
-  ChevronDown,
-  Command,
-  FileDiff,
-  FolderGit2,
-  GitBranch,
-  GitPullRequestArrow,
-  History,
-  PanelLeft,
-  Map,
-  Plug,
-  PlugZap,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Search,
-  Settings2,
-  SquareArrowOutUpRight,
-  WrapText,
-  X,
-} from 'lucide-react'
 import { toast } from 'sonner'
-import Editor, { type EditorHandle } from './Editor'
-import Preview from './Preview'
-import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
-import Canvas from './Canvas'
-import ExportMenu from './ExportMenu'
-import AuthButton from './AuthButton'
-import RepoPicker from './RepoPicker'
-import BranchPicker from './BranchPicker'
-import FileTree, { FileTreeSkeleton } from './FileTree'
-import ConflictModal from './ConflictModal'
-import DeleteModal from './DeleteModal'
-import PromptModal, { type PromptModalProps } from './PromptModal'
-import HistoryPanel, { type HistoryCompare, type HistoryView } from './HistoryPanel'
-import DiffView from './DiffView'
-import NewFileMenu from './NewFileMenu'
-import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
-import ConfigModal from './ConfigModal'
-import AgentLinkModal from './AgentLinkModal'
-import MobileWarningModal from './MobileWarningModal'
-import { Button } from '@/components/ui/button'
+import type { PromptModalProps } from './PromptModal'
+import { useHistoryController } from './useHistoryController'
+import { useAgentLinkController } from './useAgentLinkController'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
+  CUSTOM_THEME,
+  NONE_THEME,
+  useAppearanceController,
+} from './useAppearanceController'
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { DEFAULT_LAYOUT, LAYOUT_ENGINES } from '@/lib/mermaid'
-import { useAgentLink, type AgentLinkCapabilities } from '@/lib/agentLink'
-import { normalizeMcpOrigin } from '@/lib/mcpOrigin'
-import type { BridgeState } from '@/lib/agentProtocol'
-import { collectDiagnostics } from '@/lib/diagnostics'
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  useResizableLayout,
+} from './useResizableLayout'
+import AppDialogs from './AppDialogs'
+import AppHeader from './AppHeader'
+import AppLayout from './AppLayout'
+import DocumentSurface from './DocumentSurface'
+import DocumentToolbar from './DocumentToolbar'
+import WorkspaceSidebar from './WorkspaceSidebar'
+import { useWorkspaceTree } from './useWorkspaceTree'
 import { ensureExcalidrawFonts } from '@/lib/excalidrawFonts'
-import { renderSceneThumbnail } from '@/lib/exportScene'
-import { applySceneOps, summarizeScene } from '@/lib/sceneEdit'
-import { applyResolved, resolveEdits } from '@/lib/textEdit'
-import {
-  parseMermaidConfig,
-  applyThemeToSite,
-  layoutFromConfig,
-  resolveThemeMode,
-  setLayoutInYaml,
-  setThemeInYaml,
-  themeBackgroundColor,
-  themeFromConfig,
-  type MermaidUserConfig,
-} from '@/lib/mermaidConfig'
-import { THEME_PRESETS } from '@/lib/themes'
 import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
+import { canConsumeScratchDraft, draftBaseFor, draftNeedsReconciliation, needsDraft } from '@/lib/draftLifecycle'
+import { saveLocalBatch } from '@/lib/localBatch'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
+import { RequestGate, WorkspaceStore, documentKey, workspaceKey, type DocumentIdentity, type WorkspaceIdentity } from '@/lib/workspaceStore'
 import {
   loadAgentLink,
   loadConfig,
+  openDocumentStorage,
   saveAgentLink,
   saveConfig,
-  loadDraft,
-  saveDraft,
   clearDraft,
+  readDraftResult,
+  writeDraftResult,
+  createDraftResult,
   docIdForFile,
   docIdForLocalFile,
   scratchDocIdFor,
-  listDraftPaths,
-  listLocalDraftPaths,
-  listLocalFiles,
-  readLocalFile,
-  writeLocalFile,
-  deleteLocalFile,
-  renameLocalFile,
+  listDraftPathsResult,
+  listLocalDraftPathsResult,
+  listLocalFilesResult,
+  readLocalFileResult,
+  saveLocalFileAndClearDraft,
+  moveLocalFileAndDraft,
+  deleteLocalFilesAndDrafts,
 } from '@/lib/storage'
 import { APP_NAME, DEFAULT_MCP_ORIGIN } from '@/lib/config'
 import {
   buildTree,
-  collectDirPaths,
   collectFilePaths,
   fileExtension,
   fileKind,
   isDiagramFile,
-  pathMatchesQuery,
+  isRasterImageFile,
+  isSvgFile,
   DIAGRAM_EXTENSIONS_LABEL,
   EXCALIDRAW_EXTENSION,
   type FileKind,
 } from '@/lib/tree'
 import { EMPTY_SCENE, scenesEqual } from '@/lib/excalidraw'
-import { cn } from '@/lib/utils'
 import {
   checkSession,
   commitFiles,
   listTree,
   readFile,
-  readFileAtRef,
-  listFileCommits,
   commitFile,
+  commitBinaryFile,
+  replaceExportFile,
+  readBinaryFile,
   deletePaths,
   renameFile,
   createBranch,
   type FileWrite,
   type TreeResult,
 } from '@/app/actions/github'
-import type { AppConfig, FileCommit, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
+import type { AppConfig, Repo, RepoRef, SessionUser, TreeNode } from '@/lib/types'
 
 export interface AppShellProps {
   user: SessionUser | null
@@ -144,12 +86,23 @@ export interface AppShellProps {
 }
 
 const SAMPLE = `flowchart TD
-  A[Working copy in localStorage] -->|Save = commit| B(GitHub repo)
+  A[Working copy in IndexedDB] -->|Save = commit| B(GitHub repo)
   B --> C{Conflict?}
   C -->|No| D[Committed on your branch]
   C -->|Yes| E[Refetch sha, commit on top]
   E --> D
 `
+
+function generatedCommitMessage(path: string, sha?: string): string {
+  return `${sha ? 'Update' : 'Create'} ${path} via ${APP_NAME}`
+}
+
+function generatedBatchCommitMessage(paths: readonly string[]): string {
+  const summary = paths.length === 1
+    ? `Update ${paths[0]} via ${APP_NAME}`
+    : `Update ${paths.length} files via ${APP_NAME}`
+  return paths.length === 1 ? summary : `${summary}\n\n${paths.map((path) => `- ${path}`).join('\n')}`
+}
 
 // Starter diagram for a new mermaid file. A worked example rather than a bare
 // `A --> B`: the fastest way to learn the syntax is to edit something that
@@ -234,51 +187,13 @@ function defaultFileName(kind: FileKind, base: string): string {
   return `${base}${extensionFor(kind)}`
 }
 
-// Sentinel Select values for the theme dropdown: "None" strips the theme (revert
-// to the default look), "Custom" is the read-only display state when the config's
-// palette matches no preset (e.g. hand-edited themeVariables).
-const NONE_THEME = '__none__'
-const CUSTOM_THEME = '__custom__'
-const HISTORY_PAGE_SIZE = 30
-
-/** How many unsaved paths the save menu names before it starts counting. Enough
- *  to recognize the set at a glance; a list long enough to scroll would be a file
- *  tree, and there is one of those on the left. */
-const MAX_LISTED_UNSAVED = 6
-
-/**
- * Whether two versions of the same document differ.
- *
- * Scenes cannot be compared byte-for-byte (rule 9): re-serializing a scene we just
- * loaded legitimately changes the bytes — key order, the `source` field, a
- * renarrowed appState — so a freshly opened file would read as unsaved before
- * anybody touched it. `scenesEqual` compares the drawing instead.
- *
- * Every dirty decision in this file goes through here, including the ones an agent
- * makes about a file nobody has opened. They have to agree: one of them lights the
- * dot in the sidebar and another decides whether a draft is kept, and a disagreement
- * means a file marked unsaved with nothing saved in it.
- */
+/** Whether two versions of the same document differ. */
 function contentDiffers(a: string, b: string, kind: FileKind): boolean {
   return kind === 'excalidraw' ? !scenesEqual(a, b) : a !== b
 }
 
-/**
- * What `loadedSha` holds for a saved *local* file.
- *
- * `loadedSha` has always answered two questions at once — "which commit is this"
- * and "is there a saved version behind this document at all" — and only the first
- * is about GitHub. Local mode needs the second: Restore, the diff gutter, DiffView
- * and `pendingPaths` all key on `loadedSha !== null`, and every one of them is
- * right in local mode for the same reason it is right in a repo. A sentinel keeps
- * those four working untouched, and it can never be mistaken for a real sha, which
- * is a 40-character hex string.
- */
+/** What `loadedSha` holds for a saved *local* file. */
 const LOCAL_SAVED = 'local'
-
-/** Shared empty path set, so resetting one to "nothing" is not a new object (and
- *  so not a render) every time. */
-const EMPTY_PATHS: ReadonlySet<string> = new Set()
 
 /** A new Set with `paths` removed — used to clear dirty-tracking on delete/commit. */
 function withoutPaths(set: ReadonlySet<string>, paths: string[]): ReadonlySet<string> {
@@ -296,21 +211,7 @@ function withPath(set: ReadonlySet<string>, path: string): ReadonlySet<string> {
   return next
 }
 
-/**
- * The fetched tree with `path` spliced in as a committed file.
- *
- * Called the moment a commit lands, because the commit itself is what makes a
- * never-committed file stop being pending — and `pendingPaths` is what was
- * splicing it into the sidebar. Waiting for `refreshTree` to prove the path is on
- * the branch leaves a gap of one round trip in which the file belongs to neither
- * set, and it blinked out of the tree and back for exactly that long.
- *
- * Recording it as *committed* rather than keeping it pending is the point: a
- * pending path routes reads at the localStorage draft (which the commit just
- * spent) and sends rename/delete down the local-only branch that skips GitHub.
- * The path is genuinely on the branch now, so the optimistic entry says so, and
- * the real fetch overwrites it either way.
- */
+/** The fetched tree with `path` spliced in as a committed file. */
 function treeWithPath(tree: TreeResult, path: string): TreeResult {
   const paths = tree.tree.flatMap(collectFilePaths)
   if (paths.includes(path)) return tree
@@ -326,10 +227,17 @@ type PromptSpec = Pick<
   | 'prefix'
   | 'suffix'
   | 'selection'
+  | 'multiline'
   | 'submitLabel'
   | 'validate'
   | 'onSubmit'
 >
+
+interface PendingExport {
+  format: 'SVG' | 'PNG'
+  path: string
+  create: () => Promise<{ content: string | Blob; encoding: 'utf8' | 'binary' }>
+}
 
 export default function AppShell({ user, mode }: AppShellProps) {
   const githubEnabled = mode === 'github' && !!user
@@ -337,24 +245,46 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [config, setConfig] = useState<AppConfig>({
     repo: null,
     exportBackground: 'white',
-    pngScale: { mode: 'auto' },
+    pngScale: { mode: 'multiplier', value: 2 },
+    svgTheme: 'forced',
+    exportFrame: false,
     splitRatio: 0.5,
     sidebarWidth: 256,
     wrapLines: false,
     minimap: true,
+    preferredCommitAction: 'generated',
     scratchKind: 'mermaid',
     mcpOrigin: null,
     mermaidConfig: '',
   })
   const [hydrated, setHydrated] = useState(false)
+  const configRef = useRef(config)
+  const workspaceStoreRef = useRef<WorkspaceStore | null>(null)
+  if (!workspaceStoreRef.current) workspaceStoreRef.current = new WorkspaceStore()
+  const workspaceStore = workspaceStoreRef.current
+  const currentWorkspace = useCallback((): WorkspaceIdentity => {
+    const selected = mode === 'github' ? configRef.current.repo : null
+    return selected
+      ? { mode: 'github', owner: selected.owner, repo: selected.name, branch: selected.branch }
+      : { mode: 'local' }
+  }, [mode])
+  const identityFor = useCallback((path: string | null, scratchKind?: FileKind): DocumentIdentity => ({
+    // Scratch drafts are global per kind in the current storage contract.
+    workspace: path ? currentWorkspace() : { mode: 'local' },
+    path, kind: path ? fileKind(path) : (scratchKind ?? configRef.current.scratchKind),
+  }), [currentWorkspace])
+  const workspaceSelectionRef = useRef(workspaceKey(currentWorkspace()))
+  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
+    configRef.current = { ...configRef.current, ...patch }
+    workspaceSelectionRef.current = workspaceKey(currentWorkspace())
+    setConfig((prev) => {
+      const next = { ...prev, ...patch }
+      saveConfig(next)
+      return next
+    })
+  }, [currentWorkspace])
 
-  /** Agent Link, scoped to *this tab* rather than to the origin — see
-   *  `loadAgentLink`. Kept out of `AppConfig` on purpose: a shared switch armed
-   *  every tab at once, so the human could not choose which one an agent drove.
-   *
-   *  Starts off and is hydrated in an effect, like the rest of the persisted
-   *  state: `sessionStorage` does not exist during SSR, and reading it in the
-   *  initializer would make the server and client renders disagree. */
+  /** Agent Link, scoped to *this tab* rather than to the origin — see `loadAgentLink`. */
   const [agentLinkOn, setAgentLinkOn] = useState(false)
   const enableAgentLink = useCallback((enabled: boolean) => {
     setAgentLinkOn(enabled)
@@ -371,37 +301,52 @@ export default function AppShell({ user, mode }: AppShellProps) {
     if (isMobile && !mobileWarningDismissed) setMobileWarningOpen(true)
   }, [isMobile, mobileWarningDismissed])
 
-  // Excalidraw's scene fonts, registered on page load rather than when a canvas
-  // mounts.
-  //
-  // Deliberately unconditional — not gated on the open document being a canvas, and
-  // not deferred to the first scene edit. An agent's `scene_edit` can arrive at any
-  // moment for a file nobody is looking at, and the whole point of registering these
-  // ourselves is that the measurement no longer depends on what is on screen. Costs a
-  // 1.3KB manifest and 21 `FontFace` objects; the woff2 files stay unfetched until
-  // something is actually measured against them, so this is not the ~1MB editor
-  // bundle by another route (rule 8). Fire and forget: `applySceneOps` awaits the same
-  // promise, so an edit that beats the warm-up waits for it rather than racing it.
+  // Excalidraw's scene fonts, registered on page load rather than when a canvas mounts.
   useEffect(() => {
     void ensureExcalidrawFonts()
   }, [])
 
-  // Live editor/preview split ratio (persisted to config on drag end).
-  const [editorRatio, setEditorRatio] = useState(0.5)
-  const paneRowRef = useRef<HTMLDivElement>(null)
+  const {
+    editorRatio,
+    setEditorRatio,
+    sidebarWidth,
+    setSidebarWidth,
+    paneRowRef,
+    startDividerDrag,
+    onDividerKeyDown,
+    startSidebarDrag,
+    onSidebarDividerKeyDown,
+  } = useResizableLayout(updateConfig)
 
-  // Live sidebar width in pixels (persisted to config on drag end).
-  const [sidebarWidth, setSidebarWidth] = useState(256)
-
-  const [text, setText] = useState(SAMPLE)
+  const [text, setTextState] = useState(SAMPLE)
+  const liveTextRef = useRef(text)
+  const workingRevisionRef = useRef(0)
+  const openPathRef = useRef<string | null>(null)
+  const openRequestRef = useRef(0)
+  const activeIdentityRef = useRef<DocumentIdentity>(identityFor(null))
+  const setText = useCallback((next: string) => {
+    liveTextRef.current = next
+    workingRevisionRef.current += 1
+    workspaceStore.edit(activeIdentityRef.current, next)
+    setTextState(next)
+  }, [workspaceStore])
   const [baseline, setBaseline] = useState(SAMPLE)
-  const [openPath, setOpenPath] = useState<string | null>(null)
+  const [openPath, setOpenPathState] = useState<string | null>(null)
+  const setOpenPath = useCallback((next: string | null) => {
+    openRequestRef.current += 1
+    openPathRef.current = next
+    activeIdentityRef.current = identityFor(next)
+    workspaceStore.activate(documentKey(activeIdentityRef.current))
+    setOpenPathState(next)
+  }, [identityFor, workspaceStore])
   const [loadedSha, setLoadedSha] = useState<string | null>(null)
   // Files opened by following a link inside a document, so there is a way back.
   // Only link navigation pushes: picking a file in the tree is a fresh start, not
   // a step in a trail, and a Back button that then jumped somewhere unrelated
   // would be worse than none.
-  const [linkTrail, setLinkTrail] = useState<string[]>([])
+  const [linkTrail, setLinkTrail] = useState<Array<{ path: string; scrollTop: number }>>([])
+  const [markdownScrollTop, setMarkdownScrollTop] = useState(0)
+  const clearLinkTrail = useCallback(() => setLinkTrail([]), [])
 
   const [tree, setTree] = useState<TreeResult | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
@@ -413,6 +358,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [saving, setSaving] = useState(false)
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflictBusy, setConflictBusy] = useState(false)
+  const [draftConflictKey, setDraftConflictKey] = useState<string | null>(null)
+  const draftBasesRef = useRef(new globalThis.Map<string, import('@/lib/storage').DraftBaseRevision>())
 
   const [deleteTarget, setDeleteTarget] = useState<TreeNode | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -423,7 +370,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [branchBusy, setBranchBusy] = useState(false)
   const [prompt, setPrompt] = useState<PromptSpec | null>(null)
   const [promptOpen, setPromptOpen] = useState(false)
-
+  const [imageUploadOpen, setImageUploadOpen] = useState(false)
+  const [imageUploadDirectory, setImageUploadDirectory] = useState('')
+  const [imageUploadBusy, setImageUploadBusy] = useState(false)
+  const [pendingExportReplace, setPendingExportReplace] = useState<PendingExport | null>(null)
+  const [replaceExportBusy, setReplaceExportBusy] = useState(false)
+  const openPrompt = useCallback((spec: PromptSpec) => {
+    setPrompt(spec)
+    setPromptOpen(true)
+  }, [])
   const [configOpen, setConfigOpen] = useState(false)
   const [linkOpen, setLinkOpen] = useState(false)
   // Swaps the editor/preview split for a diff of the committed file against the
@@ -431,85 +386,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // *rendered* where there is a committed side to compare with — see `canDiff`.
   const [showDiff, setShowDiff] = useState(false)
 
-  const [historyOpen, setHistoryOpen] = useState(false)
-  // Path segment currently displayed — starts at the open file's path, but moves
-  // to an older path once the user chooses to view history before a rename.
-  const [historyPath, setHistoryPath] = useState<string | null>(null)
-  const [historyPathStack, setHistoryPathStack] = useState<string[]>([])
-  const [commits, setCommits] = useState<FileCommit[] | null>(null)
-  const [historyPage, setHistoryPage] = useState(1)
-  const [hasMoreCommits, setHasMoreCommits] = useState(false)
-  const [loadingMoreCommits, setLoadingMoreCommits] = useState(false)
-  const [renamedFrom, setRenamedFrom] = useState<string | null>(null)
-  const [historyError, setHistoryError] = useState<string | null>(null)
-  const [selectedSha, setSelectedSha] = useState<string | null>(null)
-  const [versionContent, setVersionContent] = useState<string | null>(null)
-  const [versionLoading, setVersionLoading] = useState(false)
-  // How the selected version is shown, and — in diff mode — what it is compared
-  // against. Both are sticky across selections: someone reading a file's history
-  // as a series of diffs wants the next version to open the same way.
-  const [historyView, setHistoryView] = useState<HistoryView>('preview')
-  const [historyCompare, setHistoryCompare] = useState<HistoryCompare>('previous')
-  /** Content of the version *before* the selected one, for the default diff. */
-  const [previousContent, setPreviousContent] = useState<string | null>(null)
-  const [previousLoading, setPreviousLoading] = useState(false)
-  const [compareNote, setCompareNote] = useState<string | null>(null)
-
-  // Parse the user's YAML config. The memo keeps a stable object reference until
-  // the raw text changes, so it's safe to feed into the Preview render effect's
-  // deps. `appliedConfig` holds the last *valid* parse — a half-typed config
-  // (parse error) leaves the previous theme in place rather than blanking it.
-  const parsedConfig = useMemo(() => parseMermaidConfig(config.mermaidConfig), [config.mermaidConfig])
-  const [appliedConfig, setAppliedConfig] = useState<MermaidUserConfig | null>(null)
-  useEffect(() => {
-    if (parsedConfig.error) return
-    setAppliedConfig(parsedConfig.config)
-    // themeVariables recolor the whole app chrome (empty config resets it).
-    applyThemeToSite(parsedConfig.config)
-  }, [parsedConfig])
-
-  // The layout dropdown reflects — and writes back into — the YAML config, which
-  // is the single source of truth. Selecting an engine rewrites the `layout` key
-  // (see the Select's onValueChange, which calls setLayoutInYaml).
-  const layoutValues = useMemo(() => LAYOUT_ENGINES.map((e) => e.value), [])
-  const currentLayout = layoutFromConfig(appliedConfig, layoutValues, DEFAULT_LAYOUT)
-
-  // The theme dropdown, like layout, reflects and writes back the YAML config.
-  // Show the matching preset if the config's palette matches one; "Custom" if it
-  // has a palette matching none (hand-tuned); "None" if it sets no theme at all.
-  const currentTheme = useMemo(() => {
-    const matched = themeFromConfig(appliedConfig)
-    if (matched) return matched.value
-    const tv = appliedConfig?.themeVariables
-    const hasVars = !!tv && typeof tv === 'object' && Object.keys(tv).length > 0
-    return hasVars ? CUSTOM_THEME : NONE_THEME
-  }, [appliedConfig])
-
-  // Shared by the Select's onValueChange (commit) and each item's onFocus (live
-  // preview as arrow keys/hover move the highlight), so navigating the dropdown
-  // re-themes the diagram before the user settles on a choice.
-  const applyTheme = useCallback(
-    (v: string) => {
-      if (v === CUSTOM_THEME) return
-      const preset = v === NONE_THEME ? null : THEME_PRESETS.find((p) => p.value === v)
-      if (v !== NONE_THEME && !preset) return
-      updateConfig({ mermaidConfig: setThemeInYaml(config.mermaidConfig, preset ?? null) })
-    },
-    [config.mermaidConfig],
-  )
+  const {
+    parsedConfig,
+    appliedConfig,
+    currentLayout,
+    currentTheme,
+    applyTheme,
+    canvasTheme,
+    canvasBackground,
+    editorDark,
+  } = useAppearanceController(config, updateConfig)
 
   const repo = githubEnabled ? config.repo : null
 
-  /**
-   * Local mode: no GitHub, and localStorage holds the saved files as well as the
-   * drafts over them.
-   *
-   * The two modes are deliberately *one* file lifecycle with two backing stores,
-   * not two features. Everything below that reads or writes a document asks which
-   * store it is talking to and nothing else changes — which is why the diff gutter,
-   * the dirty markers, Restore, and the agent's path resolution all work in local
-   * mode without a line of their own.
-   */
+  /** Local mode: no GitHub, and IndexedDB holds the saved files as well as the drafts over them. */
   const localMode = !githubEnabled
 
   /** Whether there is a file workspace at all: a connected repo, or local mode.
@@ -524,33 +414,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
   /** Re-read the local store. Called after every write to it, because it *is* the
    *  file system in local mode — there is nothing to fetch and nothing to be stale
    *  against. */
-  const refreshLocalFiles = useCallback(() => {
-    setLocalPaths(listLocalFiles())
+  const refreshLocalFiles = useCallback(async () => {
+    const result = await listLocalFilesResult()
+    if (result.status === 'ok') setLocalPaths(result.value)
+    else toast.error('Could not list files in browser storage.')
   }, [])
 
-  // Which editor the current document gets. For a repo file the extension decides;
-  // with nothing open (local mode, or before picking a file) it's the user's
-  // scratch choice. Everything else about a document — reading, committing,
-  // drafts, conflicts, history — is identical across kinds; only the editing
-  // surface and the export path differ.
+  // Which editor the current document gets. For a repo file the extension decides; with nothing
+  // open (local mode, or before picking a file) it's the user's scratch choice.
   const kind: FileKind = openPath ? fileKind(openPath) : config.scratchKind
+  const assetKind = openPath
+    ? isRasterImageFile(openPath) ? 'raster' as const : isSvgFile(openPath) ? 'svg' as const : null
+    : null
 
-  // Excalidraw's theme is a binary light/dark switch, not an arbitrary palette,
-  // so the canvas follows the *mode* of whichever diagram theme is active. That
-  // keeps a scene from flashing a white canvas inside dark chrome when the user
-  // opens it while a dark theme is selected.
-  const canvasTheme = useMemo(() => resolveThemeMode(appliedConfig), [appliedConfig])
-  /** CodeMirror carries its own binary `dark` flag, which decides the defaults for
-   *  every surface `editorTheme` doesn't name. It follows the same resolved mode
-   *  as the canvas — pinned to `false`, a dark palette got CodeMirror's
-   *  light-theme defaults underneath it. */
-  const editorDark = canvasTheme === 'dark'
-
-  // The canvas paints the active theme's background, so the drawing surface matches
-  // the app chrome around it. Imposed for display only — never written to the file.
-  const canvasBackground = useMemo(() => themeBackgroundColor(appliedConfig), [appliedConfig])
-
-  const dirty = contentDiffers(text, baseline, kind)
+  const dirty = needsDraft(contentDiffers(text, baseline, kind), openPath !== null && loadedSha === null)
   // Each scratch kind gets its own draft slot, so toggling between diagram,
   // document and canvas with nothing open parks the current work rather than
   // overwriting it with content the other surface can't read.
@@ -567,6 +444,59 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const docId = openPath && hasWorkspace ? docIdForPath(openPath) : scratchDocId
 
+  const recoverHistoryVersion = useCallback((content: string) => {
+    setText(content)
+    toast.info('Version loaded into working tree (unsaved)')
+  }, [setText])
+
+  const forkHistoryVersion = useCallback((content: string) => {
+    if (!repo) return
+    openPrompt({
+      title: 'Create new diagram from this version',
+      description: 'Save this version’s content as a separate new file.',
+      label: 'New file path',
+      defaultValue: defaultFileName(kind, 'copy'),
+      submitLabel: 'Start editing',
+      validate: validatePathForKind(kind),
+      onSubmit: (path) => {
+        setPromptOpen(false)
+        setOpenPath(path)
+        setLoadedSha(null)
+        setBaseline('')
+        setText(content)
+      },
+    })
+  }, [repo, kind, openPrompt, setOpenPath, setText])
+
+  const history = useHistoryController({
+    repo,
+    openPath,
+    workspaceIdentity: workspaceSelectionRef.current,
+    workingContent: text,
+    onRecover: recoverHistoryVersion,
+    onFork: forkHistoryVersion,
+  })
+  const resetHistory = history.reset
+
+  // The editor callback updates liveTextRef before React renders. Navigation can
+  // therefore persist the outgoing document even in the same event as an edit.
+  const activeDraftRef = useRef({ docId, baseline, kind, pending: openPath !== null && loadedSha === null,
+    savedRevision: loadedSha })
+  activeDraftRef.current = { docId, baseline, kind, pending: openPath !== null && loadedSha === null,
+    savedRevision: loadedSha }
+  const flushOutgoingDraft = useCallback(async (): Promise<boolean> => {
+    const active = activeDraftRef.current
+    const content = liveTextRef.current
+    if (!needsDraft(contentDiffers(content, active.baseline, active.kind), active.pending)) return true
+    const base = draftBasesRef.current.get(active.docId) ?? draftBaseFor(active.savedRevision)
+    draftBasesRef.current.set(active.docId, base)
+    const result = await writeDraftResult(active.docId, content, base)
+    workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
+    if (result.ok) return true
+    toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
+    return false
+  }, [workspaceStore])
+
   // Keyed on the open document: edits within a file debounce, but switching files
   // takes effect at once so nothing downstream ever sees the outgoing file's text.
   const debouncedText = useDebouncedValue(text, 350, docId)
@@ -576,169 +506,41 @@ export default function AppShell({ user, mode }: AppShellProps) {
     (openPath ? (openPath.split('/').pop() ?? '').replace(/\.[^./]+$/, '') : '') || 'diagram'
 
   /**
-   * Files that exist only in this browser: created here, never committed, so the
-   * fetched tree has no entry for them and GitHub has nothing under the path.
-   * They're spliced into the sidebar below and their content is a localStorage
-   * draft.
-   *
-   * This has to be a *set*, and it has to outlive the file being open. Derived
-   * from `openPath` alone — which it was — creating a second file, or opening any
-   * other file, dropped the first one out of the sidebar while its draft stayed in
-   * localStorage with nothing left able to reach it: the file appeared to vanish.
-   * Cleared on commit (it's a real path then), on delete, and on a repo/branch
-   * switch; moved by a local rename.
+   * Files that exist only in this browser: created here, never committed, so the fetched tree has
+   * no entry for them and GitHub has nothing under the path.
    */
-  const [createdPaths, setCreatedPaths] = useState<ReadonlySet<string>>(new Set())
+  const {
+    setCreatedPaths,
+    dirtyPaths,
+    setDirtyPaths,
+    savedPaths,
+    pendingPaths,
+    displayNodes,
+    visibleNodes,
+    visibleExpanded,
+    fileFilter,
+    setFileFilter,
+    searching,
+    toggleVisibleDir,
+    repoFilePaths,
+    resetExpandedPaths,
+  } = useWorkspaceTree({
+    localMode,
+    localPaths,
+    tree,
+    hasWorkspace,
+    openPath,
+    loadedSha,
+    openDocumentDirty: dirty,
+    selectedWorkspaceKey: workspaceKey(currentWorkspace()),
+    workspaceStore,
+  })
 
-  // Every never-committed path, as the rest of the app should see it: anything in
-  // `createdPaths` the branch still doesn't have, plus the open file whenever it
-  // has no sha behind it. Filtering against the fetched tree means a path that got
-  // committed (here or in another tab) stops being pending on the next refresh,
-  // whether or not something remembered to remove it.
-  /**
-   * Every path that genuinely exists in the saved store: on the branch in GitHub
-   * mode, in localStorage in local mode.
-   *
-   * Null until that store has been read, which is *not* the same as empty and the
-   * difference is load-bearing: against an empty set every path an agent names
-   * looks like one it should create, so a command arriving before the first tree
-   * fetch would write files over paths that already exist.
-   */
-  const savedPaths = useMemo<ReadonlySet<string> | null>(() => {
-    if (localMode) return localPaths === null ? null : new Set(localPaths)
-    return tree ? new Set(tree.tree.flatMap(collectFilePaths)) : null
-  }, [localMode, localPaths, tree])
-
-  const pendingPaths = useMemo<ReadonlySet<string>>(() => {
-    const next = new Set<string>()
-    for (const path of createdPaths) if (!savedPaths?.has(path)) next.add(path)
-    if (hasWorkspace && openPath && loadedSha === null) next.add(openPath)
-    return next
-  }, [savedPaths, createdPaths, hasWorkspace, openPath, loadedSha])
-
-  // Every path with unsaved edits made *this session*, not just the open one —
-  // so switching files without saving still shows the earlier file as dirty in
-  // the tree. Keyed off the open file's live dirty state; committing, reverting,
-  // deleting, or renaming a path removes it below.
-  const [dirtyPaths, setDirtyPaths] = useState<ReadonlySet<string>>(new Set())
-  useEffect(() => {
-    if (!openPath) return
-    setDirtyPaths((prev) => {
-      if (dirty === prev.has(openPath)) return prev
-      const next = new Set(prev)
-      if (dirty) next.add(openPath)
-      else next.delete(openPath)
-      return next
-    })
-  }, [openPath, dirty])
-
-  // Which directories are expanded in the file tree — kept in memory only (not
-  // persisted), reset whenever the selected repo/branch changes so a stale
-  // expand/collapse layout from the previous repo can't bleed into the next one.
-  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set())
-  const onToggleDir = useCallback((path: string) => {
-    setExpandedPaths((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }, [])
-
-  const displayNodes = useMemo(() => {
-    const base = localMode ? buildTree([...(localPaths ?? [])]) : (tree?.tree ?? [])
-    if (pendingPaths.size === 0) return base
-    const paths = base.flatMap(collectFilePaths)
-    for (const path of pendingPaths) if (!paths.includes(path)) paths.push(path)
-    return buildTree(paths)
-  }, [localMode, localPaths, tree, pendingPaths])
-
-  /**
-   * The sidebar's search box.
-   *
-   * Filters the tree that is already in memory — there is no call behind it, in
-   * either mode. `displayNodes` is rebuilt from the matching paths rather than
-   * pruned in the tree component, so a folder whose name matched keeps every file
-   * under it and a folder that only *contains* a match still appears as the path
-   * to it. In memory rather than persisted: a filter left on across a reload is a
-   * sidebar that looks like a repo with three files in it.
-   */
-  const [fileFilter, setFileFilter] = useState('')
-  const searching = fileFilter.trim().length > 0
-
-  const visibleNodes = useMemo(() => {
-    if (!searching) return displayNodes
-    const matched = displayNodes
-      .flatMap(collectFilePaths)
-      .filter((path) => pathMatchesQuery(path, fileFilter))
-    return buildTree(matched)
-  }, [displayNodes, searching, fileFilter])
-
-  /**
-   * Folders the user collapsed *while a search is running*, which is its own
-   * short-lived state rather than an edit to `expandedPaths`.
-   *
-   * A search starts with everything open — a result buried in a collapsed folder
-   * is a result the search did not deliver — so the browsing expand/collapse set
-   * cannot also drive the filtered tree. Keeping the two apart is what lets the
-   * chevrons still work during a search without a search then silently rewriting
-   * the layout the user comes back to when they clear the box.
-   */
-  const [searchCollapsed, setSearchCollapsed] = useState<ReadonlySet<string>>(new Set())
-
-  const visibleExpanded = useMemo<ReadonlySet<string>>(() => {
-    if (!searching) return expandedPaths
-    return new Set(
-      visibleNodes.flatMap(collectDirPaths).filter((path) => !searchCollapsed.has(path)),
-    )
-  }, [searching, visibleNodes, expandedPaths, searchCollapsed])
-
-  const toggleVisibleDir = useCallback(
-    (path: string) => {
-      if (!searching) {
-        onToggleDir(path)
-        return
-      }
-      setSearchCollapsed((prev) => {
-        const next = new Set(prev)
-        if (next.has(path)) next.delete(path)
-        else next.add(path)
-        return next
-      })
-    },
-    [searching, onToggleDir],
-  )
-
-  // Flat list of every file in the repo, for completing markdown link targets in
-  // the editor. Derived from the same tree the sidebar shows, so a file created or
-  // deleted this session is offered (or stops being offered) without a new fetch.
-  const repoFilePaths = useMemo(
-    () => displayNodes.flatMap(collectFilePaths),
-    [displayNodes],
-  )
-
-  const updateConfig = useCallback((patch: Partial<AppConfig>) => {
-    setConfig((prev) => {
-      const next = { ...prev, ...patch }
-      saveConfig(next)
-      return next
-    })
-  }, [])
-
-  /**
-   * Fetch the tree and swap it in once it arrives.
-   *
-   * Deliberately does NOT clear `tree` first. Most callers are incidental
-   * refreshes — after a commit, delete, rename, or the refresh button — where
-   * blanking the list replaced it with a loading state for the duration of a round
-   * trip, even though the list on screen was still almost entirely correct.
-   *
-   * Discarding the stale list is the caller's decision, and only two situations
-   * warrant it: the very first load (where `tree` is already null) and a
-   * repo/branch switch, where `resetForRepoSwitch` clears it because the paths
-   * genuinely no longer apply.
-   */
+  /** Fetch the tree and swap it in once it arrives. */
+  const treeRequestRef = useRef(new RequestGate())
   const refreshTree = useCallback(async (target: RepoRef) => {
+    const targetKey = workspaceKey({ mode: 'github', owner: target.owner, repo: target.name, branch: target.branch })
+    const request = treeRequestRef.current.begin(targetKey)
     setTreeLoading(true)
     setTreeError(null)
     const res = await listTree(
@@ -747,17 +549,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
       target.branch,
       target.branch === target.defaultBranch,
     )
+    if (!treeRequestRef.current.accepts(request, workspaceSelectionRef.current)) return null
     setTreeLoading(false)
     if (res.ok) {
       setTree(res.data)
       return res.data
     }
     if (handleExpiredSession(res.error)) return null
-    // The connected repo is unreachable (uninstalled, access narrowed, renamed or
-    // deleted). No retry fixes that and there is nothing to browse, so lead with
-    // the picker — the same remedy as having no repo selected. `config.repo` is
-    // deliberately left alone: the user may be mid-reinstall on GitHub, and
-    // nulling it would throw away a selection that is about to work again.
+    // The connected repo is unreachable (uninstalled, access narrowed, renamed or deleted).
     if (res.error.kind === 'repo_unavailable') setRepoPickerOpen(true)
     // Set either way, so dismissing the picker leaves an explanation in the
     // sidebar instead of an inert empty pane.
@@ -771,6 +570,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const showRepoStartState = useCallback(
     (treeData: TreeResult) => {
       const hasFiles = treeData.tree.flatMap(collectFilePaths).length > 0
+      updateConfig({ scratchKind: 'mermaid' })
       setOpenPath(null)
       setLoadedSha(null)
       const content = hasFiles ? '' : SAMPLE
@@ -778,9 +578,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setBaseline(content)
       // This content is mermaid source, so the scratch surface has to be the text
       // editor — otherwise a leftover canvas choice would try to parse it as a scene.
-      updateConfig({ scratchKind: 'mermaid' })
     },
-    [updateConfig],
+    [updateConfig, setOpenPath, setText],
   )
 
   // Invalidate everything scoped to the previously-selected repo/branch — called
@@ -788,6 +587,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // repo (stale editor content, dirty markers, expanded folders) can linger if
   // that fetch is slow or fails.
   const resetForRepoSwitch = useCallback(() => {
+    resetHistory()
+    updateConfig({ scratchKind: 'mermaid' })
     setOpenPath(null)
     setLoadedSha(null)
     setLinkTrail([])
@@ -795,20 +596,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setBaseline('')
     setDirtyPaths(new Set())
     setCreatedPaths(new Set())
-    setExpandedPaths(new Set())
+    resetExpandedPaths()
     // The outgoing repo/branch's paths are meaningless now, so this is one of the
     // few places the list *should* go back to a loading state.
     setTree(null)
     setTreeError(null)
-    updateConfig({ scratchKind: 'mermaid' })
-  }, [updateConfig])
+  }, [resetHistory, resetExpandedPaths, updateConfig, setOpenPath, setText, setCreatedPaths, setDirtyPaths])
 
   useEffect(() => {
-    // `loginWithGitHub` redirects here with `?connect=1`, which marks this
-    // arrival as a fresh sign-in: drop whatever repository was selected before so
-    // the user always picks one after logging in (the auto-open effect below then
-    // shows the picker). The flag is consumed and stripped from the URL right
-    // away, so reloading the page afterwards keeps the new selection.
+    void (async () => {
+    // `loginWithGitHub` redirects here with `?connect=1`, which marks this arrival as a fresh
+    // sign-in: drop whatever repository was selected before so the user always picks one after
+    // logging in (the auto-open effect below then shows the picker).
     const url = new URL(window.location.href)
     const freshLogin = githubEnabled && url.searchParams.get('connect') === '1'
     if (url.searchParams.has('connect')) {
@@ -816,33 +615,47 @@ export default function AppShell({ user, mode }: AppShellProps) {
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
     }
 
+    const storageReady = await openDocumentStorage()
+    if (!storageReady.ok) {
+      toast.error('Document storage is unavailable. Files and drafts have not been treated as empty.')
+    }
     const loaded = loadConfig()
     const stored = freshLogin ? { ...loaded, repo: null } : loaded
+    configRef.current = stored
+    workspaceSelectionRef.current = workspaceKey(currentWorkspace())
+    activeIdentityRef.current = identityFor(null, stored.scratchKind)
+    const initialActivation = workspaceStore.activate(documentKey(activeIdentityRef.current))
     if (freshLogin) saveConfig(stored)
     setConfig(stored)
     setEditorRatio(stored.splitRatio)
     setSidebarWidth(stored.sidebarWidth)
     setAgentLinkOn(loadAgentLink())
-    setHydrated(true)
     // The local store is the file system in local mode, so read it now rather than
     // leave `localPaths` null — every "does this file exist" question below waits on
     // it, the agent's included.
-    if (!githubEnabled) setLocalPaths(listLocalFiles())
+    if (!githubEnabled && storageReady.ok) {
+      const local = await listLocalFilesResult()
+      if (local.status === 'ok') setLocalPaths(local.value)
+      else toast.error('Could not list files in browser storage.')
+    }
 
     // A non-empty scratch draft is unsaved working-copy work — restore it across
     // reloads rather than clobbering it with the start state. Which slot to read
     // depends on the scratch surface the user last had open.
-    const draft = loadDraft(scratchDocIdFor(stored.scratchKind))
-    const restorable = draft && draft.content.trim().length > 0 ? draft.content : null
+    const draft = storageReady.ok
+      ? await readDraftResult(scratchDocIdFor(stored.scratchKind))
+      : { status: 'unavailable' as const }
+    const restorable = draft.status === 'ok' && draft.value.content.trim().length > 0
+      ? draft.value.content : null
 
     if (githubEnabled && stored.repo) {
+      if (restorable !== null) {
+        setText(restorable)
+        setBaseline('')
+      }
       void refreshTree(stored.repo).then((data) => {
-        if (restorable !== null) {
-          setText(restorable)
-          setBaseline('')
-        } else if (data) {
-          showRepoStartState(data)
-        }
+        if (workspaceStore.active().generation !== initialActivation) return
+        if (restorable === null && data) showRepoStartState(data)
       })
     } else if (stored.scratchKind === 'excalidraw') {
       setText(restorable ?? EMPTY_SCENE)
@@ -854,36 +667,37 @@ export default function AppShell({ user, mode }: AppShellProps) {
       setText(restorable)
       setBaseline(SAMPLE)
     }
-  }, [githubEnabled, refreshTree, showRepoStartState])
+    setHydrated(true)
+    })()
+  }, [githubEnabled, refreshTree, showRepoStartState, setText, setEditorRatio, setSidebarWidth,
+    currentWorkspace, identityFor, workspaceStore])
 
   /**
-   * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths`
-   * is persisted, so after a refresh nothing remembers them — but their drafts are
-   * still in localStorage, and a draft under a path the saved store doesn't have can
-   * only be a file created here and never saved.
-   *
-   * Deliberately **once per workspace**, on its first file list, rather than on
-   * every refresh. A rename or a commit moves a draft before the tree that proves
-   * where the path now lives has arrived, so re-deriving this against a stale tree
-   * would briefly re-flag a path that is in fact committed — and while it is
-   * flagged, rename and delete would take their never-saved branch and skip GitHub.
+   * Recover never-saved files across a reload. Neither `openPath` nor `createdPaths` is persisted,
+   * so after a refresh nothing remembers them — but their drafts are still in IndexedDB, and a
+   * draft under a path the saved store doesn't have can only be a file created here and never
+   * saved.
    */
   const recoveredFor = useRef<string | null>(null)
   useEffect(() => {
     if (!hasWorkspace || !savedPaths) return
+    void (async () => {
     const key = repo ? docIdForFile(repo.owner, repo.name, repo.branch, '') : 'local'
     if (recoveredFor.current === key) return
-    recoveredFor.current = key
     const committed = savedPaths
-    const drafts = repo
-      ? listDraftPaths(repo.owner, repo.name, repo.branch)
-      : listLocalDraftPaths()
+    const listing = await (repo
+      ? listDraftPathsResult(repo.owner, repo.name, repo.branch)
+      : listLocalDraftPathsResult())
+    if (listing.status !== 'ok') {
+      toast.error('Could not list unsaved drafts in browser storage.')
+      return
+    }
+    recoveredFor.current = key
+    const drafts = listing.value
     if (drafts.length === 0) return
-    // A draft is only ever written while a document is dirty and is cleared the
-    // moment it isn't, so a draft under this branch *is* a file with uncommitted
-    // edits — light its marker in the sidebar. Without this the markers lived only
-    // as long as the tab: an agent that edited six files nobody opened left the
-    // work in localStorage and no sign of it anywhere on screen after a reload.
+    // A draft is only ever written while a document is dirty and is cleared the moment it isn't, so
+    // a draft under this branch *is* a file with uncommitted edits — light its marker in the
+    // sidebar.
     setDirtyPaths((prev) => {
       const next = new Set(prev)
       for (const path of drafts) next.add(path)
@@ -896,17 +710,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
       for (const path of orphans) next.add(path)
       return next
     })
-  }, [hasWorkspace, savedPaths, repo])
+    })()
+  }, [hasWorkspace, savedPaths, repo, setCreatedPaths, setDirtyPaths])
 
-  /**
-   * Verify the GitHub session before the user relies on it.
-   *
-   * Once per mount, and only in GitHub mode — local mode has no session to check.
-   * Costs no GitHub request: `checkSession` reads the session cookie and nothing
-   * else. `handleExpiredSession` does the whole of the response — it signs out
-   * and navigates — so there is nothing to render here and nothing to hold in
-   * state.
-   */
+  /** Verify the GitHub session before the user relies on it. */
   const sessionChecked = useRef(false)
   useEffect(() => {
     if (!githubEnabled || sessionChecked.current) return
@@ -927,20 +734,24 @@ export default function AppShell({ user, mode }: AppShellProps) {
     setRepoPickerOpen(true)
   }, [hydrated, githubEnabled, config.repo])
 
-  // The draft slot holds *divergence from the committed/starter state*, so it is
-  // written only while the document is dirty and cleared as soon as it isn't.
-  //
-  // Saving unconditionally meant the auto-inserted starter template was itself
-  // persisted as a draft the moment it was shown. That draft then won on every
-  // subsequent load, so a user who had merely *looked* at a scratch document was
-  // pinned to whatever the template said on that day — editing the template here
-  // had no effect on them, forever. Gating on `dirty` also means committing,
-  // restoring or reverting no longer leaves a redundant copy behind.
+  // Persist live content, independently of the preview debounce. A pending file
+  // keeps its existence record even when its content is empty.
   useEffect(() => {
     if (!hydrated) return
-    if (dirty) saveDraft(docId, debouncedText)
-    else clearDraft(docId)
-  }, [debouncedText, docId, hydrated, dirty])
+    void (async () => {
+    if (dirty) {
+      const base = draftBasesRef.current.get(docId) ?? draftBaseFor(loadedSha)
+      draftBasesRef.current.set(docId, base)
+      const result = await writeDraftResult(docId, text, base)
+      workspaceStore.markPersistence(documentKey(activeIdentityRef.current), result.ok ? 'dirty' : 'failed')
+      if (!result.ok) toast.error(`Could not preserve unsaved work in this browser (${result.reason}).`)
+    }
+    else {
+      const stored = await readDraftResult(docId)
+      if (stored.status === 'ok') await clearDraft(docId)
+    }
+    })()
+  }, [text, docId, hydrated, dirty, loadedSha, workspaceStore])
 
   useEffect(() => {
     if (!dirty) return
@@ -952,131 +763,32 @@ export default function AppShell({ user, mode }: AppShellProps) {
     return () => window.removeEventListener('beforeunload', handler)
   }, [dirty])
 
-  const MIN_RATIO = 0.2
-  const MAX_RATIO = 0.8
-
-  const startDividerDrag = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault()
-      const row = paneRowRef.current
-      if (!row) return
-      const onMove = (ev: PointerEvent) => {
-        const rect = row.getBoundingClientRect()
-        if (rect.width === 0) return
-        const raw = (ev.clientX - rect.left) / rect.width
-        setEditorRatio(Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw)))
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setEditorRatio((r) => {
-          updateConfig({ splitRatio: r })
-          return r
-        })
-      }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    },
-    [updateConfig],
-  )
-
-  const onDividerKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? 0.1 : 0.02
-      let delta = 0
-      if (e.key === 'ArrowLeft') delta = -step
-      else if (e.key === 'ArrowRight') delta = step
-      else return
-      e.preventDefault()
-      setEditorRatio((r) => {
-        const next = Math.min(MAX_RATIO, Math.max(MIN_RATIO, r + delta))
-        updateConfig({ splitRatio: next })
-        return next
-      })
-    },
-    [updateConfig],
-  )
-
-  const MIN_SIDEBAR_WIDTH = 180
-  const MAX_SIDEBAR_WIDTH = 480
-
-  const startSidebarDrag = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault()
-      const startX = e.clientX
-      const startWidth = sidebarWidth
-      const onMove = (ev: PointerEvent) => {
-        const next = startWidth + (ev.clientX - startX)
-        setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, next)))
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setSidebarWidth((w) => {
-          updateConfig({ sidebarWidth: w })
-          return w
-        })
-      }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    },
-    [sidebarWidth, updateConfig],
-  )
-
-  const onSidebarDividerKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      const step = e.shiftKey ? 40 : 8
-      let delta = 0
-      if (e.key === 'ArrowLeft') delta = -step
-      else if (e.key === 'ArrowRight') delta = step
-      else return
-      e.preventDefault()
-      setSidebarWidth((w) => {
-        const next = Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, w + delta))
-        updateConfig({ sidebarWidth: next })
-        return next
-      })
-    },
-    [updateConfig],
-  )
-
-  /**
-   * Switch the scratch document between the text editor and the canvas.
-   *
-   * Nothing is lost either way: the outgoing text is parked in its own draft slot
-   * first, and the incoming kind's parked draft (if any) is restored. Only
-   * meaningful with no file open — an open file's kind comes from its extension.
-   */
+  /** Switch the scratch document between the text editor and the canvas. */
   const switchScratchKind = useCallback(
-    (nextKind: FileKind) => {
+    async (nextKind: FileKind) => {
       if (openPath || nextKind === config.scratchKind) return
-      saveDraft(scratchDocId, text)
-      const parked = loadDraft(scratchDocIdFor(nextKind))
+      if (!await flushOutgoingDraft()) return
+      const parked = await readDraftResult(scratchDocIdFor(nextKind))
+      if (parked.status === 'invalid' || parked.status === 'unavailable') {
+        toast.error(`Could not open the parked ${nextKind} draft: ${parked.status}.`)
+        return
+      }
       const fresh = templateFor(nextKind)
       updateConfig({ scratchKind: nextKind })
-      setText(parked && parked.content.trim().length > 0 ? parked.content : fresh)
+      openRequestRef.current += 1
+      activeIdentityRef.current = identityFor(null, nextKind)
+      workspaceStore.activate(documentKey(activeIdentityRef.current))
+      setText(parked.status === 'ok' ? parked.value.content : fresh)
       // Baseline is the pristine template, so a restored draft correctly reads as
       // unsaved work while a fresh switch reads as clean.
       setBaseline(fresh)
     },
-    [openPath, config.scratchKind, scratchDocId, text, updateConfig],
+    [openPath, config.scratchKind, flushOutgoingDraft, updateConfig, setText, identityFor, workspaceStore],
   )
 
-  const openPrompt = useCallback((spec: PromptSpec) => {
-    setPrompt(spec)
-    setPromptOpen(true)
-  }, [])
-
   const onSelectRepo = useCallback(
-    (r: Repo) => {
+    async (r: Repo) => {
+      if (!await flushOutgoingDraft()) return
       const next: RepoRef = {
         owner: r.owner,
         name: r.name,
@@ -1086,25 +798,28 @@ export default function AppShell({ user, mode }: AppShellProps) {
       updateConfig({ repo: next })
       setRepoPickerOpen(false)
       resetForRepoSwitch()
+      const activation = workspaceStore.active().generation
       void refreshTree(next).then((data) => {
-        if (data) showRepoStartState(data)
+        if (data && workspaceStore.active().generation === activation) showRepoStartState(data)
       })
     },
-    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
+    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
   )
 
   const onSelectBranch = useCallback(
-    (branch: string) => {
+    async (branch: string) => {
       if (!repo) return
+      if (!await flushOutgoingDraft()) return
       const next: RepoRef = { ...repo, branch }
       updateConfig({ repo: next })
       setBranchPickerOpen(false)
       resetForRepoSwitch()
+      const activation = workspaceStore.active().generation
       void refreshTree(next).then((data) => {
-        if (data) showRepoStartState(data)
+        if (data && workspaceStore.active().generation === activation) showRepoStartState(data)
       })
     },
-    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch],
+    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
   )
 
   const onCreateBranch = useCallback(
@@ -1119,19 +834,12 @@ export default function AppShell({ user, mode }: AppShellProps) {
         return
       }
       toast.success(`Created and switched to ${name}`)
-      onSelectBranch(name)
+      await onSelectBranch(name)
     },
     [repo, onSelectBranch],
   )
 
-  /**
-   * The saved copy of `path`: the committed file on the branch, or the local file
-   * in localStorage.
-   *
-   * One reader for both stores, because three callers need it — opening a file, the
-   * agent resolving a path, and version history's compare — and a second spelling
-   * of "which store am I in" is a second chance to get it wrong.
-   */
+  /** The saved copy of `path`: the committed file on the branch, or the local file in IndexedDB. */
   const readSaved = useCallback(
     async (
       path: string,
@@ -1140,13 +848,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
       | { ok: false; message: string; expired: boolean }
     > => {
       if (!repo) {
-        const file = readLocalFile(path)
-        if (!file) {
-          return { ok: false, message: `${path} is not saved in this browser.`, expired: false }
+        const file = await readLocalFileResult(path)
+        if (file.status !== 'ok') {
+          return { ok: false, message: `${path} is ${file.status} in this browser.`, expired: false }
         }
-        return { ok: true, content: file.content, sha: LOCAL_SAVED }
+        return { ok: true, content: file.value.content, sha: LOCAL_SAVED }
       }
-      const res = await readFile(repo.owner, repo.name, path, repo.branch)
+      const res = isRasterImageFile(path)
+        ? await readBinaryFile(repo.owner, repo.name, path, repo.branch)
+        : await readFile(repo.owner, repo.name, path, repo.branch)
       if (!res.ok) {
         return {
           ok: false,
@@ -1160,40 +870,67 @@ export default function AppShell({ user, mode }: AppShellProps) {
   )
 
   const openFile = useCallback(
-    async (path: string) => {
-      if (!hasWorkspace) return
+    async (path: string): Promise<boolean> => {
+      if (!hasWorkspace) return false
+      if (path === openPathRef.current) return true
+      if (!await flushOutgoingDraft()) return false
+      const request = ++openRequestRef.current
+      const requestedWorkspace = workspaceSelectionRef.current
+      const activation = workspaceStore.active().generation
       // A never-committed file has nothing on GitHub under its path, so reading it
       // would 404. Its draft *is* the file: reopen it exactly as it was created —
       // no sha, empty baseline, so it still reads as unsaved.
       if (pendingPaths.has(path)) {
-        const draft = loadDraft(docIdForPath(path))
+        const draft = await readDraftResult(docIdForPath(path))
+        if (draft.status !== 'ok') {
+          toast.error(`Could not open ${path}: its unsaved draft is ${draft.status}.`)
+          return false
+        }
+        draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
         setBaseline('')
         setLoadedSha(null)
         setOpenPath(path)
-        setText(draft?.content ?? templateFor(fileKind(path)))
-        return
+        setText(draft.value.content)
+        workspaceStore.adopt(identityFor(path), draft.value.content, '', null, workspaceStore.active().generation)
+        setDraftConflictKey(null)
+        return true
       }
       const res = await readSaved(path)
+      if (request !== openRequestRef.current || requestedWorkspace !== workspaceSelectionRef.current ||
+          activation !== workspaceStore.active().generation) return false
       if (!res.ok) {
         if (!res.expired) toast.error(res.message)
-        return
+        return false
       }
-      const draft = loadDraft(docIdForPath(path))
+      if (!await flushOutgoingDraft()) return false
+      const draft = await readDraftResult(docIdForPath(path))
+      if (draft.status === 'invalid' || draft.status === 'unavailable') {
+        toast.error(`Could not open ${path}: its draft is ${draft.status}.`)
+        return false
+      }
+      if (draft.status === 'ok') draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
       setBaseline(res.content)
       setLoadedSha(res.sha)
       setOpenPath(path)
       // Only prefer the draft when it actually differs from what's saved.
-      const draftDiffers =
-        draft !== null && contentDiffers(draft.content, res.content, fileKind(path))
-      setText(draftDiffers && draft ? draft.content : res.content)
+      const draftDiffers = draft.status === 'ok' && contentDiffers(draft.value.content, res.content, fileKind(path))
+      const content = draftDiffers && draft.status === 'ok' ? draft.value.content : res.content
+      setText(content)
+      workspaceStore.adopt(identityFor(path), content, res.content, res.sha, workspaceStore.active().generation)
+      const needsReconciliation = draftDiffers && draft.status === 'ok' &&
+        draftNeedsReconciliation(draft.value.baseRevision, res.sha)
+      setDraftConflictKey(needsReconciliation ? documentKey(identityFor(path)) : null)
+      if (needsReconciliation) setConflictOpen(true)
+      return true
     },
-    [hasWorkspace, pendingPaths, docIdForPath, readSaved],
+    [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
   )
 
   /** Open a file the user picked from the tree — the start of a new trail. */
   const openFromTree = useCallback(
     (path: string) => {
       setLinkTrail([])
+      setMarkdownScrollTop(0)
       void openFile(path)
     },
     [openFile],
@@ -1201,10 +938,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   /** Open a file by following a link inside the open document. */
   const openLinkedFile = useCallback(
-    (path: string) => {
+    (path: string, scrollTop: number) => {
       if (path === openPath) return
-      setLinkTrail((prev) => (openPath ? [...prev, openPath] : prev))
-      void openFile(path)
+      void openFile(path).then((opened) => {
+        if (!opened) return
+        setLinkTrail((prev) => (openPath ? [...prev, { path: openPath, scrollTop }] : prev))
+        setMarkdownScrollTop(0)
+      })
     },
     [openFile, openPath],
   )
@@ -1212,551 +952,74 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const goBack = useCallback(() => {
     const target = linkTrail[linkTrail.length - 1]
     if (!target) return
-    setLinkTrail(linkTrail.slice(0, -1))
-    void openFile(target)
+    void openFile(target.path).then((opened) => {
+      if (!opened) return
+      setLinkTrail(linkTrail.slice(0, -1))
+      setMarkdownScrollTop(target.scrollTop)
+    })
   }, [linkTrail, openFile])
 
-  /* ---------------------------------------------------------------- */
-  /* Agent Link                                                        */
-  /* ---------------------------------------------------------------- */
-
-  /** The editor's imperative handle, so an agent's edit lands as one CodeMirror
-   *  transaction rather than a whole-document swap — see `EditorHandle`. Null
-   *  whenever no text editor is mounted (a canvas is open, or the diff view has
-   *  taken the pane), which `applyEdits` below handles rather than refuses. */
-  const editorRef = useRef<EditorHandle | null>(null)
-  /** The markdown reading pane, for the scroll sync below. */
-  const markdownPreviewRef = useRef<MarkdownPreviewHandle | null>(null)
-
-  /**
-   * Two-way scroll sync for markdown: double-click a line to find it in the
-   * document, double-click a block to find it in the source.
-   *
-   * Driven through the two imperative handles rather than through state. A jump is
-   * an event, and the same line double-clicked twice has to jump twice — which a
-   * prop holding a line number can't express, and which the usual nonce workaround
-   * only buys by re-rendering the whole document (every embedded diagram included)
-   * on each jump.
-   */
-  const revealInPreview = useCallback((line: number) => {
-    markdownPreviewRef.current?.revealLine(line)
-  }, [])
-  const revealInEditor = useCallback((line: number) => {
-    editorRef.current?.revealLine(line)
-  }, [])
-
-  const bridgeState: BridgeState = useMemo(
-    () => ({
-      mode: githubEnabled ? 'github' : 'local',
-      repo: repo
-        ? {
-            owner: repo.owner,
-            name: repo.name,
-            branch: repo.branch,
-            defaultBranch: repo.defaultBranch,
-          }
-        : null,
-      openPath,
-      kind,
-      dirty,
-      lineCount: text === '' ? 0 : text.split('\n').length,
-      charCount: text.length,
-      // Reported so an agent stops hardcoding colors. The name is the dropdown's
-      // own answer minus its UI sentinels: a preset id, `custom` for a hand-tuned
-      // palette, null for no theme at all. `mode` is the same light/dark the canvas
-      // runs in, which is the part that matters for a scene.
-      theme: {
-        name:
-          currentTheme === NONE_THEME
-            ? null
-            : currentTheme === CUSTOM_THEME
-              ? 'custom'
-              : currentTheme,
-        mode: canvasTheme,
-      },
-    }),
-    [githubEnabled, repo, openPath, kind, dirty, text, currentTheme, canvasTheme],
-  )
-
-  /**
-   * One of the agent's document commands, resolved onto an actual document.
-   *
-   * This is what protocol 4's `path` buys, and the shape it takes is dictated by
-   * the fact that there are three places a document can be living, only one of
-   * which is React state:
-   *
-   *   - **The open one.** Held in `text`, edited through the live editor, with
-   *     `baseline` behind it. Reached by omitting the path — or by naming the file
-   *     that happens to be open, which resolves to exactly the same target so the
-   *     human's undo history does not depend on the agent's spelling.
-   *   - **A never-saved file.** Its localStorage draft is the only copy there is;
-   *     the saved store has nothing under the path.
-   *   - **A saved file.** Read through `readSaved`, with a draft layered over it
-   *     when one exists, because the draft is the working copy the human would see
-   *     if they opened it — and answering with saved bytes instead is how an agent
-   *     talks itself into re-doing an edit it made one call earlier.
-   *
-   * Which store "saved" means is `readSaved`'s problem, not this function's.
-   */
-  interface DocTarget {
-    /** Null only for the untitled document, which has no path until it is saved
-     *  somewhere. */
-    path: string | null
-    kind: FileKind
-    /** The working copy: unsaved edits included. */
-    text: string
-    /** The saved content, or null when the path was never saved (and so cannot be
-     *  compared against anything). */
-    committed: string | null
-    /** It is the document on screen, so writes go through the editor. */
-    open: boolean
-    /** This command brought the file into existence. */
-    created: boolean
-  }
-
-  /**
-   * Find the document a command names, fetching it if nobody has opened it.
-   *
-   * `create` is the difference between the mutating tools and the reading ones: a
-   * path that names nothing is a file to be made for `ideate_edit`, and a mistake
-   * worth reporting for `ideate_read`.
-   */
-  const resolveTarget = async (
-    path: string | undefined,
-    create: boolean,
-  ): Promise<DocTarget> => {
-    if (path === undefined || path === openPath) {
-      return {
-        path: openPath,
-        kind,
-        text,
-        // `baseline` is only the *committed* content once there is a commit behind
-        // it. For a never-committed file it is the empty string, and for the
-        // scratch document it is a template nobody committed.
-        committed: loadedSha === null ? null : baseline,
-        open: true,
-        created: false,
-      }
-    }
-    if (!hasWorkspace) {
-      throw new Error(
-        'This tab has no file workspace: the human is signed in and has picked no ' +
-          'repository, so there is nothing a path can name — only one untitled ' +
-          'document, reached by omitting the path. Ask them to connect a repository ' +
-          'if you need files.',
-      )
-    }
-    const invalid = validatePath(path)
-    if (invalid) throw new Error(`${path}: ${invalid}`)
-    // Deciding "this file does not exist, I will create it" against a list that has
-    // not arrived yet would create files that already exist, and then hand back a
-    // template as their content.
-    if (!savedPaths) {
-      throw new Error('The file list has not loaded yet. Try again in a moment.')
-    }
-    const targetKind = fileKind(path)
-    const draft = loadDraft(docIdForPath(path))
-    if (savedPaths.has(path)) {
-      const res = await readSaved(path)
-      if (!res.ok) {
-        throw new Error(
-          res.expired ? 'The GitHub session expired. The user has been signed out.' : res.message,
-        )
-      }
-      const committed = res.content
-      const differs = draft !== null && contentDiffers(draft.content, committed, targetKind)
-      return {
-        path,
-        kind: targetKind,
-        text: differs && draft ? draft.content : committed,
-        committed,
-        open: false,
-        created: false,
-      }
-    }
-    // Not in the saved store. A draft under the path still means the file exists —
-    // it was created here and never saved. Read straight from storage rather than
-    // from `pendingPaths`, because a command that creates a file must be visible to
-    // the very next command: `createdPaths` only reaches `pendingPaths` through a
-    // render, and two agent calls can arrive between two of those.
-    if (draft) {
-      return {
-        path,
-        kind: targetKind,
-        text: draft.content,
-        committed: null,
-        open: false,
-        created: false,
-      }
-    }
-    // A never-saved file with no draft: the human emptied it. The autosave gate
-    // clears the slot the moment a document stops being dirty, and for a file with
-    // nothing saved behind it the baseline is the empty string — so no draft, while
-    // the path is still in `pendingPaths`, means the file exists and holds nothing.
-    // The truth is worth more here than a template: an agent handed the starter
-    // text would anchor its next edit on content the file does not have.
-    if (pendingPaths.has(path)) {
-      return { path, kind: targetKind, text: '', committed: null, open: false, created: false }
-    }
-    if (!create) {
-      throw new Error(
-        `No such file in ${workspaceLabel}: ${path}. ` +
-          'Call ideate_list_files to see what is there.',
-      )
-    }
-    return {
-      path,
-      kind: targetKind,
-      text: templateFor(targetKind),
-      committed: null,
-      open: false,
-      created: true,
-    }
-  }
-
-  /**
-   * Store what a command produced, and make the sidebar say so.
-   *
-   * The open document goes through `setText` and the existing machinery takes it
-   * from there. A background file has no machinery: nothing is watching it, so this
-   * is where its draft is written and where its dirty marker is turned on — or off,
-   * when an edit happens to restore the committed content, which has to clear the
-   * draft too or the file stays flagged forever over a difference of nothing.
-   */
-  const writeBack = (target: DocTarget, next: string): void => {
-    if (target.open) {
-      setText(next)
-      return
-    }
-    const path = target.path
-    // Unreachable: a target that is not the open document was resolved from a path
-    // against a workspace. Narrowing rather than asserting.
-    if (path === null) return
-    const isDirty = target.committed === null || contentDiffers(next, target.committed, target.kind)
-    const id = docIdForPath(path)
-    if (isDirty) saveDraft(id, next)
-    else clearDraft(id)
-    if (target.created) setCreatedPaths((prev) => withPath(prev, path))
-    setDirtyPaths((prev) => (isDirty ? withPath(prev, path) : withoutPaths(prev, [path])))
-  }
-
-  /** How to name the saved store in a message to an agent. */
-  const workspaceLabel = repo ? `${repo.owner}/${repo.name}@${repo.branch}` : 'this browser'
-
-  /**
-   * Refuse a mutation that did not say which document it meant.
-   *
-   * The reading tools default to the open document happily. The mutating ones must
-   * not, because the open document is not a stable address: the human browses their
-   * files while the agent works, so "the open document" is whichever one they
-   * clicked last, and an edit that lands on the wrong file is not recoverable by
-   * reading it again.
-   *
-   * The exception is the **untitled** document, which has no path to name — the
-   * scratch surface before anything has been saved. Keying on that rather than on
-   * "is this local mode" is what makes the rule hold in both: local mode has files
-   * now, and a connected repo still has an untitled document. And when the human
-   * opens a file mid-turn, an agent that meant the untitled one is refused here
-   * rather than silently redirected onto theirs.
-   */
-  function requirePath(path: string | undefined, tool: string): void {
-    if (path !== undefined || openPath === null) return
-    throw new Error(
-      `${tool} needs a path. ${openPath} is open, but the open document changes as ` +
-        'the human browses — so an edit with no path can land on a file you never ' +
-        'read. Name the file you mean: ideate_status reports the open path, ' +
-        'ideate_list_files the rest.',
-    )
-  }
-
-  // Rebuilt every render on purpose. The hook reads it through a ref, so a fresh
-  // object costs nothing and every capability closes over current state — a
-  // memoized version would have to list every dependency the closures touch, and
-  // a missed one means the agent silently editing a stale document.
-  const linkCaps: AgentLinkCapabilities = {
-    state: () => bridgeState,
-
-    listFiles: () => ({ paths: repoFilePaths }),
-
-    read: async (path) => {
-      const target = await resolveTarget(path, false)
-      return {
-        path: target.path,
-        text: target.text,
-        committed:
-          target.path !== null &&
-          target.committed !== null &&
-          !contentDiffers(target.text, target.committed, target.kind),
-      }
-    },
-
-    applyEdits: async (edits, path) => {
-      requirePath(path, 'ideate_edit')
-      const target = await resolveTarget(path, true)
-      requireText(target.kind)
-      if (target.open) {
-        const handle = editorRef.current
-        // No editor mounted (a canvas is open, or the diff view has taken the
-        // pane). Resolve against the very same text with the very same function and
-        // go through `setText`; the editor reconciles it when it comes back.
-        // Refusing here instead would make the tools mysteriously unavailable
-        // whenever the human happened to be reading a diff.
-        const next = handle
-          ? handle.applyEdits(edits)
-          : applyResolved(target.text, resolveEdits(target.text, edits))
-        if (!handle) setText(next)
-        return { path: target.path, created: false, text: next }
-      }
-      // Resolved before anything is written, so an edit whose anchor is missing
-      // leaves a file it was about to create uncreated. Half a file, named after a
-      // template the agent never asked for, is worse than no file.
-      const next = applyResolved(target.text, resolveEdits(target.text, edits))
-      writeBack(target, next)
-      return { path: target.path, created: target.created, text: next }
-    },
-
-    writeText: async (text: string, path) => {
-      requirePath(path, 'ideate_write')
-      const target = await resolveTarget(path, true)
-      requireText(target.kind)
-      writeBack(target, text)
-      return { path: target.path, created: target.created }
-    },
-
-    openFile: async (path) => {
-      if (!hasWorkspace) throw new Error('No repository is connected — nothing to open.')
-      // Checked against the file list first so a mistyped path says so, rather than
-      // surfacing as a toast in the UI and an empty success to the agent.
-      if (!repoFilePaths.includes(path)) {
-        throw new Error(
-          `No such file in ${workspaceLabel}: ${path}. ` +
-            'Call ideate_list_files to see what is there.',
-        )
-      }
-      // Opening from a tool is a fresh start, not a link follow — same reasoning
-      // as `openFromTree`, where a Back button pointing at an unrelated file is
-      // worse than no Back button.
-      setLinkTrail([])
-      await openFile(path)
-    },
-
-    createFile: (path, content) => {
-      if (!hasWorkspace) {
-        throw new Error('No repository is connected — nothing to create a file in.')
-      }
-      const invalid = validatePath(path)
-      if (invalid) throw new Error(invalid)
-      // A canvas is deliberately not creatable here. `content` for one is raw scene
-      // JSON, and omitting it opens an empty canvas nobody asked to look at, so
-      // `createCanvas` — which draws in the same call — is the only door.
-      if (fileKind(path) === 'excalidraw') {
-        throw new Error(
-          `${path} is a canvas, and this tool does not create a canvas. Use ` +
-            'ideate_create_canvas. It takes the same path, and it draws the canvas in the ' +
-            'same call.',
-        )
-      }
-      if (repoFilePaths.includes(path)) {
-        // `edit`/`write`, not `open`: the path is all either of them needs, and
-        // sending the agent through `open` would drag the human's editor to this file
-        // as a side effect of a collision they never asked about. Same shape as
-        // `createCanvas`'s refusal below, which points at `scene_edit` for the same
-        // reason.
-        throw new Error(
-          `${path} already exists. Use ideate_edit (or ideate_write) with that path to ` +
-            'change it — neither needs the file open.',
-        )
-      }
-      // Exactly what the create prompt does on submit: the file becomes the open
-      // document with nothing saved behind it. Nothing is pushed to GitHub —
-      // committing stays a human action, which is what keeps an agent from writing
-      // to the user's repository.
-      const body = content ?? templateFor(fileKind(path))
-      setLinkTrail([])
-      setCreatedPaths((prev) => withPath(prev, path))
-      // Written here rather than left to the autosave effect: for a file with
-      // nothing saved behind it the draft is the only copy, and an agent creating
-      // two files in quick succession must not depend on a render landing in
-      // between.
-      saveDraft(docIdForPath(path), body)
-      setOpenPath(path)
-      setLoadedSha(null)
-      setBaseline('')
-      setText(body)
-    },
-
-    // `createFile` for a canvas, with the drawing in the same call.
-    //
-    // Separate from `sceneEdit`'s create-if-missing path because of the last two
-    // lines: this one *opens* what it made. `sceneEdit` exists to work on files the
-    // human is not looking at and must not yank their editor around, but a canvas
-    // that did not exist a moment ago has nothing to yank them away from, and a
-    // drawing nobody is shown may as well not have been drawn.
-    createCanvas: async (path, ops) => {
-      if (!hasWorkspace) {
-        throw new Error('No repository is connected — nothing to create a canvas in.')
-      }
-      const invalid = validatePath(path)
-      if (invalid) throw new Error(invalid)
-      // The extension is the whole of `fileKind`, so this is the same check the
-      // service makes — kept here as well because the tab is the side that would
-      // otherwise open a markdown document in response to a request to draw.
-      if (fileKind(path) !== 'excalidraw') {
-        throw new Error(
-          `${path} is not a canvas. The extension decides the editor, and a canvas ends ` +
-            'in .excalidraw. For a diagram or a document, use ideate_create_file.',
-        )
-      }
-      if (repoFilePaths.includes(path)) {
-        throw new Error(`${path} already exists. Use ideate_scene_edit to draw on it.`)
-      }
-      // Drawn once before anything is written, so a bad op leaves no half-made file
-      // behind — the same all-or-nothing rule `applyEdits` follows.
-      // Drawn before anything is written, so a bad op leaves no half-made file behind
-      // — the same all-or-nothing rule `applyEdits` follows. This measures labels
-      // correctly with no canvas on screen, because `lib/excalidrawFonts.ts` registered
-      // Excalidraw's faces at page load rather than leaving it to a mounted editor.
-      const drawn = ops.length
-        ? await applySceneOps(EMPTY_SCENE, ops)
-        : { text: EMPTY_SCENE, elementCount: 0, warnings: [] }
-      setLinkTrail([])
-      setCreatedPaths((prev) => withPath(prev, path))
-      // Written straight away rather than left to the autosave effect: nothing is
-      // saved behind this file, so its draft is the only copy of the drawing.
-      saveDraft(docIdForPath(path), drawn.text)
-      setOpenPath(path)
-      setLoadedSha(null)
-      setBaseline('')
-      setText(drawn.text)
-
-      return {
-        path,
-        created: true,
-        applied: ops.length,
-        elementCount: drawn.elementCount,
-        warnings: drawn.warnings,
-      }
-    },
-
-    // Takes the text to check rather than always reading the document: after an
-    // edit the caller holds the new text and React has not re-rendered yet, so
-    // reading state here would report on the document as it was before.
-    check: async ({ text: override, path }) => {
-      if (override !== undefined) {
-        return {
-          path: path ?? openPath,
-          diagnostics: await collectDiagnostics(
-            override,
-            path === undefined ? kind : fileKind(path),
-            appliedConfig,
-          ),
-        }
-      }
-      const target = await resolveTarget(path, false)
-      return {
-        path: target.path,
-        diagnostics: await collectDiagnostics(target.text, target.kind, appliedConfig),
-      }
-    },
-
-    sceneGet: async (full, path) => {
-      const target = await resolveTarget(path, false)
-      requireScene(target.kind)
-      return { path: target.path, ...summarizeScene(target.text, full) }
-    },
-
-    sceneEdit: async (ops, path) => {
-      requirePath(path, 'ideate_scene_edit')
-      const target = await resolveTarget(path, true)
-      requireScene(target.kind)
-      const { text: next, elementCount, warnings } = await applySceneOps(target.text, ops)
-      // Through `setText` (or a draft), not a canvas ref: `CanvasInner` already
-      // ingests an external `value` via `updateScene`, so dirty tracking (rule 9)
-      // and the file's own stored background (rule 10) keep working untouched.
-      writeBack(target, next)
-      return {
-        path: target.path,
-        created: target.created,
-        applied: ops.length,
-        elementCount,
-        warnings,
-      }
-    },
-
-    // Read-only, so it takes the same optional `path` as `sceneGet` and never moves
-    // the editor. Like every other scene tool it works on a file nobody has open:
-    // `renderSceneThumbnail` rasterizes through Excalidraw's own exporter, which
-    // needs no mounted canvas — only the fonts, and `lib/excalidrawFonts.ts`
-    // registered those at page load.
-    sceneRender: async (path, ids) => {
-      const target = await resolveTarget(path, false)
-      requireScene(target.kind)
-      const image = await renderSceneThumbnail(target.text, canvasTheme, ids)
-      // The same findings `sceneGet` returns, and the whole scene's rather than the
-      // crop's: a picture shows an agent that two boxes overlap, the warnings name
-      // which two and by how much, and an agent that has just cropped to one corner
-      // still wants to be told about the corner it stopped looking at.
-      const { elementCount, warnings } = summarizeScene(target.text)
-      return {
-        path: target.path,
-        elementCount,
-        rendered: image.rendered,
-        mimeType: image.mimeType,
-        width: image.width,
-        height: image.height,
-        scale: image.scale,
-        dataBase64: image.base64,
-        warnings,
-      }
-    },
-
-    cursor: () => editorRef.current?.cursor() ?? null,
-  }
-
-  // The two surfaces hold incompatible content, so a tool aimed at the wrong one
-  // is answered with the name of the tool that would have worked. Takes the
-  // target's kind rather than reading the open document's: since protocol 4 the
-  // document a tool acts on is often not the one on screen.
-  function requireText(target: FileKind): void {
-    if (target === 'excalidraw') {
-      throw new Error(
-        'That document is an Excalidraw scene. Use ideate_scene_get and ' +
-          'ideate_scene_edit — the text tools cannot edit a canvas.',
-      )
-    }
-  }
-  function requireScene(target: FileKind): void {
-    if (target !== 'excalidraw') {
-      throw new Error(
-        `That document is ${target}, not an Excalidraw scene. Use ideate_read and ` +
-          'ideate_edit instead.',
-      )
-    }
-  }
-
-  /** Where the Agent Link service lives: the stored override, else the build's
-   *  default. Unlike the on/off switch this *is* an `AppConfig` field, because it
-   *  describes the deployment rather than this tab — see the comment block in
-   *  lib/types.ts. */
-  const mcpOrigin = normalizeMcpOrigin(config.mcpOrigin ?? DEFAULT_MCP_ORIGIN)
-
-  const agentLink = useAgentLink({
+  const agentController = useAgentLinkController({
     enabled: agentLinkOn,
-    mcpOrigin,
-    state: bridgeState,
-    caps: linkCaps,
+    configuredOrigin: config.mcpOrigin,
+    defaultOrigin: DEFAULT_MCP_ORIGIN,
+    githubEnabled,
+    repo,
+    openPath,
+    kind,
+    dirty,
+    text,
+    currentTheme,
+    noneThemeValue: NONE_THEME,
+    customThemeValue: CUSTOM_THEME,
+    canvasTheme,
+    hasWorkspace,
+    localMode,
+    savedPaths,
+    pendingPaths,
+    repoFilePaths,
+    loadedSha,
+    baseline,
+    activeDocId: docId,
+    appliedConfig,
+    workspaceStore,
+    openPathRef,
+    activeIdentityRef,
+    liveTextRef,
+    workspaceSelectionRef,
+    draftBasesRef,
+    identityFor,
+    docIdForPath,
+    readSaved,
+    validatePath,
+    templateFor,
+    setText,
+    setOpenPath,
+    setLoadedSha,
+    setBaseline,
+    setCreatedPaths,
+    setDirtyPaths,
+    clearLinkTrail,
+    openFile,
+    flushOutgoingDraft,
   })
-  // "Connected" means an agent has *attached*, not merely that this tab is paired.
-  // Treating a live socket as connected would light this up as soon as the switch
-  // was flipped, whether or not anything had chosen to drive the document.
-  const linkAttached = agentLinkOn && agentLink.status === 'attached'
-  const linkWaiting = agentLinkOn && agentLink.status === 'paired'
+  const {
+    editorRef,
+    markdownPreviewRef,
+    revealInPreview,
+    revealInEditor,
+    mcpOrigin,
+    agentLink,
+    linkAttached,
+    linkWaiting,
+  } = agentController
 
   const newDiagram = useCallback(
-    (dirPath?: string, newKind: FileKind = 'mermaid') => {
+    async (dirPath?: string, newKind: FileKind = 'mermaid') => {
       // Signed in with no repo picked: there is nowhere to put a named file, so
       // this is the untitled scratch document and nothing else.
       if (!hasWorkspace) {
+        if (!await flushOutgoingDraft()) return
         setOpenPath(null)
         setLoadedSha(null)
         setBaseline(NEW_TEMPLATE)
@@ -1785,13 +1048,28 @@ export default function AppShell({ user, mode }: AppShellProps) {
         suffix: extension,
         submitLabel: 'Start editing',
         validate: validateNewFilePath(extension),
-        onSubmit: (path) => {
-          setPromptOpen(false)
-          setCreatedPaths((prev) => withPath(prev, path))
+        onSubmit: async (path) => {
+          if (!savedPaths) {
+            toast.error('The file list has not loaded yet. Try again in a moment.')
+            return
+          }
+          if (savedPaths.has(path) || pendingPaths.has(path) ||
+            (localMode && (await readLocalFileResult(path)).status !== 'missing') ||
+            (await readDraftResult(docIdForPath(path))).status !== 'missing') {
+            toast.error(`${path} already exists or its draft cannot be checked.`)
+            return
+          }
+          if (!await flushOutgoingDraft()) return
           const body = templateFor(fileKind(path))
           // The draft is this file's only copy until it's saved — see the agent's
           // `createFile` for why it's written here and not by the effect.
-          saveDraft(docIdForPath(path), body)
+          const written = await createDraftResult(docIdForPath(path), body)
+          if (!written.ok) {
+            toast.error(`Could not create ${path}: browser storage is ${written.reason}.`)
+            return
+          }
+          setPromptOpen(false)
+          setCreatedPaths((prev) => withPath(prev, path))
           setOpenPath(path)
           setLoadedSha(null)
           setBaseline('')
@@ -1799,29 +1077,18 @@ export default function AppShell({ user, mode }: AppShellProps) {
         },
       })
     },
-    [hasWorkspace, localMode, repo, docIdForPath, openPrompt],
+    [hasWorkspace, localMode, repo, docIdForPath, openPrompt, savedPaths, pendingPaths,
+      flushOutgoingDraft, setOpenPath, setText, setCreatedPaths],
   )
 
   const requestRename = useCallback(
     (node: TreeNode) => {
       if (!hasWorkspace || node.type !== 'file') return
-      // A never-committed file exists only in this browser: it is spliced into the
-      // sidebar from `pendingPaths` and its content is a localStorage draft, with
-      // nothing on GitHub under either name. Renaming it through the API would ask
-      // git to move a path that isn't in the tree, which answers 404 — so this one
-      // is a local move of the draft slot, exactly like creating it under the new
-      // name would have been.
+      // A never-committed file exists only in this browser: it is spliced into the sidebar from
+      // `pendingPaths` and its content is an IndexedDB draft, with nothing on GitHub under either
+      // name.
       const local = pendingPaths.has(node.path)
-      // The extension is shown as an uneditable suffix, exactly as it is when
-      // creating a file. Changing it would change the file's *kind* — the editor
-      // it opens in, the exporters it uses, whether its content parses at all —
-      // which a rename has no business doing silently to content that already
-      // exists. Save-as (`onFork`) is the deliberate way to write a document to a
-      // different kind, and it validates the pairing.
-      //
-      // The path itself stays one free-text field, which is the whole difference
-      // between this prompt and the create one: moving a file between folders is
-      // half of what "rename" means here.
+      // The extension is shown as an uneditable suffix, exactly as it is when creating a file.
       const extension = fileExtension(node.path)
       const stem = extension ? node.path.slice(0, node.path.length - extension.length) : node.path
       openPrompt({
@@ -1840,23 +1107,53 @@ export default function AppShell({ user, mode }: AppShellProps) {
         selection: 'name',
         submitLabel: 'Rename',
         validate: extension ? validateNewFilePath(extension) : validatePath,
-        onSubmit: async (newPath) => {
+        onSubmit: async (newPath) => workspaceStore.command(identityFor(node.path), async () => {
           if (newPath === node.path) {
             setPromptOpen(false)
             return
           }
+          if (!savedPaths || savedPaths.has(newPath) || pendingPaths.has(newPath) ||
+            (localMode && (await readLocalFileResult(newPath)).status !== 'missing') ||
+            (await readDraftResult(docIdForPath(newPath))).status !== 'missing') {
+            toast.error(`${newPath} already exists or its draft cannot be checked.`)
+            return
+          }
+          if (!await flushOutgoingDraft()) return
+          const operationWorkspace = workspaceSelectionRef.current
+          const oldIdentity = identityFor(node.path)
+          const newIdentity = identityFor(newPath)
+          const oldKey = documentKey(oldIdentity)
+          const activation = workspaceStore.active().generation
+          let renamedSha: string | null | undefined
+          const oldId = docIdForPath(node.path)
+          const newId = docIdForPath(newPath)
+          const draft = await readDraftResult(oldId)
+          if (draft.status === 'invalid' || draft.status === 'unavailable' ||
+            (local && draft.status === 'missing')) {
+            toast.error(`Could not move ${node.path}'s draft: ${draft.status}.`)
+            return
+          }
+          // IndexedDB moves the saved file and its working draft in one transaction.
+          if (localMode) {
+            const moved = await moveLocalFileAndDraft(node.path, newPath, oldId, newId, !local)
+            if (!moved.ok) {
+              toast.error(`Could not rename ${node.path}: ${moved.reason}.`)
+              return
+            }
+            void refreshLocalFiles()
+            if (!local) renamedSha = LOCAL_SAVED
+          } else if (draft.status === 'ok') {
+            const copied = await writeDraftResult(newId, draft.value.content, draft.value.baseRevision)
+            if (!copied.ok) {
+              toast.error(`Could not move ${node.path}'s draft: ${copied.reason}.`)
+              return
+            }
+          }
           // The saved case has to land on the store first: everything below moves
           // local bookkeeping to match, and doing that before the write would
           // leave the app pointing at a path the store never got.
-          if (!local) {
-            if (localMode) {
-              if (!renameLocalFile(node.path, newPath)) {
-                toast.error(`Could not rename ${node.path} — this browser's storage is full.`)
-                return
-              }
-              refreshLocalFiles()
-              if (openPath === node.path) setLoadedSha(LOCAL_SAVED)
-            } else if (repo) {
+          if (!local && !localMode) {
+            if (repo) {
               const res = await renameFile(
                 repo.owner,
                 repo.name,
@@ -1865,39 +1162,44 @@ export default function AppShell({ user, mode }: AppShellProps) {
                 repo.branch,
               )
               if (!res.ok) {
+                if (draft.status === 'ok' && !(await clearDraft(newId)).ok) {
+                  toast.error(`Could not remove the extra draft at ${newPath}; the original remains safe.`)
+                }
                 if (handleExpiredSession(res.error)) return
                 toast.error(res.error.message)
                 return
               }
-              if (openPath === node.path) setLoadedSha(res.data.sha)
+              renamedSha = res.data.sha
             }
           }
-          setPromptOpen(false)
-          // Carry any unsaved draft over to the new path. For a never-saved file
-          // this *is* the rename — the draft is the only copy of the file.
-          const oldId = docIdForPath(node.path)
-          const newId = docIdForPath(newPath)
-          const draft = loadDraft(oldId)
-          if (draft) saveDraft(newId, draft.content)
-          clearDraft(oldId)
+          workspaceStore.move(oldIdentity, newIdentity, renamedSha)
+          const sameWorkspace = operationWorkspace === workspaceSelectionRef.current
+          if (sameWorkspace) setPromptOpen(false)
+          if (!localMode && draft.status === 'ok') {
+            const removed = await clearDraft(oldId)
+            if (!removed.ok) toast.error(`Renamed ${node.path}, but its old draft could not be cleared (${removed.reason}).`)
+          }
           // A never-saved rename moves the only copy there is, so the pending set
           // has to follow it or the file drops out of the sidebar under both names.
-          if (local) {
+          if (local && sameWorkspace) {
             setCreatedPaths((prev) => withPath(withoutPaths(prev, [node.path]), newPath))
           }
-          setDirtyPaths((prev) => {
+          if (sameWorkspace) setDirtyPaths((prev) => {
             if (!prev.has(node.path)) return prev
             const next = new Set(prev)
             next.delete(node.path)
             next.add(newPath)
             return next
           })
-          if (openPath === node.path) setOpenPath(newPath)
+          if (sameWorkspace && workspaceStore.isActive(oldKey, activation)) {
+            if (renamedSha !== undefined) setLoadedSha(renamedSha)
+            setOpenPath(newPath)
+          }
           toast.success(`Renamed to ${newPath}`)
           // A never-saved rename changed nothing on the branch, and `pendingPaths`
           // already re-splices the new name into the sidebar.
           if (!local && repo) void refreshTree(repo)
-        },
+        }),
       })
     },
     [
@@ -1905,11 +1207,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
       localMode,
       repo,
       openPrompt,
-      openPath,
       pendingPaths,
+      savedPaths,
       docIdForPath,
+      flushOutgoingDraft,
       refreshLocalFiles,
       refreshTree,
+      identityFor,
+      workspaceStore,
+      setOpenPath,
+      setCreatedPaths,
+      setDirtyPaths,
     ],
   )
 
@@ -1917,16 +1225,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // deleted out from under it. Baseline is left empty (not equal to the text) so
   // the doc reads as unsaved and Save is enabled, prompting for a new path.
   const detachEditor = useCallback(() => {
-    setOpenPath((prev) => {
-      if (prev) clearDraft(docId)
-      return null
-    })
+    updateConfig({ scratchKind: 'mermaid' })
+    setOpenPath(null)
     setLoadedSha(null)
     setBaseline('')
     setText(NEW_TEMPLATE)
     setLinkTrail([])
-    updateConfig({ scratchKind: 'mermaid' })
-  }, [docId, updateConfig])
+  }, [updateConfig, setOpenPath, setText])
 
   const requestDelete = useCallback((node: TreeNode) => {
     setDeleteTarget(node)
@@ -1936,6 +1241,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const confirmDelete = useCallback(async () => {
     if (!hasWorkspace || !deleteTarget) return
     const paths = collectFilePaths(deleteTarget)
+    return workspaceStore.commandMany(paths.map((path) => identityFor(path)), async () => {
+    const operationWorkspace = workspaceSelectionRef.current
+    const deletedIdentities = paths.map((path) => identityFor(path))
+    const activeAtDelete = workspaceStore.active()
     const affectsOpen = !!openPath && paths.includes(openPath)
     // A never-saved file (the pending new one) only exists as a draft — there is
     // nothing in the saved store to remove, so skip the write for it.
@@ -1943,25 +1252,45 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // Drop every draft under the deleted paths. Left behind, a draft *is* a
     // never-saved file as far as the recovery effect above is concerned, so a
     // deleted file would reappear as a new one on the next load.
-    const forget = () => {
-      for (const p of paths) clearDraft(docIdForPath(p))
-      setCreatedPaths((prev) => withoutPaths(prev, paths))
-      setDirtyPaths((prev) => withoutPaths(prev, paths))
+    const forget = async (draftsAlreadyCleared = false): Promise<boolean> => {
+      if (!draftsAlreadyCleared) {
+        const results = await Promise.all(paths.map((path) => clearDraft(docIdForPath(path))))
+        const failed = results.find((result) => !result.ok)
+        if (failed && !failed.ok) {
+          toast.error(`Files were deleted, but their drafts remain in browser storage (${failed.reason}).`)
+          return false
+        }
+      }
+      for (const identity of deletedIdentities) workspaceStore.forget(identity)
+      if (operationWorkspace === workspaceSelectionRef.current) {
+        setCreatedPaths((prev) => withoutPaths(prev, paths))
+        setDirtyPaths((prev) => withoutPaths(prev, paths))
+      }
+      return true
     }
     if (committed.length === 0) {
-      if (affectsOpen) detachEditor()
-      forget()
+      const removed = await deleteLocalFilesAndDrafts([], paths.map(docIdForPath))
+      if (!removed.ok) {
+        toast.error(`Could not delete unsaved files from browser storage (${removed.reason}).`)
+        return
+      }
+      if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
+      await forget(true)
       setDeleteOpen(false)
       setDeleteTarget(null)
       return
     }
     if (localMode) {
-      for (const p of committed) deleteLocalFile(p)
-      refreshLocalFiles()
-      forget()
+      const removed = await deleteLocalFilesAndDrafts(committed, paths.map(docIdForPath))
+      if (!removed.ok) {
+        toast.error(`Could not delete files from browser storage (${removed.reason}).`)
+        return
+      }
+      void refreshLocalFiles()
+      await forget(true)
       setDeleteOpen(false)
       setDeleteTarget(null)
-      if (affectsOpen) detachEditor()
+      if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
       toast.success(
         committed.length === 1 ? `Deleted ${committed[0]}` : `Deleted ${committed.length} files`,
       )
@@ -1981,11 +1310,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
         ? `Deleted ${committed[0]}`
         : `Deleted ${res.data.deleted} files`,
     )
-    forget()
-    setDeleteOpen(false)
-    setDeleteTarget(null)
-    if (affectsOpen) detachEditor()
+    if (await forget()) {
+      if (operationWorkspace === workspaceSelectionRef.current) {
+        setDeleteOpen(false)
+        setDeleteTarget(null)
+      }
+      if (affectsOpen && workspaceStore.active().generation === activeAtDelete.generation) detachEditor()
+    }
     void refreshTree(repo)
+    })
   }, [
     hasWorkspace,
     localMode,
@@ -1997,72 +1330,107 @@ export default function AppShell({ user, mode }: AppShellProps) {
     refreshLocalFiles,
     detachEditor,
     refreshTree,
+    identityFor,
+    workspaceStore,
+    setCreatedPaths,
+    setDirtyPaths,
   ])
 
-  /**
-   * Bookkeeping for a path that was committed while the user was looking at
-   * something else.
-   *
-   * A commit is a round trip, and nothing stops the user from picking another
-   * file during it — which is exactly what they do, because the point of the
-   * button is that they are done with this one. The result then arrives for a
-   * document that is no longer on screen, and the editor-facing half of it
-   * (`baseline`, `loadedSha`, `openPath`) belongs to a *different* document now;
-   * applying it dragged the editor back to the file that had just been saved.
-   * So the two halves are separated, and this is the half that is always right.
-   *
-   * The draft is only dropped when it still matches what was committed. A user
-   * who kept typing between the click and the switch has newer text in there than
-   * the commit carried, and that text is the only copy of those keystrokes — so
-   * the file stays dirty and keeps its marker, which is the honest answer.
-   */
+  /** Bookkeeping for a path that was committed while the user was looking at something else. */
   const settleCommitted = useCallback(
-    (path: string, content: string) => {
-      const draft = loadDraft(docIdForPath(path))
-      const outstanding = draft !== null && contentDiffers(draft.content, content, fileKind(path))
+    async (path: string, content: string, draftId = docIdForPath(path), updateMarkers = true) => {
+      const draft = await readDraftResult(draftId)
+      if (draft.status === 'invalid' || draft.status === 'unavailable') {
+        toast.error(`Could not settle ${path}'s draft: ${draft.status}.`)
+        return
+      }
+      const outstanding = draft.status === 'ok' && contentDiffers(draft.value.content, content, fileKind(path))
       if (outstanding) return
-      clearDraft(docIdForPath(path))
-      setDirtyPaths((prev) => withoutPaths(prev, [path]))
+      if (draft.status === 'ok' && !(await clearDraft(draftId)).ok) {
+        toast.error(`Could not clear ${path}'s saved draft.`)
+        return
+      }
+      if (updateMarkers) setDirtyPaths((prev) => withoutPaths(prev, [path]))
     },
-    [docIdForPath],
+    [docIdForPath, setDirtyPaths],
   )
+
+  const settleSavedRecord = useCallback(async (identity: DocumentIdentity, content: string,
+    sha: string, submittedRevision: number, draftId: string) => {
+    const key = documentKey(identity)
+    const current = workspaceStore.get(key)
+    const draft = await readDraftResult(draftId)
+    if (draft.status === 'ok' && contentDiffers(draft.value.content, content, identity.kind) &&
+        (!current || current.revision === submittedRevision)) {
+      workspaceStore.edit(identity, draft.value.content)
+    }
+    workspaceStore.settleSave(identity, content, sha, submittedRevision)
+    if (draft.status === 'ok' && contentDiffers(draft.value.content, content, identity.kind)) {
+      const rebased = draftBaseFor(sha)
+      draftBasesRef.current.set(draftId, rebased)
+      const persisted = await writeDraftResult(draftId, draft.value.content, rebased)
+      if (!persisted.ok) workspaceStore.markPersistence(key, 'failed')
+    } else {
+      draftBasesRef.current.delete(draftId)
+    }
+  }, [workspaceStore])
 
   /** The open document, readable after an await. `openPath` in a closure is the
    *  value at the moment the request went out, which is the one question a commit
    *  landing later must not ask. */
-  const openPathRef = useRef<string | null>(openPath)
   openPathRef.current = openPath
 
   const commitCurrent = useCallback(
-    async (path: string, sha: string | undefined, content: string) => {
+    async (path: string, sha: string | undefined, content: string, message?: string) => {
       if (!repo) return
       // Which document this commit came from, so the result can tell whether it is
       // still the one on screen. Compared rather than `path`: committing an
       // untitled document *gives* it a path, so `origin` is null there and the
       // adoption below is exactly what promotes it.
       const origin = openPathRef.current
+      const originIdentity = identityFor(origin)
+      const targetIdentity = identityFor(path)
+      const originKey = documentKey(originIdentity)
+      const originGeneration = workspaceStore.active().generation
+      const submittedRevision = workspaceStore.get(originKey)?.revision ?? workingRevisionRef.current
+      const submittedWorkspace = workspaceSelectionRef.current
+      const submittedDraftId = docIdForFile(repo.owner, repo.name, repo.branch, path)
       setSaving(true)
-      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha)
+      const res = await commitFile(repo.owner, repo.name, path, content, repo.branch, sha, message)
       setSaving(false)
       if (res.ok) {
+        const sameWorkspace = submittedWorkspace === workspaceSelectionRef.current
+        const stillActive = workspaceStore.isActive(originKey, originGeneration) && sameWorkspace
+        if (origin === null && stillActive && liveTextRef.current !== content) {
+          workspaceStore.edit(targetIdentity, liveTextRef.current)
+        }
+        await settleSavedRecord(targetIdentity, content, res.data.sha, submittedRevision, submittedDraftId)
         // The path is on the branch now — the next tree fetch will carry it, so it
         // must stop being spliced in as a never-committed file. Hand it to the
         // tree in the same batch, or the sidebar drops the file for the length of
         // that fetch (see `treeWithPath`).
-        setCreatedPaths((prev) => withoutPaths(prev, [path]))
-        setTree((prev) => (prev ? treeWithPath(prev, path) : prev))
+        if (sameWorkspace) {
+          setCreatedPaths((prev) => withoutPaths(prev, [path]))
+          setTree((prev) => (prev ? treeWithPath(prev, path) : prev))
+        }
         // Committing an untitled scratch document promotes it to a real file, so
         // its parked draft is spent — clear the slot for the kind it came from,
         // not just the mermaid one.
-        clearDraft(scratchDocId)
-        if (openPathRef.current === origin) {
+        if (origin === null && sameWorkspace) {
+          const parked = await readDraftResult(scratchDocId)
+          if (canConsumeScratchDraft(true, content, parked.status === 'ok' ? parked.value.content : null,
+            submittedRevision, workspaceStore.get(originKey)?.revision ?? submittedRevision)) {
+            await clearDraft(scratchDocId)
+          }
+        }
+        if (stillActive) {
           setBaseline(content)
           setLoadedSha(res.data.sha)
           setOpenPath(path)
           // The dirty effect and the draft effect both key on the open document,
           // so a clean baseline is all it takes to clear the marker and the slot.
         } else {
-          settleCommitted(path, content)
+          await settleCommitted(path, content, submittedDraftId, sameWorkspace)
         }
         toast.success(`Committed ${path}`)
         void refreshTree(repo)
@@ -2071,45 +1439,47 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (handleExpiredSession(res.error)) return
       // The conflict modal acts on the *open* file — refetch its sha, commit on
       // top — so it can only be offered while that is still the file in question.
-      if (res.error.kind === 'conflict' && openPathRef.current === origin) setConflictOpen(true)
+      if (res.error.kind === 'conflict' && workspaceStore.isActive(originKey, originGeneration) &&
+          submittedWorkspace === workspaceSelectionRef.current) setConflictOpen(true)
       else toast.error(res.error.message)
     },
-    [repo, refreshTree, scratchDocId, settleCommitted],
+    [repo, refreshTree, scratchDocId, settleCommitted, settleSavedRecord, identityFor,
+      workspaceStore, setOpenPath, setCreatedPaths],
   )
 
-  /**
-   * Save to the local store — local mode's whole of `commitCurrent`.
-   *
-   * Same shape and the same bookkeeping, minus everything that only a repo has: no
-   * sha, so no conflict, and nothing to refetch afterwards because this *is* the
-   * store. What it keeps is the part that matters: the saved content becomes the
-   * baseline, so the document reads as clean and the diff has something to diff
-   * against.
-   */
+  /** Save to the local store — local mode's whole of `commitCurrent`. */
   const saveLocal = useCallback(
-    (path: string, content: string) => {
-      if (!writeLocalFile(path, content)) {
+    async (path: string, content: string, fromScratch = false) => {
+      const identity = identityFor(path)
+      const submittedRevision = workspaceStore.get(documentKey(identity))?.revision ?? 0
+      const draftToClear = fromScratch ? scratchDocId : docIdForPath(path)
+      const written = await saveLocalFileAndClearDraft(path, content, draftToClear, fromScratch,
+        fromScratch ? docIdForPath(path) : undefined)
+      if (!written.ok) {
         toast.error(
-          `Could not save ${path} — this browser's storage is full. ` +
+          `Could not save ${path} — browser storage is ${written.reason}. ` +
             'Export what you need, or delete a file you are done with.',
         )
         return
       }
+      workspaceStore.settleSave(identity, content, LOCAL_SAVED, submittedRevision)
       setBaseline(content)
       setLoadedSha(LOCAL_SAVED)
       setOpenPath(path)
       setCreatedPaths((prev) => withoutPaths(prev, [path]))
-      refreshLocalFiles()
-      // The scratch slot is spent: this document has a name now. Clear the slot for
-      // the kind it came from, not just the mermaid one.
-      clearDraft(scratchDocId)
+      void refreshLocalFiles()
       toast.success(`Saved ${path}`)
     },
-    [refreshLocalFiles, scratchDocId],
+    [refreshLocalFiles, scratchDocId, identityFor, workspaceStore, setOpenPath,
+      docIdForPath, setCreatedPaths],
   )
 
-  const onSave = useCallback(() => {
+  const onSave = useCallback(async (message?: string, requestCustomMessage = false) => {
     if (!hasWorkspace || !dirty || saving) return
+    if (openPath && draftConflictKey === documentKey(identityFor(openPath))) {
+      setConflictOpen(true)
+      return
+    }
     if (openPath === null) {
       openPrompt({
         title: localMode ? 'Save file' : 'Save to repository',
@@ -2120,16 +1490,39 @@ export default function AppShell({ user, mode }: AppShellProps) {
         defaultValue: defaultFileName(kind, 'untitled'),
         submitLabel: 'Save',
         validate: validatePathForKind(kind),
-        onSubmit: (path) => {
-          setPromptOpen(false)
-          if (localMode) saveLocal(path, text)
-          else void commitCurrent(path, undefined, text)
+        onSubmit: async (path) => {
+          if (!savedPaths || savedPaths.has(path) || pendingPaths.has(path) ||
+            (localMode && (await readLocalFileResult(path)).status !== 'missing') ||
+            (await readDraftResult(docIdForPath(path))).status !== 'missing') {
+            toast.error(`${path} already exists or its draft cannot be checked.`)
+            return
+          }
+          if (localMode) {
+            setPromptOpen(false)
+            await saveLocal(path, text, true)
+          } else if (requestCustomMessage) {
+            openPrompt({
+              title: 'Commit with message',
+              description: `Enter the commit message for ${path}.`,
+              label: 'Commit message',
+              defaultValue: generatedCommitMessage(path),
+              multiline: true,
+              submitLabel: 'Commit',
+              onSubmit: (customMessage) => {
+                setPromptOpen(false)
+                void commitCurrent(path, undefined, text, customMessage)
+              },
+            })
+          } else {
+            setPromptOpen(false)
+            void commitCurrent(path, undefined, text, message)
+          }
         },
       })
       return
     }
-    if (localMode) saveLocal(openPath, text)
-    else void commitCurrent(openPath, loadedSha ?? undefined, text)
+    if (localMode) await saveLocal(openPath, text)
+    else void commitCurrent(openPath, loadedSha ?? undefined, text, message)
   }, [
     hasWorkspace,
     localMode,
@@ -2143,99 +1536,115 @@ export default function AppShell({ user, mode }: AppShellProps) {
     commitCurrent,
     saveLocal,
     openPrompt,
+    savedPaths,
+    pendingPaths,
+    docIdForPath,
+    draftConflictKey,
+    identityFor,
   ])
+
+  const onCommitWithMessage = useCallback(() => {
+    if (!githubEnabled || !hasWorkspace || !dirty || saving) return
+    if (!openPath) {
+      void onSave(undefined, true)
+      return
+    }
+    openPrompt({
+      title: 'Commit with message',
+      description: `Enter the commit message for ${openPath}.`,
+      label: 'Commit message',
+      defaultValue: generatedCommitMessage(openPath, loadedSha ?? undefined),
+      multiline: true,
+      submitLabel: 'Commit',
+      onSubmit: (message) => {
+        setPromptOpen(false)
+        void onSave(message)
+      },
+    })
+  }, [githubEnabled, hasWorkspace, dirty, saving, openPath, loadedSha, openPrompt, onSave])
 
   /* ---------------------------------------------------------------- */
   /* Save all                                                          */
   /* ---------------------------------------------------------------- */
 
-  /**
-   * Every path Save All would write — each file with unsaved changes.
-   *
-   * The untitled document is deliberately absent: it has no path, so it cannot be
-   * written without asking for one, and a batch action that stops to open a modal
-   * is not a batch action. Save handles that document, which is the one thing it
-   * is always able to do.
-   */
+  /** Every path Save All would write — each file with unsaved changes. */
   const saveAllPaths = useMemo(() => [...dirtyPaths].sort(), [dirtyPaths])
 
-  /**
-   * The working copy of `path`, wherever it is living.
-   *
-   * The open document is `text` — newer than its own draft, which trails it by a
-   * debounce window. Everything else is its draft, which for a dirty file is by
-   * definition the only copy of the edits.
-   */
+  /** The working copy of `path`, wherever it is living. */
   const workingCopy = useCallback(
-    (path: string): string | null => {
+    async (path: string): Promise<string | null> => {
       if (path === openPath) return text
-      return loadDraft(docIdForPath(path))?.content ?? null
+      const draft = await readDraftResult(docIdForPath(path))
+      return draft.status === 'ok' ? draft.value.content : null
     },
     [openPath, text, docIdForPath],
   )
 
-  /**
-   * Save every changed file — **one** commit, not one per file.
-   *
-   * The single commit is the whole feature. Looping the existing per-file save
-   * would put the same bytes on the branch, but as a run of commits that each
-   * describe a state the user never had, and that nobody can revert or review as
-   * the one change it actually was.
-   *
-   * Each file needs the blob sha its edits sit on top of, and the app only holds
-   * one of those — the open file's. For the rest it reads the saved file now, the
-   * same read `openFile` would do if the user had clicked it, which is also how a
-   * marker left over from an edit that has since been saved elsewhere gets
-   * cleared instead of committed. A change that lands between that read and the
-   * commit is still caught: `commitFiles` re-checks every sha server-side and
-   * refuses the whole batch.
-   */
-  const onSaveAll = useCallback(async () => {
+  /** Save every changed file — **one** commit, not one per file. */
+  const onSaveAll = useCallback(async (customMessage?: string) => {
     if (!hasWorkspace || saving || saveAllPaths.length === 0) return
 
     if (localMode) {
-      const failed: string[] = []
-      let saved = 0
-      for (const path of saveAllPaths) {
-        const content = workingCopy(path)
-        if (content === null) continue
-        if (!writeLocalFile(path, content)) {
-          failed.push(path)
-          continue
-        }
-        saved += 1
+      const { saved, failed } = await saveLocalBatch(saveAllPaths, workingCopy, docIdForPath)
+      const savedPathsThisRun = saved.map(({ path }) => path)
+      for (const { path, content } of saved) {
+        const identity = identityFor(path)
+        workspaceStore.settleSave(identity, content, LOCAL_SAVED,
+          workspaceStore.get(documentKey(identity))?.revision ?? 0)
         if (path === openPath) {
           setBaseline(content)
           setLoadedSha(LOCAL_SAVED)
         } else {
-          settleCommitted(path, content)
+          await settleCommitted(path, content)
         }
       }
-      setCreatedPaths((prev) => withoutPaths(prev, saveAllPaths))
-      refreshLocalFiles()
+      setCreatedPaths((prev) => withoutPaths(prev, savedPathsThisRun))
+      void refreshLocalFiles()
       if (failed.length > 0) {
         toast.error(
-          `Could not save ${failed.join(', ')} — this browser's storage is full. ` +
+          `Could not save ${failed.join(', ')} in browser storage. ` +
             'Export what you need, or delete a file you are done with.',
         )
       }
-      if (saved > 0) toast.success(saved === 1 ? `Saved ${saveAllPaths[0]}` : `Saved ${saved} files`)
+      if (savedPathsThisRun.length > 0) toast.success(savedPathsThisRun.length === 1 ? `Saved ${savedPathsThisRun[0]}` : `Saved ${savedPathsThisRun.length} files`)
       return
     }
 
     if (!repo) return
+    const submittedWorkspace = workspaceSelectionRef.current
+    const activeAtSubmit = workspaceStore.active()
+    const submitted = new globalThis.Map<string, { content: string; revision: number }>()
+    for (const path of saveAllPaths) {
+      const content = await workingCopy(path)
+      if (content === null) {
+        toast.error(`Could not read the unsaved copy of ${path}. Nothing was committed.`)
+        return
+      }
+      const identity: DocumentIdentity = {
+        workspace: { mode: 'github', owner: repo.owner, repo: repo.name, branch: repo.branch },
+        path, kind: fileKind(path),
+      }
+      submitted.set(path, { content, revision: workspaceStore.get(documentKey(identity))?.revision ?? 0 })
+    }
     setSaving(true)
     const writes: FileWrite[] = []
     const alreadySaved: string[] = []
     for (const path of saveAllPaths) {
-      const content = workingCopy(path)
-      if (content === null) continue
+      const content = submitted.get(path)!.content
       // Never committed: nothing on the branch to be stale against.
       if (pendingPaths.has(path)) {
         writes.push({ path, content })
         continue
       }
       if (path === openPath && loadedSha !== null) {
+        const base = draftBasesRef.current.get(docIdForPath(path))
+        if (base && draftNeedsReconciliation(base, loadedSha)) {
+          setSaving(false)
+          setDraftConflictKey(documentKey(identityFor(path)))
+          setConflictOpen(true)
+          toast.error(`${path} has unsaved work based on an older or unknown revision. Reconcile it before Save All.`)
+          return
+        }
         writes.push({ path, content, sha: loadedSha })
         continue
       }
@@ -2243,6 +1652,17 @@ export default function AppShell({ user, mode }: AppShellProps) {
       if (!current.ok) {
         setSaving(false)
         if (!current.expired) toast.error(current.message)
+        return
+      }
+      const draft = await readDraftResult(docIdForPath(path))
+      if (draft.status !== 'ok') {
+        setSaving(false)
+        toast.error(`Could not verify ${path}'s draft base (${draft.status}). Nothing was committed.`)
+        return
+      }
+      if (draftNeedsReconciliation(draft.value.baseRevision, current.sha)) {
+        setSaving(false)
+        toast.error(`${path} has unsaved work based on an older or unknown revision. Open it to reconcile before Save All.`)
         return
       }
       if (!contentDiffers(content, current.content, fileKind(path))) {
@@ -2256,19 +1676,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
     // make, just markers to put out.
     if (writes.length === 0) {
       setSaving(false)
-      for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+      for (const path of alreadySaved) await settleCommitted(path, submitted.get(path)?.content ?? '',
+        docIdForFile(repo.owner, repo.name, repo.branch, path),
+        submittedWorkspace === workspaceSelectionRef.current)
       toast.success('Everything is already committed.')
       return
     }
 
-    const summary =
-      writes.length === 1
-        ? `Update ${writes[0]!.path} via ${APP_NAME}`
-        : `Update ${writes.length} files via ${APP_NAME}`
-    const message =
-      writes.length === 1
-        ? summary
-        : `${summary}\n\n${writes.map((w) => `- ${w.path}`).join('\n')}`
+    const message = customMessage ?? generatedBatchCommitMessage(writes.map((write) => write.path))
 
     const res = await commitFiles(repo.owner, repo.name, writes, repo.branch, message)
     setSaving(false)
@@ -2282,18 +1697,29 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
 
     for (const file of res.data.files) {
-      if (file.path === openPath) {
+      const identity: DocumentIdentity = {
+        workspace: { mode: 'github', owner: repo.owner, repo: repo.name, branch: repo.branch },
+        path: file.path, kind: fileKind(file.path),
+      }
+      await settleSavedRecord(identity, file.content, file.sha, submitted.get(file.path)?.revision ?? 0,
+        docIdForFile(repo.owner, repo.name, repo.branch, file.path))
+      const sameWorkspace = submittedWorkspace === workspaceSelectionRef.current
+      if (sameWorkspace && workspaceStore.isActive(documentKey(identity), activeAtSubmit.generation)) {
         setBaseline(file.content)
         setLoadedSha(file.sha)
       } else {
-        settleCommitted(file.path, file.content)
+        await settleCommitted(file.path, file.content,
+          docIdForFile(repo.owner, repo.name, repo.branch, file.path), sameWorkspace)
       }
     }
-    for (const path of alreadySaved) settleCommitted(path, workingCopy(path) ?? '')
+    for (const path of alreadySaved) await settleCommitted(path, submitted.get(path)?.content ?? '',
+      docIdForFile(repo.owner, repo.name, repo.branch, path),
+      submittedWorkspace === workspaceSelectionRef.current)
     const committed = res.data.files.map((f) => f.path)
-    setCreatedPaths((prev) => withoutPaths(prev, committed))
-    setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
-    clearDraft(scratchDocId)
+    if (submittedWorkspace === workspaceSelectionRef.current) {
+      setCreatedPaths((prev) => withoutPaths(prev, committed))
+      setTree((prev) => (prev ? committed.reduce(treeWithPath, prev) : prev))
+    }
     toast.success(
       committed.length === 1
         ? `Committed ${committed[0]}`
@@ -2314,36 +1740,58 @@ export default function AppShell({ user, mode }: AppShellProps) {
     settleCommitted,
     refreshLocalFiles,
     refreshTree,
-    scratchDocId,
+    workspaceStore,
+    identityFor,
+    settleSavedRecord,
+    docIdForPath,
+    setCreatedPaths,
   ])
+
+  const onCommitAllWithMessage = useCallback(() => {
+    if (!githubEnabled || saving || saveAllPaths.length === 0) return
+    openPrompt({
+      title: 'Commit all with message',
+      description: `Enter the commit message for ${saveAllPaths.length} changed ${saveAllPaths.length === 1 ? 'file' : 'files'}.`,
+      label: 'Commit message',
+      defaultValue: generatedBatchCommitMessage(saveAllPaths),
+      multiline: true,
+      submitLabel: 'Commit all',
+      onSubmit: (message) => {
+        setPromptOpen(false)
+        void onSaveAll(message)
+      },
+    })
+  }, [githubEnabled, saving, saveAllPaths, openPrompt, onSaveAll])
 
   // Discard uncommitted edits, resetting the editor back to the last-loaded
   // commit. Only meaningful once there is an actual commit to fall back to
   // (loadedSha !== null) — a never-committed file has no "last commit" state.
   const canRestore = dirty && loadedSha !== null
-  const onRestore = useCallback(() => {
+  const onRestore = useCallback(async () => {
     if (!canRestore) return
+    const cleared = await clearDraft(docId)
+    if (!cleared.ok) {
+      toast.error(`Could not discard the draft in browser storage (${cleared.reason}).`)
+      return
+    }
     setText(baseline)
-    clearDraft(docId)
-  }, [canRestore, baseline, docId])
+  }, [canRestore, baseline, docId, setText])
 
   // Detect the platform for the correct modifier label (⌘ vs Ctrl).
   useEffect(() => {
     setIsMac(/mac|iphone|ipad|ipod/i.test(navigator.platform || navigator.userAgent))
   }, [])
 
-  // Keyboard shortcuts, wherever there are files to act on: ⌘/Ctrl+S saves;
-  // ⌘/Ctrl+Alt+N starts a new diagram. New-diagram uses Alt because browsers
-  // reserve plain ⌘/Ctrl+N (new window) and won't let a page cancel it. `e.code`
-  // (physical key) is used so macOS Option+N (a dead key) still matches.
-  // ⌘/Ctrl+B toggles the file-tree sidebar.
+  // Keyboard shortcuts, wherever there are files to act on: ⌘/Ctrl+S saves; ⌘/Ctrl+Alt+N starts a
+  // new diagram.
   useEffect(() => {
     if (!hasWorkspace) return
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.code === 'KeyS' && !e.altKey) {
         e.preventDefault()
-        onSave()
+        if (githubEnabled && config.preferredCommitAction === 'custom') onCommitWithMessage()
+        else onSave()
       } else if (e.code === 'KeyN' && e.altKey) {
         e.preventDefault()
         newDiagram()
@@ -2354,10 +1802,15 @@ export default function AppShell({ user, mode }: AppShellProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [hasWorkspace, onSave, newDiagram])
+  }, [hasWorkspace, githubEnabled, config.preferredCommitAction, onSave, onCommitWithMessage, newDiagram])
 
   const onOverwrite = useCallback(async () => {
     if (!repo || !openPath) return
+    const identity = identityFor(openPath)
+    const key = documentKey(identity)
+    const generation = workspaceStore.active().generation
+    const submittedContent = text
+    const submittedRevision = workspaceStore.get(key)?.revision ?? 0
     setConflictBusy(true)
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     if (!fresh.ok) {
@@ -2366,1033 +1819,390 @@ export default function AppShell({ user, mode }: AppShellProps) {
       toast.error(fresh.error.message)
       return
     }
-    const res = await commitFile(repo.owner, repo.name, openPath, text, repo.branch, fresh.data.sha)
+    if (!workspaceStore.isActive(key, generation)) {
+      setConflictBusy(false)
+      return
+    }
+    const res = await commitFile(repo.owner, repo.name, openPath, submittedContent, repo.branch, fresh.data.sha)
     setConflictBusy(false)
     if (res.ok) {
-      setBaseline(text)
-      setLoadedSha(res.data.sha)
-      setConflictOpen(false)
-      clearDraft(docId)
+      await settleSavedRecord(identity, submittedContent, res.data.sha, submittedRevision,
+        docIdForFile(repo.owner, repo.name, repo.branch, openPath))
+      setDraftConflictKey(null)
+      if (workspaceStore.isActive(key, generation)) {
+        setBaseline(submittedContent)
+        setLoadedSha(res.data.sha)
+        setConflictOpen(false)
+      }
+      await settleCommitted(openPath, submittedContent,
+        docIdForFile(repo.owner, repo.name, repo.branch, openPath),
+        workspaceStore.isActive(key, generation))
       toast.success('Overwritten on top of latest')
       void refreshTree(repo)
     } else if (!handleExpiredSession(res.error)) {
       toast.error(res.error.message)
     }
-  }, [repo, openPath, text, docId, refreshTree])
+  }, [repo, openPath, text, refreshTree, identityFor, workspaceStore, settleCommitted, settleSavedRecord])
 
   const onStartOver = useCallback(async () => {
     if (!repo || !openPath) return
+    const key = documentKey(identityFor(openPath))
+    const generation = workspaceStore.active().generation
     setConflictBusy(true)
     const fresh = await readFile(repo.owner, repo.name, openPath, repo.branch)
     setConflictBusy(false)
+    if (!workspaceStore.isActive(key, generation)) return
     if (!fresh.ok) {
       if (handleExpiredSession(fresh.error)) return
       toast.error(fresh.error.message)
       return
     }
+    const cleared = await clearDraft(docId)
+    if (!cleared.ok) {
+      toast.error(`Could not discard the draft in browser storage (${cleared.reason}).`)
+      return
+    }
     setText(fresh.data.content)
     setBaseline(fresh.data.content)
     setLoadedSha(fresh.data.sha)
+    workspaceStore.adopt(identityFor(openPath), fresh.data.content, fresh.data.content,
+      fresh.data.sha, generation)
+    setDraftConflictKey(null)
     setConflictOpen(false)
-    clearDraft(docId)
-  }, [repo, openPath, docId])
+  }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
-  const selectVersion = useCallback(
-    async (commit: FileCommit) => {
-      if (!repo) return
-      setSelectedSha(commit.sha)
-      setVersionLoading(true)
-      setVersionContent(null)
-      // The comparison base belongs to the previously selected version.
-      setPreviousContent(null)
-      setCompareNote(null)
-      // Use the path the file had at that commit (may differ across renames).
-      const res = await readFileAtRef(repo.owner, repo.name, commit.path, commit.sha)
-      setVersionLoading(false)
-      if (res.ok) setVersionContent(res.data)
-      else if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
-    },
-    [repo],
-  )
-
-  const HISTORY_PAGE_SIZE = 30
-
-/** How many unsaved paths the save menu names before it starts counting. Enough
- *  to recognize the set at a glance; a list long enough to scroll would be a file
- *  tree, and there is one of those on the left. */
-const MAX_LISTED_UNSAVED = 6
-
-  // Loads one page of history for `path`; `append` decides whether it extends the
-  // current list (Load more) or replaces it (first load / jump to another path).
-  const loadHistoryPage = useCallback(
-    async (path: string, page: number, append: boolean) => {
-      if (!repo) return
-      const res = await listFileCommits(
-        repo.owner,
-        repo.name,
-        path,
-        repo.branch,
-        page,
-        HISTORY_PAGE_SIZE,
-      )
-      if (!res.ok) {
-        if (!handleExpiredSession(res.error)) setHistoryError(res.error.message)
-        return
-      }
-      setCommits((prev) => (append && prev ? [...prev, ...res.data.commits] : res.data.commits))
-      setHistoryPage(page)
-      setHasMoreCommits(res.data.hasMore)
-      setRenamedFrom(res.data.renamedFrom)
-      // Preselect the latest version on a fresh load only.
-      if (!append && res.data.commits[0]) void selectVersion(res.data.commits[0])
-    },
-    [repo, selectVersion],
-  )
-
-  const openHistory = useCallback(async () => {
-    if (!repo || !openPath) return
-    setHistoryOpen(true)
-    setHistoryPath(openPath)
-    setHistoryPathStack([])
-    setCommits(null)
-    setHistoryError(null)
-    setSelectedSha(null)
-    setVersionContent(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    await loadHistoryPage(openPath, 1, false)
-  }, [repo, openPath, loadHistoryPage])
-
-  const loadMoreCommits = useCallback(async () => {
-    if (!historyPath || loadingMoreCommits) return
-    setLoadingMoreCommits(true)
-    await loadHistoryPage(historyPath, historyPage + 1, true)
-    setLoadingMoreCommits(false)
-  }, [historyPath, historyPage, loadingMoreCommits, loadHistoryPage])
-
-  const viewHistoryBeforeRename = useCallback(async () => {
-    if (!historyPath || !renamedFrom) return
-    setHistoryPathStack((prev) => [...prev, historyPath])
-    setHistoryPath(renamedFrom)
-    setCommits(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    setHistoryError(null)
-    await loadHistoryPage(renamedFrom, 1, false)
-  }, [historyPath, renamedFrom, loadHistoryPage])
-
-  const goBackHistory = useCallback(async () => {
-    if (historyPathStack.length === 0) return
-    const next = historyPathStack.slice(0, -1)
-    const target = historyPathStack[historyPathStack.length - 1]!
-    setHistoryPathStack(next)
-    setHistoryPath(target)
-    setCommits(null)
-    setHasMoreCommits(false)
-    setRenamedFrom(null)
-    setHistoryError(null)
-    await loadHistoryPage(target, 1, false)
-  }, [historyPathStack, loadHistoryPage])
-
-  // The commit immediately older than the selected one, among those loaded. A
-  // file's history is paged, so "no older commit here" can mean either "this is
-  // the first commit" or "the next page hasn't been fetched yet" — which the
-  // effect below has to tell apart before claiming the file was created here.
-  const olderCommit = useMemo(() => {
-    if (!commits || !selectedSha) return null
-    const index = commits.findIndex((c) => c.sha === selectedSha)
-    return index >= 0 ? (commits[index + 1] ?? null) : null
-  }, [commits, selectedSha])
-
-  const selectedIsOldestLoaded = useMemo(() => {
-    if (!commits || !selectedSha) return false
-    const index = commits.findIndex((c) => c.sha === selectedSha)
-    return index >= 0 && index === commits.length - 1
-  }, [commits, selectedSha])
-
-  // Fetch the previous version's content — only while a diff against it is
-  // actually on screen, so browsing history in preview mode costs nothing extra.
-  useEffect(() => {
-    if (!historyOpen || historyView !== 'diff' || historyCompare !== 'previous') return
-    if (!repo || !selectedSha) return
-    if (!olderCommit) {
-      if (selectedIsOldestLoaded && (hasMoreCommits || renamedFrom)) {
-        setPreviousContent(null)
-        setCompareNote(
-          'Load more history to compare this version with the one before it.',
-        )
-      } else {
-        // Genuinely the first commit of this path: everything in it is new.
-        setPreviousContent('')
-        setCompareNote(null)
-      }
-      return
-    }
-    let cancelled = false
-    setCompareNote(null)
-    setPreviousLoading(true)
-    void readFileAtRef(repo.owner, repo.name, olderCommit.path, olderCommit.sha).then((res) => {
-      if (cancelled) return
-      setPreviousLoading(false)
-      if (res.ok) setPreviousContent(res.data)
-      else if (!handleExpiredSession(res.error)) setCompareNote(res.error.message)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    historyOpen,
-    historyView,
-    historyCompare,
-    repo,
-    selectedSha,
-    olderCommit,
-    selectedIsOldestLoaded,
-    hasMoreCommits,
-    renamedFrom,
-  ])
-
-  // The two sides of the history diff. Comparing with the previous version reads
-  // forwards (older → this version, i.e. what the commit changed); comparing with
-  // the working copy reads the other way round, since the working copy is the
-  // newer of the two.
-  const historyDiff = useMemo(() => {
-    if (historyView !== 'diff' || versionContent === null) return null
-    if (historyCompare === 'working') return { before: versionContent, after: text }
-    if (previousContent === null) return null
-    return { before: previousContent, after: versionContent }
-  }, [historyView, historyCompare, versionContent, previousContent, text])
-
-  const onRecover = useCallback(() => {
-    if (versionContent === null) return
-    setText(versionContent)
-    setHistoryOpen(false)
-    toast.info('Version loaded into working tree (unsaved)')
-  }, [versionContent])
-
-  const onFork = useCallback(() => {
-    if (versionContent === null || !repo) return
-    const content = versionContent
-    setHistoryOpen(false)
-    openPrompt({
-      title: 'Create new diagram from this version',
-      description: 'Save this version’s content as a separate new file.',
-      label: 'New file path',
-      defaultValue: defaultFileName(kind, 'copy'),
-      submitLabel: 'Start editing',
-      validate: validatePathForKind(kind),
-      onSubmit: (path) => {
-        setPromptOpen(false)
-        setOpenPath(path)
-        setLoadedSha(null)
-        setBaseline('')
-        setText(content)
-      },
-    })
-  }, [versionContent, repo, kind, openPrompt])
-
-  const canSave = hasWorkspace && dirty && text.trim().length > 0 && !saving
+  const canSave =
+    assetKind !== 'raster' && hasWorkspace && dirty &&
+    ((openPath !== null && loadedSha === null) || text.trim().length > 0) && !saving
   /**
-   * Whether the save control splits.
-   *
-   * Not simply "more than one file is dirty": the condition is that there is
-   * unsaved work the primary button would *not* reach. One dirty file that is the
-   * open one is exactly what Save already does, and a second control offering to
-   * do the same thing is noise — but one dirty file that is **not** open is work
-   * with no other way to save it short of opening the file, which is the gap this
-   * closes.
+   * Whether the save control splits. Not simply "more than one file is dirty": the condition is
+   * that there is unsaved work the primary button would *not* reach.
    */
   const showSaveAll =
     hasWorkspace &&
     (saveAllPaths.length > 1 || (saveAllPaths.length === 1 && saveAllPaths[0] !== openPath))
   // A canvas has no text to diff, and a file with nothing saved behind it has
   // nothing to diff against.
-  const canDiff = kind !== 'excalidraw' && loadedSha !== null
+  const canDiff = assetKind !== 'raster' && kind !== 'excalidraw' && loadedSha !== null
+
+  const writeExport = useCallback(async (pending: PendingExport, replace: boolean) => {
+    if (!repo) return
+    setSaving(true)
+    if (replace) setReplaceExportBusy(true)
+    try {
+      const generated = await pending.create()
+      const result = replace
+        ? await replaceExportFile(repo.owner, repo.name, pending.path, generated.content, repo.branch)
+        : generated.encoding === 'binary'
+          ? await commitBinaryFile(repo.owner, repo.name, pending.path, generated.content as Blob, repo.branch)
+          : await commitFile(repo.owner, repo.name, pending.path, generated.content as string, repo.branch)
+      if (!result.ok) {
+        if (!handleExpiredSession(result.error)) toast.error(result.error.message)
+        return
+      }
+      setTree((prev) => prev ? treeWithPath(prev, pending.path) : prev)
+      setPendingExportReplace(null)
+      toast.success(`${replace ? 'Replaced' : 'Committed'} ${pending.path}`)
+      void refreshTree(repo)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Could not generate ${pending.format}.`)
+    } finally {
+      setSaving(false)
+      setReplaceExportBusy(false)
+    }
+  }, [repo, refreshTree])
+
+  const saveExportToRepository = useCallback((
+    format: 'SVG' | 'PNG',
+    extension: '.svg' | '.png',
+    create: () => Promise<{ content: string | Blob; encoding: 'utf8' | 'binary' }>,
+  ) => {
+    if (!repo) return
+    const stem = openPath
+      ? openPath.slice(0, openPath.length - fileExtension(openPath).length)
+      : 'diagram'
+    openPrompt({
+      title: `Save ${format} to repository`,
+      description: `Choose a path on ${repo.branch}.`,
+      label: 'File path',
+      defaultValue: `${stem}${extension}`,
+      submitLabel: 'Generate and commit',
+      validate: (value) => {
+        if (!value || value.startsWith('/') || value.includes('..')) return 'Use a repo-relative path.'
+        return value.toLowerCase().endsWith(extension) ? null : `Use the ${extension} extension.`
+      },
+      onSubmit: async (path) => {
+        if (pendingPaths.has(path)) {
+          toast.error(`${path} has an unsaved draft. Save or rename it first.`)
+          return
+        }
+        setPromptOpen(false)
+        const pending = { format, path, create }
+        if (savedPaths?.has(path)) {
+          setPendingExportReplace(pending)
+          return
+        }
+        await writeExport(pending, false)
+      },
+    })
+  }, [repo, openPath, openPrompt, savedPaths, pendingPaths, writeExport])
+
+  const requestImageUpload = useCallback((directory = '') => {
+    setImageUploadDirectory(directory)
+    setImageUploadOpen(true)
+  }, [])
+
+  const uploadImage = useCallback(async (file: File, path: string) => {
+    if (savedPaths?.has(path) || pendingPaths.has(path) ||
+        (localMode && (await readLocalFileResult(path)).status !== 'missing')) {
+      toast.error(`${path} already exists.`)
+      return
+    }
+    setImageUploadBusy(true)
+    try {
+      const svg = isSvgFile(path)
+      const content = svg ? await file.text() : null
+      if (repo) {
+        const result = svg
+          ? await commitFile(repo.owner, repo.name, path, content ?? '', repo.branch)
+          : await commitBinaryFile(repo.owner, repo.name, path, file, repo.branch)
+        if (!result.ok) {
+          if (!handleExpiredSession(result.error)) toast.error(result.error.message)
+          return
+        }
+        setTree((prev) => prev ? treeWithPath(prev, path) : prev)
+        void refreshTree(repo)
+      } else {
+        const localContent = content ?? await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onerror = () => reject(new Error('Could not read the selected image.'))
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+          reader.readAsDataURL(file)
+        })
+        const result = await saveLocalFileAndClearDraft(path, localContent, docIdForPath(path))
+        if (!result.ok) {
+          toast.error(`Could not upload ${path} — browser storage is ${result.reason}.`)
+          return
+        }
+        void refreshLocalFiles()
+      }
+      setImageUploadOpen(false)
+      toast.success(`Uploaded ${path}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not upload the image.')
+    } finally {
+      setImageUploadBusy(false)
+    }
+  }, [savedPaths, pendingPaths, localMode, repo, refreshTree, refreshLocalFiles, docIdForPath])
   const showSidebar = hasWorkspace && sidebarOpen
   const saveHint = isMac ? '⌘ S' : 'Ctrl + S'
   const newHint = isMac ? '⌥ ⌘ N' : 'Ctrl + Alt + N'
   const sidebarHint = isMac ? '⌘ B' : 'Ctrl + B'
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex flex-none items-center justify-between gap-4 border-b bg-card px-4 py-2">
-        <div className="flex items-center gap-2">
-          {hasWorkspace ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => setSidebarOpen((v) => !v)}
-              title={`${sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'} (${sidebarHint})`}
-            >
-              <PanelLeft />
-            </Button>
-          ) : null}
-          <Link href="/" className="text-xl font-bold hover:text-primary">
-            {APP_NAME}
-          </Link>
-          {/* The repository pill carries two actions, because it names one thing
-              the user wants two things from: the label switches repositories, and
-              the arrow leaves for the repository itself on GitHub — its issues,
-              its PRs, the commits this app has been making. One pill rather than
-              two controls, since the second is meaningless without the first and
-              a ⌘-click on the label would be an affordance nothing announces.
-              The arrow opens the branch being browsed, which is the state the
-              user is actually looking at. */}
-          {githubEnabled ? (
-            <div className="ml-1 flex items-center rounded-full border border-border bg-background dark:border-input dark:bg-input/30">
-              <Button
-                size="sm"
-                variant="ghost"
-                className={cn('rounded-full', repo && 'rounded-r-none pr-1.5')}
-                onClick={() => setRepoPickerOpen(true)}
-                title={repo ? 'Switch repository' : 'Connect a repository'}
-              >
-                <FolderGit2 />
-                {repo ? `${repo.owner}/${repo.name}` : 'Connect repo'}
-              </Button>
-              {repo ? (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="rounded-full rounded-l-none px-2"
-                  onClick={() =>
-                    window.open(
-                      `https://github.com/${repo.owner}/${repo.name}/tree/${encodeURIComponent(repo.branch)}`,
-                      '_blank',
-                      'noopener,noreferrer',
-                    )
-                  }
-                  title={`Open ${repo.owner}/${repo.name} on GitHub`}
-                  aria-label={`Open ${repo.owner}/${repo.name} on GitHub`}
-                >
-                  <SquareArrowOutUpRight />
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
-          {githubEnabled && repo ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="rounded-full"
-              onClick={() => setBranchPickerOpen(true)}
-            >
-              <GitBranch /> {repo.branch}
-            </Button>
-          ) : null}
-          {githubEnabled && repo && repo.defaultBranch && repo.branch !== repo.defaultBranch ? (
-            <Button
-              size="sm"
-              variant="outline"
-              className="rounded-full"
-              onClick={() =>
-                window.open(
-                  `https://github.com/${repo.owner}/${repo.name}/compare/${repo.defaultBranch}...${repo.branch}?expand=1`,
-                  '_blank',
-                  'noopener,noreferrer',
-                )
-              }
-            >
-              <GitPullRequestArrow /> Open PR
-            </Button>
-          ) : null}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {hasWorkspace || githubEnabled ? (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={onRestore}
-                disabled={!canRestore}
-                title={localMode ? 'Restore to last save' : 'Restore to last commit'}
-              >
-                <RotateCcw /> Restore
-              </Button>
-              {/* Save is the primary action and always means *this file* — the
-                  one on screen, the one ⌘S has always saved. Save All is a
-                  second, deliberate choice behind the chevron rather than a mode
-                  the button silently switches into, because the two write
-                  different things and only one of them touches files the user is
-                  not looking at. */}
-              <div className="flex items-center">
-                <Button
-                  size="sm"
-                  onClick={onSave}
-                  disabled={!canSave}
-                  className={showSaveAll ? 'rounded-r-none' : undefined}
-                  title={`${localMode ? 'Save' : 'Commit'} this file (${saveHint})`}
-                >
-                  {localMode ? 'Save' : saving ? 'Committing…' : 'Commit'}
-                  <kbd className="ml-1 flex items-center gap-0.5 rounded border border-current/30 px-1 text-[10px] leading-none font-medium opacity-70">
-                    {isMac ? (
-                      <>
-                        <Command className="size-2.5" /> <span>S</span>
-                      </>
-                    ) : (
-                      <span>Ctrl + S</span>
-                    )}
-                  </kbd>
-                </Button>
-                {showSaveAll ? (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="sm"
-                        disabled={saving}
-                        className="rounded-l-none border-l border-primary-foreground/30 px-1.5"
-                        aria-label={`More save actions — ${saveAllPaths.length} unsaved files`}
-                        title={`${saveAllPaths.length} unsaved files`}
-                      >
-                        <ChevronDown />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-64">
-                      <DropdownMenuItem
-                        onClick={() => void onSaveAll()}
-                        className="flex-col items-start gap-0.5"
-                      >
-                        <span>
-                          {localMode ? 'Save all' : 'Commit all'} ({saveAllPaths.length} files)
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {localMode
-                            ? 'Writes every changed file to this browser.'
-                            : 'All of them in a single commit.'}
-                        </span>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                        Unsaved
-                      </DropdownMenuLabel>
-                      {saveAllPaths.slice(0, MAX_LISTED_UNSAVED).map((path) => (
-                        <DropdownMenuItem
-                          key={path}
-                          onClick={() => openFromTree(path)}
-                          className="text-xs"
-                        >
-                          <span className="truncate">{path}</span>
-                        </DropdownMenuItem>
-                      ))}
-                      {saveAllPaths.length > MAX_LISTED_UNSAVED ? (
-                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                          and {saveAllPaths.length - MAX_LISTED_UNSAVED} more
-                        </p>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {dirty ? '● Unsaved' : 'Saved'}
-              </span>
-              {openPath && repo ? (
-                <Button size="sm" variant="ghost" onClick={openHistory}>
-                  <History /> History
-                </Button>
-              ) : null}
-              <Separator orientation="vertical" className="h-6" />
-            </>
-          ) : null}
-          <ExportMenu
-            text={debouncedText}
-            baseName={baseName}
-            configYaml={config.mermaidConfig}
-            background={config.exportBackground}
-            onBackgroundChange={(v) => updateConfig({ exportBackground: v })}
-            pngScale={config.pngScale}
-            onPngScaleChange={(v) => updateConfig({ pngScale: v })}
-            config={appliedConfig}
-            kind={kind}
+    <AppLayout
+      header={
+        <AppHeader
+          githubEnabled={githubEnabled}
+          hasWorkspace={hasWorkspace}
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((value) => !value)}
+          sidebarHint={sidebarHint}
+          repo={repo}
+          onOpenRepoPicker={() => setRepoPickerOpen(true)}
+          onOpenBranchPicker={() => setBranchPickerOpen(true)}
+          onRestore={() => void onRestore()}
+          canRestore={canRestore}
+          localMode={localMode}
+          onSave={() => void onSave()}
+          onCommitWithMessage={onCommitWithMessage}
+          canSave={canSave}
+          saving={saving}
+          showSaveAll={showSaveAll}
+          saveAllPaths={saveAllPaths}
+          saveHint={saveHint}
+          isMac={isMac}
+          onSaveAll={() => void onSaveAll()}
+          onCommitAllWithMessage={onCommitAllWithMessage}
+          onOpenPath={openFromTree}
+          dirty={dirty}
+          openPath={openPath}
+          onOpenHistory={() => void history.openHistory()}
+          exportText={debouncedText}
+          baseName={baseName}
+          config={config}
+          updateConfig={updateConfig}
+          appliedConfig={appliedConfig}
+          kind={kind}
+          user={user}
+          onSaveExport={repo && !assetKind ? saveExportToRepository : undefined}
+          showExport={!assetKind}
+        />
+      }
+      sidebar={
+        showSidebar ? (
+          <WorkspaceSidebar
+            width={sidebarWidth}
+            dirtyCount={dirtyPaths.size}
+            repoBranch={repo?.branch ?? null}
+            treeLoading={treeLoading}
+            onRefresh={() => {
+              if (repo) void refreshTree(repo)
+            }}
+            newHint={newHint}
+            onNewFile={(dir, selectedKind) => newDiagram(dir, selectedKind)}
+            onUploadImage={requestImageUpload}
+            hasDisplayNodes={displayNodes.length > 0}
+            fileFilter={fileFilter}
+            onFileFilterChange={setFileFilter}
+            searching={searching}
+            truncated={tree?.truncated ?? false}
+            treeError={treeError}
+            treeLoaded={tree !== null}
+            localMode={localMode}
+            visibleNodes={visibleNodes}
+            activePath={openPath}
+            dirtyPaths={dirtyPaths}
+            expandedPaths={visibleExpanded}
+            onToggleDir={toggleVisibleDir}
+            onOpenFile={openFromTree}
+            onDelete={requestDelete}
+            onRename={requestRename}
           />
-          <Separator orientation="vertical" className="h-6" />
-          <AuthButton user={user} />
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {showSidebar ? (
-          <aside
-            className="flex flex-none flex-col overflow-hidden bg-sidebar"
-            style={{ width: sidebarWidth }}
-          >
-            <div className="flex items-center justify-between px-3 py-2.5">
-              <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium">
-                Files
-                {dirtyPaths.size > 0 ? (
-                  <span
-                    className="size-1.5 shrink-0 rounded-full bg-amber-500"
-                    title={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
-                    aria-label={`${dirtyPaths.size} unsaved file${dirtyPaths.size === 1 ? '' : 's'}`}
-                  />
-                ) : null}
-              </span>
-              <div className="flex items-center gap-0.5">
-                {/* Nothing to refresh in local mode: the sidebar is not a cached
-                    view of a remote list, it is the store. */}
-                {repo ? (
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => void refreshTree(repo)}
-                    disabled={treeLoading}
-                    title="Refresh files"
-                  >
-                    <RefreshCw className={cn(treeLoading && 'animate-spin')} />
-                  </Button>
-                ) : null}
-                <NewFileMenu onSelect={(k) => newDiagram(undefined, k)}>
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    title={`New file at root (${newHint})`}
-                  >
-                    <Plus />
-                  </Button>
-                </NewFileMenu>
-              </div>
-            </div>
-            {/* Filters what is already loaded — no fetch, both modes. Hidden while
-                the workspace is genuinely empty, where a search box is a control
-                that can only ever return nothing. */}
-            {displayNodes.length > 0 ? (
-              <div className="px-3 pb-2">
-                {/* The positioning context is the field itself, not the padded
-                    row around it: anchored to the row, the icon centred against
-                    the row's own height — field plus bottom padding — and sat a
-                    few pixels low of the text it belongs to. */}
-                <div className="relative">
-                  <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={fileFilter}
-                    onChange={(e) => {
-                      setFileFilter(e.target.value)
-                      setSearchCollapsed(EMPTY_PATHS)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        e.stopPropagation()
-                        setFileFilter('')
-                        setSearchCollapsed(EMPTY_PATHS)
-                      }
-                    }}
-                    placeholder="Search files"
-                    aria-label="Search files"
-                    className="h-7 bg-background pr-7 pl-7 text-xs"
-                  />
-                  {searching ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFileFilter('')
-                        setSearchCollapsed(EMPTY_PATHS)
-                      }}
-                      aria-label="Clear search"
-                      title="Clear search"
-                      className="absolute top-1/2 right-1.5 flex size-4 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            <Separator />
-            <div className="min-h-0 flex-1 overflow-auto p-2">
-              {tree?.truncated ? (
-                <p className="mb-2 rounded-md bg-muted p-2 text-xs text-muted-foreground">
-                  ⚠ Large repo; some files may be hidden.
-                </p>
-              ) : null}
-              {/* A refresh that fails while a list is already on screen shows the
-                  error as a banner and keeps the list — the stale list is far more
-                  useful than an empty pane, and the next refresh clears this. */}
-              {treeError && tree !== null ? (
-                <p className="mb-2 rounded-md bg-destructive/10 p-2 text-xs text-destructive">
-                  {treeError}
-                </p>
-              ) : null}
-              {treeError && tree === null ? (
-                <p className="p-2 text-sm text-destructive">{treeError}</p>
-              ) : !localMode && tree === null ? (
-                <FileTreeSkeleton />
-              ) : (
-                <FileTree
-                  nodes={visibleNodes}
-                  activePath={openPath}
-                  dirtyPaths={dirtyPaths}
-                  expandedPaths={visibleExpanded}
-                  onToggleDir={toggleVisibleDir}
-                  branch={repo?.branch ?? ''}
-                  searchQuery={searching ? fileFilter.trim() : undefined}
-                  onOpenFile={openFromTree}
-                  onDelete={requestDelete}
-                  onNewFile={(dir, k) => newDiagram(dir, k)}
-                  onRename={requestRename}
-                />
-              )}
-            </div>
-          </aside>
-        ) : null}
-        {showSidebar ? (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            aria-valuemin={MIN_SIDEBAR_WIDTH}
-            aria-valuemax={MAX_SIDEBAR_WIDTH}
-            aria-valuenow={sidebarWidth}
-            tabIndex={0}
-            onPointerDown={startSidebarDrag}
-            onKeyDown={onSidebarDividerKeyDown}
-            className="group flex w-1.5 flex-none cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
-          >
-            <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
-          </div>
-        ) : null}
-
-        <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex flex-none flex-wrap items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
-            {hasWorkspace && linkTrail.length > 0 ? (
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                onClick={goBack}
-                title={`Back to ${linkTrail[linkTrail.length - 1]}`}
-                aria-label={`Back to ${linkTrail[linkTrail.length - 1]}`}
-              >
-                <ArrowLeft />
-              </Button>
-            ) : null}
-            {hasWorkspace ? (
-              <span>
-                {openPath ??
-                  (localMode ? 'untitled (unsaved)' : 'untitled (unsaved local draft)')}
-              </span>
-            ) : (
-              <span>Connect a repository to browse and commit your diagrams.</span>
-            )}
-            {localMode ? (
-              <span className="text-muted-foreground/70">
-                · local mode, files stay in this browser
-              </span>
-            ) : null}
-            {/* With no file open there's no extension to infer from, so the user
-                picks the surface. Each kind keeps its own draft, so toggling is
-                non-destructive.
-
-                Deliberately on the LEFT, outside the `ml-auto` group: it only
-                exists while no file is open, and inside that group its appearing
-                and disappearing shunted the theme and layout controls sideways
-                every time a file was opened or closed. */}
-            {!openPath ? (
-              <div className="ml-1 flex items-center gap-0.5 rounded-md border p-0.5">
-                {/* Same order as NewFileMenu: markdown first. */}
-                <Button
-                  size="sm"
-                  variant={kind === 'markdown' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('markdown')}
-                >
-                  <MarkdownIcon className="size-3" /> Markdown
-                </Button>
-                <Button
-                  size="sm"
-                  variant={kind === 'mermaid' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('mermaid')}
-                >
-                  <MermaidIcon className="size-3" /> Diagram
-                </Button>
-                <Button
-                  size="sm"
-                  variant={kind === 'excalidraw' ? 'secondary' : 'ghost'}
-                  className="h-6 gap-1 px-2 text-xs"
-                  onClick={() => switchScratchKind('excalidraw')}
-                >
-                  <ExcalidrawIcon className="size-3" /> Canvas
-                </Button>
-              </div>
-            ) : null}
-            <div className="ml-auto flex items-center gap-1.5">
-              {/* Editor-only control, so it disappears with the canvas — which has
-                  no lines to wrap. */}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={showDiff && canDiff ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => setShowDiff((v) => !v)}
-                  disabled={!canDiff}
-                  aria-pressed={showDiff && canDiff}
-                  aria-label="Compare with the last commit"
-                  title={
-                    canDiff
-                      ? showDiff
-                        ? 'Back to the editor'
-                        : 'Compare with the last commit'
-                      : 'Nothing committed yet to compare with'
-                  }
-                >
-                  <FileDiff />
-                </Button>
-              ) : null}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={config.wrapLines ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => updateConfig({ wrapLines: !config.wrapLines })}
-                  aria-pressed={config.wrapLines}
-                  aria-label="Wrap long lines"
-                  title={config.wrapLines ? 'Wrap long lines: on' : 'Wrap long lines: off'}
-                >
-                  <WrapText />
-                </Button>
-              ) : null}
-              {kind !== 'excalidraw' ? (
-                <Button
-                  size="icon-sm"
-                  variant={config.minimap ? 'secondary' : 'ghost'}
-                  className="size-7"
-                  onClick={() => updateConfig({ minimap: !config.minimap })}
-                  aria-pressed={config.minimap}
-                  aria-label="Viewfinder"
-                  title={config.minimap ? 'Viewfinder: on' : 'Viewfinder: off'}
-                >
-                  <Map />
-                </Button>
-              ) : null}
-              <span className="text-muted-foreground">Theme</span>
-              <Select value={currentTheme} onValueChange={applyTheme}>
-                <SelectTrigger size="sm" className="h-7 w-48" aria-label="Diagram theme">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="end">
-                  <SelectItem
-                    value={NONE_THEME}
-                    className="cursor-pointer"
-                    onFocus={() => applyTheme(NONE_THEME)}
-                  >
-                    None (default)
-                  </SelectItem>
-                  {currentTheme === CUSTOM_THEME ? (
-                    <SelectItem value={CUSTOM_THEME} disabled>
-                      Custom
-                    </SelectItem>
-                  ) : null}
-                  <SelectSeparator />
-                  <SelectGroup>
-                    <SelectLabel>Light</SelectLabel>
-                    {THEME_PRESETS.filter((preset) => preset.mode === 'light').map((preset) => (
-                      <SelectItem
-                        key={preset.value}
-                        value={preset.value}
-                        className="cursor-pointer"
-                        onFocus={() => applyTheme(preset.value)}
-                      >
-                        {preset.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                  <SelectGroup>
-                    <SelectLabel>Dark</SelectLabel>
-                    {THEME_PRESETS.filter((preset) => preset.mode === 'dark').map((preset) => (
-                      <SelectItem
-                        key={preset.value}
-                        value={preset.value}
-                        className="cursor-pointer"
-                        onFocus={() => applyTheme(preset.value)}
-                      >
-                        {preset.label}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              {/* Layout engine and the mermaid YAML config have no meaning for a
-                  canvas. The Theme dropdown above stays, because it still recolors
-                  the app chrome — and drives the canvas's light/dark mode.
-                  Markdown keeps both: they drive its embedded ```mermaid fences. */}
-              {kind !== 'excalidraw' ? (
-                <>
-                  <span className="text-muted-foreground">Layout</span>
-                  <Select
-                    value={currentLayout}
-                    onValueChange={(v) =>
-                      updateConfig({ mermaidConfig: setLayoutInYaml(config.mermaidConfig, v) })
-                    }
-                  >
-                    <SelectTrigger size="sm" className="h-7" aria-label="Layout engine">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="end">
-                      {LAYOUT_ENGINES.map((engine) => (
-                        <SelectItem key={engine.value} value={engine.value}>
-                          {engine.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="size-7"
-                    onClick={() => setConfigOpen(true)}
-                    aria-label="Diagram configuration"
-                    title="Diagram configuration"
-                  >
-                    <Settings2 />
-                  </Button>
-                </>
-              ) : null}
-              {/* Agent Link lives here, not in the diagram-config modal: it has
-                  nothing to do with diagrams, and it applies to all three document
-                  kinds. Labelled rather than icon-only, and always rendered, because
-                  this button is the only indication that an agent can be editing the
-                  document — an unlabelled plug says nothing to someone who has never
-                  turned it on.
-
-                  Clicking opens the modal rather than toggling: switching it on hands
-                  a process outside the browser the ability to rewrite the open
-                  document, which should not be one click on a toolbar control. */}
-              <Button
-                size="sm"
-                variant={linkAttached ? 'secondary' : 'ghost'}
-                className={linkAttached ? 'h-7 gap-1.5 text-primary' : 'h-7 gap-1.5'}
-                onClick={() => setLinkOpen(true)}
-                aria-pressed={agentLinkOn}
-                title={
-                  !agentLinkOn
-                    ? 'Agent Link — let a coding agent read and edit this document'
-                    : linkAttached
-                      ? `Agent Link — ${agentLink.agent ?? 'an agent'} is attached and can edit this document`
-                      : agentLink.status === 'full'
-                        ? 'Agent Link — the shared service is at capacity. Run your own and point this tab at it in Advanced options'
-                        : agentLink.status === 'blocked'
-                          ? `Agent Link — blocked: ${agentLink.detail ?? 'see the console'}`
-                          : linkWaiting
-                            ? `Agent Link — on. Give your agent the code ${agentLink.code}; it must attach before it can read or edit`
-                            : 'Agent Link — on, connecting to the service'
-                }
-              >
-                {linkAttached ? <PlugZap /> : <Plug />}
-                {linkAttached
-                  ? 'Agent Connected'
-                  : agentLinkOn
-                    ? 'Awaiting Agent'
-                    : 'Connect Agent'}
-              </Button>
-            </div>
-          </div>
-
-          {kind === 'excalidraw' ? (
-            // A canvas is its own editor *and* its own preview, so it takes the
-            // full pane — no split, no divider. `key` remounts it per file so one
-            // document's undo history and scroll position can't leak into the next.
-            <section className="min-h-0 flex-1" aria-label="Canvas">
-              <Canvas
-                key={openPath ?? 'scratch'}
-                value={text}
-                onChange={setText}
-                theme={canvasTheme}
-                backgroundColor={canvasBackground}
-              />
-            </section>
-          ) : showDiff && canDiff ? (
-            // The diff takes the whole pane row: side by side needs the width, and
-            // there is nothing to edit while reading it.
-            <section className="min-h-0 flex-1 overflow-auto" aria-label="Uncommitted changes">
-              <DiffView
-                before={baseline}
-                after={debouncedText}
-                beforeLabel="Last commit"
-                afterLabel="Working copy"
-                emptyMessage="No uncommitted changes — this document matches the last commit."
-              />
-            </section>
-          ) : (
-            <div
-              ref={paneRowRef}
-              className="grid min-h-0 flex-1"
-              style={{
-                gridTemplateColumns: `minmax(0,${editorRatio}fr) 6px minmax(0,${1 - editorRatio}fr)`,
-              }}
-            >
-              <section className="min-h-0 overflow-auto" aria-label="Editor">
-                <Editor
-                  ref={editorRef}
-                  value={text}
-                  onChange={setText}
-                  dark={editorDark}
-                  kind={kind}
-                  wrap={config.wrapLines}
-                  // Only a committed file has something to diverge *from*; a new
-                  // file (or the local scratch document) would otherwise show
-                  // every one of its lines as added.
-                  baseline={loadedSha !== null ? baseline : null}
-                  filePaths={repoFilePaths}
-                  docPath={openPath}
-                  minimap={config.minimap}
-                  // Only markdown has a document to scroll to; a diagram preview
-                  // is one figure with no notion of a source line.
-                  onRevealPreview={kind === 'markdown' ? revealInPreview : undefined}
-                />
-              </section>
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize editor and preview"
-                aria-valuemin={20}
-                aria-valuemax={80}
-                aria-valuenow={Math.round(editorRatio * 100)}
-                tabIndex={0}
-                onPointerDown={startDividerDrag}
-                onKeyDown={onDividerKeyDown}
-                className="group flex cursor-col-resize touch-none items-center justify-center bg-border transition-colors hover:bg-primary/40 focus-visible:bg-primary/40 focus-visible:outline-none"
-              >
-                <div className="h-8 w-0.5 rounded-full bg-muted-foreground/40 transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
-              </div>
-              <section className="min-h-0 overflow-auto" aria-label="Preview">
-                {kind === 'markdown' ? (
-                  <MarkdownPreview
-                    ref={markdownPreviewRef}
-                    onRevealSource={revealInEditor}
-                    text={debouncedText}
-                    config={appliedConfig}
-                    path={openPath}
-                    repo={repo}
-                    onOpenFile={repo ? openLinkedFile : undefined}
-                    // Filling the window hides the toolbar's Back button, so the
-                    // reading view carries its own.
-                    onBack={linkTrail.length > 0 ? goBack : undefined}
-                    backLabel={linkTrail[linkTrail.length - 1]}
-                  />
-                ) : (
-                  <Preview text={debouncedText} config={appliedConfig} />
-                )}
-              </section>
-            </div>
-          )}
-        </main>
-      </div>
-
-      {githubEnabled ? (
-        <RepoPicker
-          open={repoPickerOpen}
-          onOpenChange={setRepoPickerOpen}
-          onSelect={onSelectRepo}
-        />
-      ) : null}
-
-      {githubEnabled && repo ? (
-        <BranchPicker
-          open={branchPickerOpen}
-          onOpenChange={setBranchPickerOpen}
-          owner={repo.owner}
-          name={repo.name}
-          currentBranch={repo.branch}
-          defaultBranch={repo.defaultBranch}
-          creating={branchBusy}
-          onSelect={onSelectBranch}
-          onCreate={onCreateBranch}
-        />
-      ) : null}
-
-      {openPath ? (
-        <ConflictModal
-          open={conflictOpen}
-          onOpenChange={setConflictOpen}
-          path={openPath}
-          branch={repo?.branch ?? ''}
-          busy={conflictBusy}
-          onOverwrite={onOverwrite}
-          onStartOver={onStartOver}
-        />
-      ) : null}
-
-      {prompt ? (
-        <PromptModal open={promptOpen} onOpenChange={setPromptOpen} {...prompt} />
-      ) : null}
-
-      <ConfigModal
-        open={configOpen}
-        onOpenChange={setConfigOpen}
-        value={config.mermaidConfig}
-        onChange={(v) => updateConfig({ mermaidConfig: v })}
-        error={parsedConfig.error}
-      />
-
-      <AgentLinkModal
-        open={linkOpen}
-        onOpenChange={setLinkOpen}
-        enabled={agentLinkOn}
-        onEnabledChange={enableAgentLink}
-        status={agentLink.status}
-        detail={agentLink.detail}
-        agent={agentLink.agent}
-        code={agentLink.code}
-        onRegenerate={agentLink.regenerate}
-        onRetry={agentLink.retry}
-        mcpOrigin={mcpOrigin}
-        onMcpOriginChange={(origin) => updateConfig({ mcpOrigin: origin })}
-        mode={mode}
-      />
-
-      <DeleteModal
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        target={deleteTarget}
-        fileCount={deleteTarget ? collectFilePaths(deleteTarget).length : 0}
-        branch={repo?.branch ?? ''}
-        busy={deleteBusy}
-        onConfirm={confirmDelete}
-      />
-
-      {openPath ? (
-        <HistoryPanel
-          open={historyOpen}
-          onOpenChange={setHistoryOpen}
-          path={openPath}
-          historyPath={historyPath ?? openPath}
-          commits={commits}
-          error={historyError}
-          hasMore={hasMoreCommits}
-          loadingMore={loadingMoreCommits}
-          renamedFrom={renamedFrom}
-          canGoBack={historyPathStack.length > 0}
-          selectedSha={selectedSha}
-          versionContent={versionContent}
-          versionLoading={versionLoading}
-          config={appliedConfig}
+        ) : null
+      }
+      showSidebar={showSidebar}
+      sidebarWidth={sidebarWidth}
+      minSidebarWidth={MIN_SIDEBAR_WIDTH}
+      maxSidebarWidth={MAX_SIDEBAR_WIDTH}
+      onSidebarPointerDown={startSidebarDrag}
+      onSidebarKeyDown={onSidebarDividerKeyDown}
+      dialogs={
+        <AppDialogs
+          githubEnabled={githubEnabled}
+          repoPickerOpen={repoPickerOpen}
+          onRepoPickerOpenChange={setRepoPickerOpen}
+          onSelectRepo={(selectedRepo) => void onSelectRepo(selectedRepo)}
+          repo={repo}
+          branchPickerOpen={branchPickerOpen}
+          onBranchPickerOpenChange={setBranchPickerOpen}
+          branchBusy={branchBusy}
+          onSelectBranch={(branch) => void onSelectBranch(branch)}
+          onCreateBranch={(branch) => void onCreateBranch(branch)}
+          openPath={openPath}
+          conflictOpen={conflictOpen}
+          onConflictOpenChange={setConflictOpen}
+          conflictBusy={conflictBusy}
+          onOverwrite={() => void onOverwrite()}
+          onStartOver={() => void onStartOver()}
+          reconciliation={openPath !== null && draftConflictKey === documentKey(identityFor(openPath))}
+          prompt={prompt}
+          promptOpen={promptOpen}
+          onPromptOpenChange={setPromptOpen}
+          configOpen={configOpen}
+          onConfigOpenChange={setConfigOpen}
+          mermaidConfig={config.mermaidConfig}
+          onMermaidConfigChange={(value) => updateConfig({ mermaidConfig: value })}
+          configError={parsedConfig.error}
+          linkOpen={linkOpen}
+          onLinkOpenChange={setLinkOpen}
+          agentLinkOn={agentLinkOn}
+          onAgentLinkEnabledChange={enableAgentLink}
+          agentLink={agentLink}
+          mcpOrigin={mcpOrigin}
+          onMcpOriginChange={(origin) => updateConfig({ mcpOrigin: origin })}
+          mode={mode}
+          deleteOpen={deleteOpen}
+          onDeleteOpenChange={setDeleteOpen}
+          deleteTarget={deleteTarget}
+          deleteBusy={deleteBusy}
+          onConfirmDelete={() => void confirmDelete()}
+          history={history}
+          appliedConfig={appliedConfig}
           kind={kind}
           canvasTheme={canvasTheme}
           canvasBackground={canvasBackground}
-          view={historyView}
-          onViewChange={setHistoryView}
-          compare={historyCompare}
-          onCompareChange={setHistoryCompare}
-          diff={historyDiff}
-          diffLoading={previousLoading}
-          diffNote={compareNote}
-          onSelect={selectVersion}
-          onLoadMore={loadMoreCommits}
-          onViewBeforeRename={viewHistoryBeforeRename}
-          onBack={goBackHistory}
-          onRecover={onRecover}
-          onFork={onFork}
+          mobileWarningOpen={mobileWarningOpen}
+          onMobileWarningOpenChange={(nextOpen) => {
+            setMobileWarningOpen(nextOpen)
+            if (!nextOpen) setMobileWarningDismissed(true)
+          }}
+          imageUploadOpen={imageUploadOpen}
+          onImageUploadOpenChange={setImageUploadOpen}
+          imageUploadDirectory={imageUploadDirectory}
+          imageUploadBusy={imageUploadBusy}
+          onUploadImage={(file, path) => void uploadImage(file, path)}
+          replaceExportOpen={pendingExportReplace !== null}
+          onReplaceExportOpenChange={(open) => {
+            if (!open && !replaceExportBusy) setPendingExportReplace(null)
+          }}
+          replaceExportPath={pendingExportReplace?.path ?? null}
+          replaceExportBusy={replaceExportBusy}
+          onConfirmReplaceExport={() => {
+            if (pendingExportReplace) void writeExport(pendingExportReplace, true)
+          }}
         />
-      ) : null}
-
-      <MobileWarningModal
-        open={mobileWarningOpen}
-        onOpenChange={(open) => {
-          setMobileWarningOpen(open)
-          if (!open) setMobileWarningDismissed(true)
-        }}
+      }
+    >
+      <DocumentToolbar
+        hasWorkspace={hasWorkspace}
+        linkTrail={linkTrail}
+        onBack={goBack}
+        openPath={openPath}
+        localMode={localMode}
+        kind={kind}
+        onSwitchScratchKind={(nextKind) => void switchScratchKind(nextKind)}
+        showDiff={showDiff}
+        canDiff={canDiff}
+        onToggleDiff={() => setShowDiff((value) => !value)}
+        config={config}
+        updateConfig={updateConfig}
+        currentTheme={currentTheme}
+        customThemeValue={CUSTOM_THEME}
+        noneThemeValue={NONE_THEME}
+        onApplyTheme={applyTheme}
+        currentLayout={currentLayout}
+        onOpenConfig={() => setConfigOpen(true)}
+        linkAttached={linkAttached}
+        linkWaiting={linkWaiting}
+        agentLinkOn={agentLinkOn}
+        agentLink={agentLink}
+        onOpenAgentLink={() => setLinkOpen(true)}
       />
-    </div>
+      <DocumentSurface
+        kind={kind}
+        openPath={openPath}
+        documentId={documentKey(activeIdentityRef.current)}
+        text={text}
+        onChange={setText}
+        canvasTheme={canvasTheme}
+        canvasBackground={canvasBackground}
+        showDiff={showDiff}
+        canDiff={canDiff}
+        baseline={baseline}
+        renderedText={debouncedText}
+        paneRowRef={paneRowRef}
+        editorRatio={editorRatio}
+        onDividerPointerDown={startDividerDrag}
+        onDividerKeyDown={onDividerKeyDown}
+        editorRef={editorRef}
+        markdownPreviewRef={markdownPreviewRef}
+        editorDark={editorDark}
+        wrapLines={config.wrapLines}
+        loaded={loadedSha !== null}
+        filePaths={repoFilePaths}
+        minimap={config.minimap}
+        onRevealPreview={revealInPreview}
+        onRevealEditor={revealInEditor}
+        config={appliedConfig}
+        repo={repo}
+        onOpenLinkedFile={openLinkedFile}
+        linkTrail={linkTrail}
+        markdownScrollTop={markdownScrollTop}
+        onBack={goBack}
+        assetKind={assetKind}
+      />
+    </AppLayout>
   )
 }
 
@@ -3406,9 +2216,9 @@ function validatePath(value: string): string | null {
 }
 
 /**
- * The create prompt's validation. The extension is supplied by the prompt itself,
- * so the only new failure mode is an empty name — which would otherwise assemble
- * into a dotfile (`docs/.md`) that `validatePath` happily accepts.
+ * The create prompt's validation. The extension is supplied by the prompt itself, so the only new
+ * failure mode is an empty name — which would otherwise assemble into a dotfile (`docs/.md`) that
+ * `validatePath` happily accepts.
  */
 function validateNewFilePath(extension: string): (value: string) => string | null {
   return (value: string) => {
@@ -3422,10 +2232,8 @@ function validateNewFilePath(extension: string): (value: string) => string | nul
 }
 
 /**
- * Requires an extension matching `kind` — used when an *existing* document is
- * written to a new path (save-as, fork from history). The content's kind is
- * already fixed there, so a mismatched extension would commit, say, mermaid
- * source into a `.excalidraw` file that then opens as a broken canvas.
+ * Requires an extension matching `kind` — used when an *existing* document is written to a new path
+ * (save-as, fork from history).
  */
 function validatePathForKind(kind: FileKind): (value: string) => string | null {
   return (value: string) => {

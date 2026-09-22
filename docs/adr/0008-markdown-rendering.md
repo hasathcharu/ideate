@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/markdown.ts, app/lib/highlight.ts, app/components/MarkdownPreview.tsx, app/components/DiagramViewport.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -14,8 +14,9 @@ standalone one — the Theme *and* Layout dropdowns and the config cogwheel all 
 visible for markdown for exactly that reason (`kind !== 'excalidraw'` in
 `AppShell.tsx`). **The config is injected at render time and never written into
 the document**: the file in the repo holds bare ```mermaid fences, which is what
-lets GitHub render it too. Only the "Markdown + Theme" export bakes it in, into a
-copy.
+lets GitHub render it too. Markdown exports its source verbatim, with no theme-baking
+variant. Mermaid source export can include config in frontmatter. See
+[ADR 0012](0012-export-pipeline.md).
 
 Embedded diagrams get the same zoom/pan/fit controls as the diagram pane, because
 they are literally the same component. To make that possible `renderMarkdown`
@@ -57,10 +58,10 @@ embedded figure owns the screen and reverts to bare-wheel zoom.
 
 The prose itself is styled by `.md-prose` in `app/globals.css`, written against
 the shadcn tokens rather than literal colors, so a rendered document follows
-`applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**,
-not through `Promise.all`: mermaid re-`initialize()`s one global instance and
-measures against the live DOM, so overlapping renders are a race with nothing to
-gain. Code fences have no such constraint and are highlighted in parallel.
+`applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**.
+The shared Mermaid wrapper also serializes its complete global-config lifecycle,
+so previews, diagnostics, hover cards, exports, and separate Markdown renders
+cannot race it. Code fences have no such constraint and are highlighted in parallel.
 
 ### Rendering a document the way GitHub does
 
@@ -116,7 +117,9 @@ relative links and images the way GitHub does:
   relative path, an "open in new tab" would navigate to a 404 *under `/editor`*,
   which is why a click is `preventDefault`ed outright when no repo is connected.
 - **Following a link is undoable.** `AppShell` keeps a `linkTrail` of the files a
-  link was followed *from*, and shows a Back button while it is non-empty. Only
+  link was followed *from* together with each reading-pane scroll offset, and
+  shows a Back button while it is non-empty. A followed destination starts at the
+  top; Back restores the previous document's offset. Only
   link navigation pushes onto it — opening a file from the tree clears it, because
   a Back button that then jumped to an unrelated file is worse than none.
 - **Resting on such a link previews the file** (`components/FileHoverCard.tsx`):
@@ -127,8 +130,17 @@ relative links and images the way GitHub does:
   and its fonts (rule 8) for a hover preview. Scrolling **re-measures** the card's
   anchor rather than dismissing it: dismissing while the pointer still rested on
   the link left the next mouse event free to schedule it again, which flickers.
+  The card updates its fixed coordinates directly on an animation frame; putting
+  the rect in `MarkdownPreview` state would reconcile the whole document on every
+  scroll event.
 - A **relative image** is rewritten to raw.githubusercontent.com, since a
   repo-relative `src` would otherwise resolve against the app's own origin.
+  Supported repository image assets (PNG, JPG, GIF, and SVG) also appear in the
+  sidebar, so the same relative target can be inspected directly in the app.
+  Repository images are fetched through the authenticated Server Action and
+  substituted as inert data URLs, so private-repository images render too;
+  external image URLs stay unchanged. The authenticated render refuses images
+  above 30 MB.
 - `#anchor` links scroll the reading pane, using the heading slugs.
 
 ### Full-window markdown gets an outline
@@ -141,6 +153,13 @@ panel **floats over** the document rather than taking a column of it — a colum
 shifts the prose and re-fits every diagram in it each time the panel is toggled —
 and it sits at the top right, directly under the window controls, so the panel and
 the button that opens it are in the same place.
+
+The reading column has generous top padding beneath those controls. Every
+programmatic scroll the preview makes — outline, editor line sync, find — is
+immediate rather than smooth, beside the editor as well as in the reading view,
+so direct navigation does not make a long document feel as though it resists the
+reader. `scrollRangeIntoView` takes no behaviour argument, because no caller
+wants an animated scroll.
 
 Filling the window covers the toolbar, so the reading view carries its own **Back**
 button (`onBack`/`backLabel`) for the link trail described above. Anything else the
@@ -166,6 +185,11 @@ else, painted through the CSS Custom Highlight API (`CSS.highlights` +
 missing the ranges are still produced and still scrolled to — navigation works,
 only the paint is absent, which is a far better degradation than a highlighter
 that fights the renderer.
+
+The highlight rules live in a plain React `<style>` in `MarkdownPreview`, with
+names shared with the highlight registry. This bypasses the build's CSS parser,
+which warns on valid `::highlight()` selectors in `globals.css`. The browser
+parses these rules directly; the colors and document markup stay unchanged.
 
 `lib/findInDocument.ts` flattens the document's text nodes and inserts a newline
 wherever the walk crosses into a different block. A query never contains one, so a

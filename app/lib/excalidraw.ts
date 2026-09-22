@@ -2,19 +2,9 @@ import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState, BinaryFiles } from '@excalidraw/excalidraw/types'
 
 /**
- * Excalidraw scene files, as plain text.
- *
- * A `.excalidraw` file is JSON, so it rides the *entire* existing GitHub path
- * unchanged — `readFile`/`commitFile` base64 it like any other text blob, drafts
- * go to localStorage as strings, and conflict detection stays blob-sha based.
- * Only the editing surface differs (a canvas instead of CodeMirror + preview).
- *
- * IMPORTANT: nothing here may `import` a *value* from `@excalidraw/excalidraw` —
- * that would pull the ~1MB editor bundle into every page that touches this
- * module, defeating the code-splitting in `Canvas.tsx`. Type-only imports are
- * erased at compile time and so are fine. The one function that genuinely needs
- * the library (`serializeAsJSON`) is called inside `Canvas.tsx`, which is
- * dynamically imported.
+ * Excalidraw scene files, as plain text. A `.excalidraw` file is JSON, so it rides the *entire*
+ * existing GitHub path unchanged — `readFile`/`commitFile` base64 it like any other text blob,
+ * drafts go to IndexedDB as strings, and conflict detection stays blob-sha based.
  */
 
 /** The shape of a `.excalidraw` file. `appState`/`files` are optional because
@@ -31,15 +21,7 @@ export interface ExcalidrawScene {
 /** The `type` field every Excalidraw scene file carries. */
 const SCENE_TYPE = 'excalidraw'
 
-/**
- * A blank scene, used for newly created `.excalidraw` files.
- *
- * `viewBackgroundColor` stays white even when a dark theme is active: Excalidraw
- * renders its dark theme by inverting the canvas at draw time, so a white scene
- * background *is* the dark-theme background. Writing a dark color here instead
- * would double-invert into a light canvas — and would bake a theme choice into
- * the user's file, which is data, not chrome. See `Canvas.tsx`'s `theme` prop.
- */
+/** A blank scene, used for newly created `.excalidraw` files. */
 export const EMPTY_SCENE: string = JSON.stringify(
   {
     type: SCENE_TYPE,
@@ -75,20 +57,12 @@ export function isSceneText(text: string): boolean {
   return parseScene(text) !== null
 }
 
-/**
- * Per-element fields that change on every mutation without changing what the
- * drawing *is*. They're part of the file format (Excalidraw uses them for
- * collaborative reconciliation), but two scenes differing only in these are the
- * same picture — so they're excluded from the dirty comparison below.
- */
+/** Per-element fields that change on every mutation without changing what the drawing *is*. */
 const VOLATILE_ELEMENT_FIELDS = new Set(['version', 'versionNonce', 'updated'])
 
 /**
- * The appState keys Excalidraw actually persists into a scene file
- * (`serializeAsJSON(..., 'local')` whitelists exactly these). Comparing only
- * these means a file that happens to carry extra appState — e.g. one saved by an
- * older Excalidraw version, or by a tool that dumped the whole object — doesn't
- * read as different from the equivalent scene we'd write.
+ * The appState keys Excalidraw actually persists into a scene file (`serializeAsJSON(..., 'local')`
+ * whitelists exactly these).
  */
 const PERSISTED_APP_STATE_KEYS = [
   'gridModeEnabled',
@@ -98,17 +72,8 @@ const PERSISTED_APP_STATE_KEYS = [
 ] as const
 
 /**
- * A canonical, comparable form of a scene: sorted keys, volatile fields dropped,
- * appState narrowed to the persisted whitelist. Returns null for unparseable
- * text.
- *
- * This is what makes dirty-tracking work for scenes. Mermaid files compare
- * byte-for-byte (`text !== baseline`), but scene JSON can't: re-serializing a
- * file we just loaded legitimately changes the bytes — key order differs,
- * `source` is rewritten to whichever app wrote it, and appState is renarrowed —
- * so a freshly opened file would show as unsaved before the user touched it.
- * Comparing signatures instead means "dirty" tracks the drawing, not the
- * encoding.
+ * A canonical, comparable form of a scene: sorted keys, volatile fields dropped, appState narrowed
+ * to the persisted whitelist.
  */
 export function sceneSignature(text: string): string | null {
   const scene = parseScene(text)
@@ -142,11 +107,7 @@ export function sceneSignature(text: string): string | null {
   return JSON.stringify({ elements, appState, files })
 }
 
-/**
- * Whether two scene texts describe the same drawing. Falls back to exact string
- * comparison when either side is unparseable, so a corrupt file still tracks
- * edits (the user can fix the JSON by hand and the dirty flag stays honest).
- */
+/** Whether two scene texts describe the same drawing. */
 export function scenesEqual(a: string, b: string): boolean {
   if (a === b) return true
   const left = sceneSignature(a)
@@ -155,14 +116,7 @@ export function scenesEqual(a: string, b: string): boolean {
   return left === right
 }
 
-/**
- * A one-line description of a scene, for surfaces that can't draw one.
- *
- * Rendering a real thumbnail would mean reaching for `exportToSvg`, which pulls
- * in the whole Excalidraw bundle plus its fonts (rule 8) — far too much for a
- * hover preview. The element count is what actually answers the question being
- * asked there ("is this the drawing I meant, and does it have anything in it?").
- */
+/** A one-line description of a scene, for surfaces that can't draw one. */
 export function sceneSummary(text: string): string {
   const scene = parseScene(text)
   if (!scene) return 'Not a readable Excalidraw scene.'

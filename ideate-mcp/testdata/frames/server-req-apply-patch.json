@@ -1,0 +1,10 @@
+{
+  "t": "req",
+  "id": 24,
+  "command": {
+    "cmd": "apply_patch",
+    "workspace": "{\"mode\":\"local\"}",
+    "patch": "--- /dev/null\n+++ b/docs/new.md\n@@ -0,0 +1 @@\n+new",
+    "expected": [{ "path": "docs/new.md", "revision": "absent" }]
+  }
+}

@@ -2,25 +2,17 @@ import mermaid from 'mermaid'
 import elkLayouts from '@mermaid-js/layout-elk'
 import { packetThemeVariables, type MermaidUserConfig } from './mermaidConfig'
 
-/**
- * Diagram rendering via the official `mermaid` library.
- *
- * mermaid is browser-only (it measures text against the live DOM), so every
- * entry point here is async and must run client-side. Colors are baked into the
- * SVG at render time from mermaid's built-in `default` theme — there is no
- * CSS-variable theme layer anymore, which is why the exported SVG stands alone
- * with no extra color inlining (see lib/export.ts).
- */
+/** Diagram rendering via the official `mermaid` library. */
 
 /**
- * Selectable layout engine. `dagre` is mermaid's built-in default; `elk` comes
- * from the optional `@mermaid-js/layout-elk` loader (registered below) and often
- * produces tidier layouts for larger flowcharts.
+ * Selectable layout engine. `dagre` is mermaid's built-in default; `elk` comes from the optional
+ * `@mermaid-js/layout-elk` loader (registered below) and often produces tidier layouts for larger
+ * flowcharts.
  */
 export type LayoutEngine = 'dagre' | 'elk'
 
 export const LAYOUT_ENGINES: ReadonlyArray<{ value: LayoutEngine; label: string }> = [
-  { value: 'dagre', label: 'Dagre (default)' },
+  { value: 'dagre', label: 'Dagre' },
   { value: 'elk', label: 'ELK' },
 ]
 
@@ -70,12 +62,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Initialize mermaid with the base config merged with the user's config — but
- * only when that config changes. mermaid's `initialize()` rebuilds its site
- * config from the built-in defaults on each call, so passing the full merged
- * object every time keeps removed keys from lingering. The user config is the
- * single source of truth, including `layout` (the dropdown edits the YAML — see
- * `setLayoutInYaml`); we only default it to dagre when the config omits it.
+ * Initialize mermaid with the base config merged with the user's config — but only when that config
+ * changes.
  */
 function applyConfig(userConfig: MermaidUserConfig | null): void {
   const key = userConfig ? JSON.stringify(userConfig) : ''
@@ -111,17 +99,9 @@ function applyConfig(userConfig: MermaidUserConfig | null): void {
 }
 
 /**
- * Guard against a `@mermaid-js/layout-elk` (0.2.x) bug: its renderer eagerly
- * evaluates `JSON.stringify(graph)` as an argument to debug/info/error log calls,
- * and the graph holds d3 selections whose `_parents` array points at <html>. In a
- * React/Next app that element carries React's enumerable `__reactFiber$…`
- * back-reference, so the stringify hits a circular structure and throws — which
- * would otherwise break every ELK render. We can't stop those log-arg evaluations,
- * so while a render is in flight we swap in a JSON.stringify that diverges from
- * native only on the throwing path: non-circular input serializes identically;
- * circular input yields a best-effort string (dropping DOM nodes / repeats) instead
- * of throwing. A depth counter keeps overlapping renders safe; native is restored
- * once none are outstanding.
+ * Guard against a `@mermaid-js/layout-elk` (0.2.x) bug: its renderer eagerly evaluates
+ * `JSON.stringify(graph)` as an argument to debug/info/error log calls, and the graph holds d3
+ * selections whose `_parents` array points at <html>.
  */
 let stringifyDepth = 0
 let nativeStringify: typeof JSON.stringify | null = null
@@ -163,13 +143,11 @@ function restoreStringify(): void {
 }
 
 /**
- * A themed `fontFamily` (lib/themes.ts) is baked verbatim into the SVG mermaid
- * produces, so the browser must have that face loaded *before* mermaid measures
- * text to size note/label boxes — otherwise the measurement pass silently falls
- * back to a different font than the one that ends up painted, and text overflows
- * its box (this only surfaces with a custom theme; the built-in default theme
- * never requests a custom font, so it never hits the mismatch). Mirrors the same
- * guard already used before PNG rasterization (lib/export.ts).
+ * A themed `fontFamily` (lib/themes.ts) is baked verbatim into the SVG mermaid produces, so the
+ * browser must have that face loaded *before* mermaid measures text to size note/label boxes —
+ * otherwise the measurement pass silently falls back to a different font than the one that ends up
+ * painted, and text overflows its box (this only surfaces with a custom theme; the built-in default
+ * theme never requests a custom font, so it never hits the mismatch).
  */
 async function ensureFontsReady(userConfig: MermaidUserConfig | null): Promise<void> {
   if (typeof document === 'undefined' || !document.fonts) return
@@ -187,6 +165,16 @@ async function ensureFontsReady(userConfig: MermaidUserConfig | null): Promise<v
 // them distinct across rapid re-renders.
 let renderSeq = 0
 
+// Mermaid owns one mutable global configuration. Queue the complete lifecycle,
+// including initialization and font readiness, so no caller can replace another
+// caller's config while it is awaiting parse or render.
+let lifecycleTail: Promise<void> = Promise.resolve()
+function serializeLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+  const result = lifecycleTail.then(operation, operation)
+  lifecycleTail = result.then(() => undefined, () => undefined)
+  return result
+}
+
 /**
  * Render `text` to an SVG string, throwing on invalid syntax. On failure mermaid
  * can leave an orphaned temp element behind, so we clean it up before rethrowing.
@@ -195,20 +183,22 @@ export async function renderToSvg(
   text: string,
   userConfig: MermaidUserConfig | null = null,
 ): Promise<string> {
-  applyConfig(userConfig)
-  await ensureFontsReady(userConfig)
-  const id = `mmd-${++renderSeq}`
-  installCircularSafeStringify()
-  try {
-    const { svg } = await mermaid.render(id, text)
-    return svg
-  } catch (err) {
-    document.getElementById(id)?.remove()
-    document.getElementById(`d${id}`)?.remove()
-    throw err
-  } finally {
-    restoreStringify()
-  }
+  return serializeLifecycle(async () => {
+    applyConfig(userConfig)
+    await ensureFontsReady(userConfig)
+    const id = `mmd-${++renderSeq}`
+    installCircularSafeStringify()
+    try {
+      const { svg } = await mermaid.render(id, text)
+      return svg
+    } catch (err) {
+      document.getElementById(id)?.remove()
+      document.getElementById(`d${id}`)?.remove()
+      throw err
+    } finally {
+      restoreStringify()
+    }
+  })
 }
 
 export interface RenderResult {
@@ -221,13 +211,8 @@ export interface RenderError {
 }
 
 /**
- * `@mermaid-js/layout-elk` (0.2.2, latest as of writing) can't lay out
- * state-diagram composite/nested states (`state X { ... }`): it loses the
- * child node's `shape` on the way through ELK's own graph representation, so
- * mermaid's generic cluster renderer throws a bare
- * `shapes[shape] is not a function` — an upstream limitation, not something
- * fixable from the render call here. Recognize that specific failure and
- * point at the fix (switch to Dagre) instead of surfacing the internal error.
+ * `@mermaid-js/layout-elk` (0.2.2, latest as of writing) can't lay out state-diagram
+ * composite/nested states (`state X { ...
  */
 function describeRenderError(err: unknown, text: string, userConfig: MermaidUserConfig | null): string {
   const message = err instanceof Error ? err.message : String(err)
@@ -244,15 +229,8 @@ function describeRenderError(err: unknown, text: string, userConfig: MermaidUser
 }
 
 /**
- * Syntax-check `text` without rendering it — the diagnostics Agent Link
- * reports back after an edit (`ideate_check`).
- *
- * Parse rather than render, for two reasons. It touches no DOM and lays nothing
- * out, so a check triggered by an agent edit cannot race the live preview's
- * render against mermaid's single global instance and invent a failure that isn't
- * there. And it is the check that matters: a diagram an agent wrote fails on
- * syntax, essentially never on layout — and layout failures are already visible
- * to the human in the preview pane.
+ * Syntax-check `text` without rendering it — the diagnostics Agent Link reports back after an edit
+ * (`ideate_check`).
  */
 export type ParseResult = { ok: true } | { ok: false; message: string }
 
@@ -262,16 +240,18 @@ export async function parseDiagram(
 ): Promise<ParseResult> {
   const trimmed = text.trim()
   if (!trimmed) return { ok: false, message: 'Empty diagram.' }
-  applyConfig(userConfig)
-  installCircularSafeStringify()
-  try {
-    await mermaid.parse(text)
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, message: describeRenderError(err, text, userConfig) }
-  } finally {
-    restoreStringify()
-  }
+  return serializeLifecycle(async () => {
+    applyConfig(userConfig)
+    installCircularSafeStringify()
+    try {
+      await mermaid.parse(text)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, message: describeRenderError(err, text, userConfig) }
+    } finally {
+      restoreStringify()
+    }
+  })
 }
 
 /** Render the diagram, returning a discriminated result instead of throwing so

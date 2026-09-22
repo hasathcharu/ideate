@@ -1,18 +1,6 @@
-// Package session holds the pairing registry: which browser tabs are connected,
-// which agent (if any) has claimed each, and the routing of one command from an
-// MCP tool call to the tab that answers it.
-//
-// This state is why the service is a single process and is not going to stop being
-// one. The registry of live tab sockets is irreducible — a socket lives in the
-// process that accepted it — and both halves of a pairing must be in one process
-// to be piped together. So there is no Redis, no Postgres, and equally no
-// horizontal scaling without sharding by code. One instance is correct for a long
-// time, and the capacity cap is what keeps that honest.
-//
-// There is no datastore for the same reason there is no cluster: nothing here is
-// durable. Every record describes a connection, and if the process dies the
-// connections die with it, so a store would be preserving rows about sockets that
-// no longer exist.
+// Package session holds the pairing registry: which browser tabs are connected, which agent (if
+// any) has claimed each, and the routing of one command from an MCP tool call to the tab that
+// answers it.
 package session
 
 import (
@@ -45,11 +33,6 @@ var (
 )
 
 // maxPendingPerSession bounds how many commands one bucket can have in flight.
-//
-// The byte budget alone does not bound this: a one-line ideate_scene_get costs
-// almost nothing to send and can return the whole scene, so an agent fanning out a
-// hundred cheap calls buys a hundred expensive answers. A human-driven agent never
-// has more than a couple outstanding, so this only ever catches a runaway.
 const maxPendingPerSession = 8
 
 // Options configures a Registry. Every duration comes from internal/config.
@@ -104,14 +87,7 @@ func NewRegistry(opts Options) (*Registry, error) {
 	}, nil
 }
 
-// Live is the number of buckets held, which is what MaxSessions caps and what
-// /v1/capacity reports.
-//
-// A bucket inside its grace window still counts. It is reserving the slot its tab
-// is coming back to, so releasing it early would mean a reloading tab could find
-// its own place taken by someone else — but it is also why AdoptTab reaps expired
-// buckets *before* refusing, or a burst of connect/disconnect would fill the cap
-// with thirty-second ghosts and lock out everybody real.
+// Live is the number of buckets held, which is what MaxSessions caps and what /v1/capacity reports.
 func (r *Registry) Live() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,13 +95,6 @@ func (r *Registry) Live() int {
 }
 
 // Stats is a point-in-time census of the buckets, for the operator's endpoint.
-//
-// It reports the two halves of "how many sessions is this process handling"
-// separately, because they answer different questions and Live alone hides both:
-// WithTab is how many browser tabs are actually connected right now, InGrace is how
-// many buckets are holding a slot for a tab that dropped and may be back, and
-// Attached is how many of them an agent is driving. A box that looks busy but has
-// nothing attached is a very different situation from one that is genuinely in use.
 type Stats struct {
 	Live     int `json:"live"`
 	Max      int `json:"max"`
@@ -167,10 +136,6 @@ func (r *Registry) Lookup(codeHash string) *Session {
 }
 
 // AdoptTab hands a freshly-helloed socket its bucket, creating one if needed.
-//
-// The bool reports a rejoin into a bucket an agent still holds — the caller has to
-// re-send `attached`, or a reloaded tab would show nobody attached while an agent
-// carried on editing it.
 func (r *Registry) AdoptTab(codeHash string, conn *websocket.Conn) (*Session, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

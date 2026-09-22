@@ -2,23 +2,29 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/color.ts, app/lib/themes.ts, app/lib/mermaidConfig.ts, app/app/globals.css`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
 ## Rule 7
 
 **Diagrams render with the official `mermaid` library** (`lib/mermaid.ts`),
-on the built-in `base` theme so the global YAML config's `themeVariables` can
-retune it. Rendering is async and browser-only. Any diagram type mermaid
+with the global YAML config merged over renderer defaults. Rendering is async
+and browser-only. Any diagram type mermaid
 supports works.
+
+Mermaid configuration is mutable global state. `lib/mermaid.ts` serializes the
+entire initialize → font readiness → parse/render → cleanup lifecycle. Applying
+configuration outside that queue would allow an overlapping caller to retheme an
+operation while it is awaiting fonts or the renderer. UI callers still suppress
+stale result adoption independently.
 
 ## Rendering & theming
 
-Diagrams render through the official `mermaid` library, initialized once in
-`lib/mermaid.ts` on the `base` theme (the only built-in theme that honors
-`themeVariables`), `htmlLabels: false` (pure-SVG labels, no `<foreignObject>`),
-and `curve: 'basis'` for smooth edges. `mermaid.render()` is async and needs the
+Diagrams render through the official `mermaid` library in `lib/mermaid.ts`.
+The fallback config uses `theme: 'default'`, `htmlLabels: false` (pure-SVG labels),
+and `curve: 'basis'`. The YAML config overrides these defaults. Palette presets
+select `base` with `themeVariables`. `mermaid.render()` is async and needs the
 DOM, so `Preview.tsx` renders in an effect (guarding against stale in-flight
 renders) — never during SSR.
 
@@ -54,12 +60,43 @@ object rather than text. Three properties to preserve:
 - **The lift blends toward white or black**, not toward another hue, and bisects
   for the smallest blend that clears the floor — a blue accent stays blue, it just
   stops being the same lightness as the paper.
-- **`--border` / `--input` are deliberately excluded.** A hairline you can barely
-  see is the intent there; enforcing text contrast on it would draw boxes around
-  the whole UI.
+- **`--border` / `--input` are deliberately excluded.** They use 35% of the
+  palette's outline color over the surface: discernible for neutral, purple, and
+  blue themes without becoming high-contrast boxes around the whole UI.
+
+### A fill needs a floor of its own
+
+`--secondary` is not text, so the contrast floor above says nothing about it — but
+it is the fill that marks a **selected** state (the export menu's Frame / Theme /
+PNG-scale toggles), a hovered menu row, and the Export button. Many palettes author
+`secondaryColor` as the same value they use for `mainBkg`: Solarized sets both to
+`#073642`, and Monokai likewise. The fill then matched the popover painted under it
+exactly — a selected segment and an unselected one were the same pixels, at a
+contrast ratio of 1.000.
+
+So `--secondary` is passed through `ensureSurfaceSeparation` against both surfaces
+it can land on (`surface` and `background`) with a floor of **1.2**, for reference
+shadcn's own palettes separate `--secondary` from `--card` by 1.09 (light) and 1.19
+(dark). It shares the shape of `ensureContrast` — a passing color is returned
+untouched, and it bisects for the smallest blend that clears the floor — but blends
+toward **the palette's own text color** rather than white or black. Text is by
+definition on the far side of any surface it stays legible on, so one rule darkens
+fills on light themes and lightens them on dark ones with neither special-cased.
+Nine of the twenty-one presets are already distinct enough to pass through unchanged.
+
+`--secondary-foreground` is derived from the adjusted fill, not the authored one, so
+the text floor still holds over whatever the fill became.
 
 Unparseable notations (`hsl()`, named colors) fall through unchanged — the theme
 pipeline is best-effort, and `lib/color.ts` reads only hex and `rgb()`.
+
+Code syntax colors are also derived values, exposed as `--syntax-*` tokens. Each
+keeps a semantic hue from the diagram palette but is passed through
+`ensureContrast` against both the page background and card surface before it
+reaches CodeMirror. Do not derive syntax colors later with CSS `color-mix()`:
+mixing two individually accessible colors can produce an inaccessible midpoint.
+Semantic error red (`--destructive`) is likewise adjusted against the page and
+card surfaces instead of remaining a fixed light- or dark-theme value.
 
 `--muted-foreground` is the one derived value: the palette's text blended 60% over
 the *background* (statically, via `mixColors`, because `ensureContrast` needs

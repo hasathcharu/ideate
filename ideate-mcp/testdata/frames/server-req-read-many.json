@@ -1,0 +1,11 @@
+{
+  "t": "req",
+  "id": 23,
+  "command": {
+    "cmd": "read_many",
+    "files": [
+      { "path": "docs/architecture.md", "startLine": 10, "endLine": 30 },
+      { "path": "diagrams/flow.mmd" }
+    ]
+  }
+}

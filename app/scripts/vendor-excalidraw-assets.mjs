@@ -1,28 +1,6 @@
 /**
- * Copy Excalidraw's font assets into `public/` so the editor never reaches out to
- * a CDN at runtime, and write out the `@font-face` descriptors that go with them.
- *
- * Excalidraw lazily fetches its handwriting fonts (Excalifont, Virgil, …) as
- * per-glyph-range subsets. Left to itself it resolves them against a public CDN;
- * `Canvas.tsx` points `window.EXCALIDRAW_ASSET_PATH` at the directory this script
- * writes instead. The output is gitignored and regenerated on install/build, so
- * the ~13MB of fonts stays out of the repo and can never drift from the installed
- * package version.
- *
- * **The manifests are the second half of the job, and the reason this script reads
- * the bundle rather than only copying files.** A vendored woff2 is inert on its own:
- * a font is only usable once a `@font-face` names it, gives it a `unicode-range`
- * and points at the file. Excalidraw builds those declarations *in JavaScript*, and
- * registers them on `document.fonts` when the editor **mounts** — so with no canvas
- * on screen its fonts do not exist, and anything that measures text against them
- * silently measures a substitute face instead. See `lib/excalidrawFonts.ts` for what
- * that cost and `docs/adr/0011-agent-link.md` for the bug it caused.
- *
- * So the descriptors are lifted out of the bundle here, at build time, and the app
- * registers them itself at page load. Lifting them out of minified code is a real
- * coupling to an internal shape, which is why every assumption below is asserted
- * rather than assumed: a shape change fails the build with a message naming what it
- * could not find, instead of shipping an app that measures text wrong.
+ * Copy Excalidraw's font assets into `public/` so the editor never reaches out to a CDN at runtime,
+ * and write out the `@font-face` descriptors that go with them.
  */
 import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { readFile } from 'node:fs/promises'
@@ -54,16 +32,7 @@ await cp(src, dest, { recursive: true })
  *  them is not on a page whose own path is predictable. */
 const PUBLIC_PREFIX = '/excalidraw-assets'
 
-/**
- * The CJK fallback, held back into its own manifest.
- *
- * Not a special case for its own sake — a size decision with one name in it. Xiaolai
- * is subset per CJK block, which is 209 faces and 117KB of `unicode-range` metadata
- * against 2.6KB for every other family put together. Registering it at page load
- * would put 40KB gzipped of font bookkeeping in front of every visitor for glyphs
- * almost none of them will type, so the app fetches this tier only when the text it
- * is about to measure actually contains CJK.
- */
+/** The CJK fallback, held back into its own manifest. */
 const DEFERRED_FAMILY = 'Xiaolai'
 
 const chunks = (await readdir(distDir)).filter((name) => name.endsWith('.js'))
@@ -115,16 +84,8 @@ for (const source of sources) {
   }
 }
 
-// Every file that was copied must be accounted for, or it is a font the app cannot
-// use and does not know it cannot use — exactly the failure this script exists to
-// remove. Reported as a list rather than a count, because the name of the family that
-// changed shape is the whole of the diagnosis.
-//
-// Two mechanisms account for a file, and only one of them is ours. Excalidraw's *UI*
-// fonts are plain `@font-face` rules in `index.css`, which the editor's own stylesheet
-// registers; they never hold scene text, so they need nothing from us. Read out of the
-// CSS rather than exempted by name, so a family moving between the two mechanisms
-// upstream is still noticed.
+// Every file that was copied must be accounted for, or it is a font the app cannot use and does not
+// know it cannot use — exactly the failure this script exists to remove.
 const inStylesheet = await declaredInStylesheet()
 const described = new Set([...families.values()].flat().map((face) => face.url))
 const orphans = []
@@ -164,13 +125,7 @@ console.log(
     `font-faces-cjk.json (${deferred.length} faces)`,
 )
 
-/**
- * The font files Excalidraw's own stylesheet already declares.
- *
- * Its UI fonts (Assistant, at the time of writing) are ordinary `@font-face` rules in
- * `index.css`, not entries in the JS font registry — a different mechanism for a
- * different job, since none of them ever holds scene text.
- */
+/** The font files Excalidraw's own stylesheet already declares. */
 async function declaredInStylesheet() {
   const css = await readFile(join(distDir, 'index.css'), 'utf8')
   const urls = new Set()
@@ -195,11 +150,9 @@ function readRange(descriptors, path) {
 }
 
 /**
- * The shared range table as a plain object.
- *
- * Read by hand rather than with one regex over the whole object, because the values
- * are long comma-separated range lists and a lazy match across them is how you end
- * up pairing the wrong key with the wrong range.
+ * The shared range table as a plain object. Read by hand rather than with one regex over the whole
+ * object, because the values are long comma-separated range lists and a lazy match across them is
+ * how you end up pairing the wrong key with the wrong range.
  */
 function readRangeTable(sources) {
   for (const source of sources) {

@@ -1,17 +1,10 @@
 import { renderToSvg } from './mermaid'
-import { buildExportSource } from './mermaidConfig'
+import { buildExportSource, resolveThemeMode, themeFromConfig } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
-import type { ExportBackground, PngScale } from './types'
+import { THEME_PRESETS, type ThemePreset } from './themes'
+import type { ExportBackground, PngScale, SvgThemeMode } from './types'
 
-/**
- * Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a
- * standalone SVG" step.
- *
- * Official mermaid bakes literal colors and a self-contained `<style>` block into
- * the SVG at render time, so — unlike the previous CSS-variable renderer — the
- * markup already stands alone. We only normalize dimensions, add the XML
- * namespaces, and optionally paint a background.
- */
+/** Export pipeline. Both exporters (SVG / PNG) reuse a single "render into a standalone SVG" step. */
 
 export interface StandaloneSvg {
   /** The fully self-contained SVG markup (literal colors, no external refs). */
@@ -20,12 +13,19 @@ export interface StandaloneSvg {
   height: number
 }
 
-interface ResolveOptions {
+export interface ResolveOptions {
   /** Background to paint behind the diagram. */
   background: ExportBackground
   /** Global mermaid config (theme, layout, per-diagram settings) to render with. */
   config?: MermaidUserConfig | null
+  /** SVG-only palette behavior. PNG always uses the configured palette. */
+  themeMode?: SvgThemeMode
+  /** Add a 24px frame whose background has rounded corners. */
+  framed?: boolean
 }
+
+const EXPORT_PADDING = 24
+const EXPORT_RADIUS = 16
 
 /** Resolve a background choice to a literal fill color, or `null` for
  *  transparent. "theme" reads the active theme's own `background` variable,
@@ -43,7 +43,8 @@ function resolveBackgroundColor(
       return null
     case 'theme': {
       const themeBg = config?.themeVariables?.background
-      return typeof themeBg === 'string' && themeBg.trim() ? themeBg : '#ffffff'
+      if (typeof themeBg === 'string' && themeBg.trim()) return themeBg
+      return config?.theme === 'dark' ? '#1f2020' : '#ffffff'
     }
   }
 }
@@ -61,52 +62,270 @@ function intrinsicSize(svg: SVGSVGElement): { width: number; height: number } {
   return { width: width || 0, height: height || 0 }
 }
 
+/**
+ * The palette a single-variant export renders with. Light-mode strokes are
+ * invisible on a dark surface and dark-mode strokes on a light one, so a chosen
+ * **White** background yields dark-on-white and **Black** light-on-black whatever
+ * the editor's palette is — the rule `exportScene.ts` already applies to canvases.
+ * **Theme** and transparent keep the configured palette: one *is* the palette's own
+ * surface, and the other has no surface to judge.
+ *
+ * A palette already on the right side of that line is returned untouched, so this
+ * only ever fires on the mismatch that made the export unreadable.
+ */
+function configForBackground(
+  background: ExportBackground,
+  config: MermaidUserConfig | null | undefined,
+): MermaidUserConfig | null | undefined {
+  if (background !== 'white' && background !== 'black') return config
+  const wanted = background === 'white' ? 'light' : 'dark'
+  if (resolveThemeMode(config ?? null) === wanted) return config
+  return dynamicThemeConfig(
+    config,
+    wanted === 'light' ? 'default' : 'dark',
+    counterpartPreset(config, wanted),
+  )
+}
+
 /** The shared step: produce a standalone SVG string + its pixel dimensions. */
 export async function resolveStandaloneSvg(
   text: string,
   opts: ResolveOptions,
 ): Promise<StandaloneSvg> {
+  // Dynamic resolves a palette per variant already, so the background rule would
+  // only overwrite the pair it just picked.
+  if (opts.themeMode === 'dynamic') return resolveDynamicSvg(text, opts)
+  return resolveSvgVariant(text, {
+    ...opts,
+    config: configForBackground(opts.background, opts.config),
+  })
+}
+
+async function resolveSvgVariant(text: string, opts: ResolveOptions): Promise<StandaloneSvg> {
   const raw = await renderToSvg(text, opts.config ?? null)
 
-  // Parse via the HTML parser, not `DOMParser(..., 'image/svg+xml')`. Note/label
-  // text renders through a `<foreignObject>` with real HTML inside (e.g. `<br>`
-  // for line breaks) regardless of `flowchart.htmlLabels` — valid HTML, but not
-  // well-formed XML. Strict XML parsing hits that on the first multi-line note
-  // and silently truncates the document from there on (browsers recover from
-  // `image/svg+xml` parse errors by rendering only the content up to the
-  // failure), which is why exports could lose content after the first note.
-  // The HTML parser has spec'd foreign-content handling for embedded
-  // <svg>/<foreignObject> subtrees, so this parses the same DOM Preview.tsx
-  // shows on screen; XMLSerializer then always emits well-formed XML.
+  // Parse via the HTML parser, not `DOMParser(..., 'image/svg+xml')`.
   const container = document.createElement('div')
   container.innerHTML = raw
   const svg = container.querySelector('svg')
   if (!svg) throw new Error('Renderer produced no <svg> element.')
 
-  const { width, height } = intrinsicSize(svg)
+  const intrinsic = intrinsicSize(svg)
+  const bounds = measureExportBounds(svg, intrinsic.width, intrinsic.height)
+  const pad = opts.framed ? EXPORT_PADDING : 0
+  const x = bounds.x - pad
+  const y = bounds.y - pad
+  const width = bounds.width + pad * 2
+  const height = bounds.height + pad * 2
 
   // Pin explicit pixel dimensions (mermaid uses width="100%") so the file and
   // the raster canvas both size correctly.
   svg.setAttribute('width', String(width))
   svg.setAttribute('height', String(height))
+  svg.setAttribute('viewBox', `${x} ${y} ${width} ${height}`)
   svg.style.removeProperty('max-width')
 
   ensureNamespaces(svg)
   const bgColor = resolveBackgroundColor(opts.background, opts.config)
-  if (bgColor) prependBackground(svg, bgColor, width, height)
+  if (bgColor) prependBackground(svg, bgColor, x, y, width, height, opts.framed)
 
   const markup = `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(svg)}`
   return { markup, width, height }
 }
 
-function prependBackground(svg: SVGSVGElement, bg: string, w: number, h: number): void {
+/** Include painted content that Mermaid left outside its declared viewBox (most
+ * commonly a long sequence-message label). */
+function measureExportBounds(
+  svg: SVGSVGElement,
+  width: number,
+  height: number,
+): { x: number; y: number; width: number; height: number } {
+  const vb = svg.viewBox?.baseVal
+  const base = {
+    x: vb?.x ?? 0,
+    y: vb?.y ?? 0,
+    width: vb?.width || width,
+    height: vb?.height || height,
+  }
+  const host = document.createElement('div')
+  host.style.cssText = 'position:fixed;left:-100000px;top:0;visibility:hidden;pointer-events:none'
+  document.body.appendChild(host)
+  host.appendChild(svg)
+  try {
+    const painted = svg.getBBox()
+    if (![painted.x, painted.y, painted.width, painted.height].every(Number.isFinite)) return base
+    const left = Math.min(base.x, painted.x)
+    const top = Math.min(base.y, painted.y)
+    const right = Math.max(base.x + base.width, painted.x + painted.width)
+    const bottom = Math.max(base.y + base.height, painted.y + painted.height)
+    return { x: left, y: top, width: right - left, height: bottom - top }
+  } catch {
+    return base
+  } finally {
+    host.remove()
+  }
+}
+
+function prependBackground(
+  svg: SVGSVGElement,
+  bg: string,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rounded = false,
+): void {
   const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  rect.setAttribute('x', '0')
-  rect.setAttribute('y', '0')
+  rect.setAttribute('x', String(x))
+  rect.setAttribute('y', String(y))
   rect.setAttribute('width', String(w))
   rect.setAttribute('height', String(h))
   rect.setAttribute('fill', bg)
+  if (rounded) {
+    rect.setAttribute('rx', String(EXPORT_RADIUS))
+    rect.setAttribute('ry', String(EXPORT_RADIUS))
+  }
   svg.insertBefore(rect, svg.firstChild)
+}
+
+/** The plain surfaces, each other's opposite. */
+const PLAIN_INVERSE = { white: 'black', black: 'white' } as const
+
+function isPlainBackground(background: ExportBackground): background is 'white' | 'black' {
+  return background === 'white' || background === 'black'
+}
+
+/**
+ * The surface and palette each `prefers-color-scheme` branch of a dynamic SVG gets.
+ *
+ * A plain background **inverts** for the other scheme rather than holding still: the
+ * swatch names the surface a light-mode viewer should see, and a dark-mode viewer
+ * gets its opposite, so White is white-then-black and Black is black-then-white. The
+ * palette then follows *the surface*, not the media query the branch is named after
+ * — pick Black and light mode is light-on-black while dark mode is dark-on-white.
+ * Holding the surface still instead leaves one branch painting the diagram in its own
+ * background color.
+ *
+ * **Theme** and transparent are already right as they stand: a theme background
+ * varies per branch because each branch carries its own palette's `background`, and
+ * transparent has no surface to invert.
+ */
+function dynamicBranches(
+  background: ExportBackground,
+  lightConfig: MermaidUserConfig,
+  darkConfig: MermaidUserConfig,
+): {
+  light: { background: ExportBackground; config: MermaidUserConfig }
+  dark: { background: ExportBackground; config: MermaidUserConfig }
+} {
+  if (!isPlainBackground(background)) {
+    return {
+      light: { background, config: lightConfig },
+      dark: { background, config: darkConfig },
+    }
+  }
+  const lightIsDarkSurface = background === 'black'
+  return {
+    light: {
+      background,
+      config: lightIsDarkSurface ? darkConfig : lightConfig,
+    },
+    dark: {
+      background: PLAIN_INVERSE[background],
+      config: lightIsDarkSurface ? lightConfig : darkConfig,
+    },
+  }
+}
+
+async function resolveDynamicSvg(text: string, opts: ResolveOptions): Promise<StandaloneSvg> {
+  const { light: lightConfig, dark: darkConfig } = resolveDynamicThemeConfigs(opts.config)
+  const branches = dynamicBranches(opts.background, lightConfig, darkConfig)
+  const [light, dark] = await Promise.all([
+    resolveSvgVariant(text, { ...opts, themeMode: 'forced', ...branches.light }),
+    resolveSvgVariant(text, { ...opts, themeMode: 'forced', ...branches.dark }),
+  ])
+  const width = Math.max(light.width, dark.width)
+  const height = Math.max(light.height, dark.height)
+  const lightNode = parseSvgMarkup(light.markup)
+  const darkNode = parseSvgMarkup(dark.markup)
+  lightNode.setAttribute('class', 'km-light')
+  darkNode.setAttribute('class', 'km-dark')
+  lightNode.setAttribute('width', '100%')
+  lightNode.setAttribute('height', '100%')
+  darkNode.setAttribute('width', '100%')
+  darkNode.setAttribute('height', '100%')
+
+  const root = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  root.setAttribute('width', String(width))
+  root.setAttribute('height', String(height))
+  root.setAttribute('viewBox', `0 0 ${width} ${height}`)
+  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+  style.textContent = '.km-dark{display:none}@media(prefers-color-scheme:dark){.km-light{display:none}.km-dark{display:inline}}'
+  root.append(style, lightNode, darkNode)
+  return {
+    markup: `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(root)}`,
+    width,
+    height,
+  }
+}
+
+const THEME_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['zinc-light', 'zinc-dark'],
+  ['tokyo-night-light', 'tokyo-night'],
+  ['tokyo-night-light', 'tokyo-night-storm'],
+  ['catppuccin-latte', 'catppuccin-mocha'],
+  ['nord-light', 'nord'],
+  ['github-light', 'github-dark'],
+  ['solarized-light', 'solarized-dark'],
+  ['gruvbox-light', 'gruvbox-dark'],
+  ['rose-pine-dawn', 'rose-pine'],
+]
+
+/** The active palette's counterpart in `mode`, when its family has a known pair. A
+ *  custom or unpaired palette has none: arbitrary literal colors cannot be
+ *  reliably converted into their opposite. */
+function counterpartPreset(
+  config: MermaidUserConfig | null | undefined,
+  mode: 'light' | 'dark',
+): ThemePreset | undefined {
+  const active = themeFromConfig(config ?? null)
+  if (!active) return undefined
+  const pair = THEME_PAIRS.find(([light, dark]) => light === active.value || dark === active.value)
+  if (!pair) return undefined
+  const value = mode === 'light' ? pair[0] : pair[1]
+  return THEME_PRESETS.find((preset) => preset.value === value)
+}
+
+/** Preserve a known palette family across a dynamic SVG's light/dark variants. */
+export function resolveDynamicThemeConfigs(
+  config: MermaidUserConfig | null | undefined,
+): { light: MermaidUserConfig; dark: MermaidUserConfig } {
+  return {
+    light: dynamicThemeConfig(config, 'default', counterpartPreset(config, 'light')),
+    dark: dynamicThemeConfig(config, 'dark', counterpartPreset(config, 'dark')),
+  }
+}
+
+function dynamicThemeConfig(
+  config: MermaidUserConfig | null | undefined,
+  fallbackTheme: 'default' | 'dark',
+  preset?: ThemePreset,
+): MermaidUserConfig {
+  if (preset) {
+    return { ...(config ?? {}), theme: preset.theme, themeVariables: { ...preset.themeVariables } }
+  }
+  const next: MermaidUserConfig = { ...(config ?? {}), theme: fallbackTheme }
+  delete next.themeVariables
+  return next
+}
+
+function parseSvgMarkup(markup: string): SVGSVGElement {
+  const host = document.createElement('div')
+  host.innerHTML = markup.replace(/^<\?xml[^>]*>\s*/, '')
+  const svg = host.querySelector('svg')
+  if (!svg) throw new Error('Renderer produced no <svg> element.')
+  return svg
 }
 
 function ensureNamespaces(svg: SVGSVGElement): void {
@@ -119,8 +338,7 @@ function ensureNamespaces(svg: SVGSVGElement): void {
 /* Rasterization scale                                                 */
 /* ------------------------------------------------------------------ */
 
-/** Never rasterize below this multiplier, so large diagrams still come out at
- *  better-than-retina density. */
+/** Used only as a safe fallback for an invalid programmatic request. */
 const MIN_RASTER_SCALE = 3
 /** Ceiling on the multiplier, so a tiny drawing doesn't get blown up absurdly. */
 const MAX_RASTER_SCALE = 10
@@ -131,16 +349,7 @@ const TARGET_LONG_EDGE = 2400
  *  rather than degrading, so stay well inside it. */
 const MAX_RASTER_DIMENSION = 8192
 
-/**
- * Pixel multiplier for rasterizing a diagram of `width` × `height` to PNG.
- *
- * A flat device-pixel-ratio multiplier isn't enough on its own: it makes output
- * density proportional to the *diagram's* size, so a small diagram lands in a
- * correspondingly small image — which is what usually reads as a "low quality"
- * export. Scaling toward a target long edge fixes exactly that case, while the
- * floor keeps big diagrams dense and the dimension cap keeps the canvas
- * allocatable.
- */
+/** Pixel multiplier for rasterizing a diagram of `width` × `height` to PNG. */
 export function rasterScale(width: number, height: number): number {
   const longest = Math.max(width, height)
   if (!longest || !Number.isFinite(longest)) return MIN_RASTER_SCALE
@@ -153,24 +362,10 @@ export function rasterScale(width: number, height: number): number {
  *  be expressed as a multiplier of the drawing's natural size. */
 export const CSS_DPI = 96
 
-/** The default PNG density — the size-aware one, not a fixed multiplier. */
-export const DEFAULT_PNG_SCALE: PngScale = { mode: 'auto' }
+/** The default PNG density. */
+export const DEFAULT_PNG_SCALE: PngScale = { mode: 'multiplier', value: 2 }
 
-/**
- * The pixel multiplier `spec` asks for, given a drawing of `width` × `height`.
- *
- * Every mode lands here rather than at the call site because only `auto` can be
- * answered without the drawing: a DPI, a target width and a target height are all
- * ratios against a natural size that exists only once the diagram has rendered.
- *
- * The `MAX_RASTER_DIMENSION` cap is applied to every mode, `auto` included.
- * Browsers refuse to allocate a canvas past a few thousand pixels a side and fail
- * outright rather than degrade, so an over-large request has to come back as a
- * smaller image instead of as a failed export — which is the difference between a
- * user typing 40000 and getting a big PNG, and typing it and getting an error
- * toast. The floor is one device pixel, for the same reason in the other
- * direction.
- */
+/** The pixel multiplier `spec` asks for, given a drawing of `width` × `height`. */
 export function resolvePngScale(
   spec: PngScale | undefined,
   width: number,
@@ -190,7 +385,6 @@ export function resolvePngScale(
         return width > 0 ? spec.value / width : 1
       case 'height':
         return height > 0 ? spec.value / height : 1
-      case 'auto':
       case undefined:
         return rasterScale(width, height)
     }
@@ -221,8 +415,9 @@ export async function exportSVG(
   filename: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  options?: Pick<ResolveOptions, 'themeMode' | 'framed'>,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { background, config })
+  const { markup } = await resolveStandaloneSvg(text, { background, config, ...options })
   triggerDownload(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename)
 }
 
@@ -231,19 +426,21 @@ export async function copySVG(
   text: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
+  options?: Pick<ResolveOptions, 'themeMode' | 'framed'>,
 ): Promise<void> {
-  const { markup } = await resolveStandaloneSvg(text, { background, config })
+  const { markup } = await resolveStandaloneSvg(text, { background, config, ...options })
   await navigator.clipboard.writeText(markup)
 }
 
 /** Rasterize the resolved SVG to a high-DPI PNG blob (shared by download/copy). */
-async function renderPngBlob(
+export async function renderPngBlob(
   text: string,
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<Blob> {
-  const { markup, width, height } = await resolveStandaloneSvg(text, { background, config })
+  const { markup, width, height } = await resolveStandaloneSvg(text, { background, config, framed })
 
   // Ensure fonts are ready so text isn't rasterized in a fallback face.
   if (document.fonts?.ready) await document.fonts.ready
@@ -282,8 +479,9 @@ export async function exportPNG(
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<void> {
-  triggerDownload(await renderPngBlob(text, background, config, pngScale), filename)
+  triggerDownload(await renderPngBlob(text, background, config, pngScale, framed), filename)
 }
 
 /** Copy the rendered PNG to the clipboard as an image. */
@@ -292,8 +490,9 @@ export async function copyPNG(
   background: ExportBackground,
   config?: MermaidUserConfig | null,
   pngScale?: PngScale,
+  framed = false,
 ): Promise<void> {
-  const blob = await renderPngBlob(text, background, config, pngScale)
+  const blob = await renderPngBlob(text, background, config, pngScale, framed)
   await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
 }
 
@@ -322,10 +521,9 @@ export async function copySource(text: string, configYaml: string): Promise<void
 /* ------------------------------------------------------------------ */
 
 /**
- * A markdown document exports as itself — there is no render step, because the
- * file already *is* the portable artifact (GitHub, and every other markdown
- * renderer, will draw the ```mermaid fences themselves). The theme stays a
- * render-time concern and never enters the file.
+ * A markdown document exports as itself — there is no render step, because the file already *is*
+ * the portable artifact (GitHub, and every other markdown renderer, will draw the ```mermaid fences
+ * themselves).
  */
 
 const MARKDOWN_MIME = 'text/markdown;charset=utf-8'

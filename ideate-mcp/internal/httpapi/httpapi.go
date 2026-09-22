@@ -1,17 +1,5 @@
-// Package httpapi is the service's whole outward surface: the MCP endpoint an
-// agent talks to, the WebSocket a browser tab dials, a capacity probe, and a
-// liveness check.
-//
-// **There is no CORS configuration anywhere in here, and none should be added.**
-// The two callers are a browser opening a WebSocket — which has no same-origin
-// policy and so no preflight to satisfy — and an MCP client, which is not a
-// browser at all. A CORS header here would be answering a question nobody asked.
-//
-// That is a real change from protocol 2, where the *absence* of CORS headers on
-// the app's token route was the load-bearing security property. There is no token
-// route any more: the tab generates its own pairing code, the service issues
-// nothing and merely buckets by its hash, and a hostile page that generates its own
-// code can only pair with itself.
+// Package httpapi is the service's whole outward surface: the MCP endpoint an agent talks to, the
+// WebSocket a browser tab dials, a capacity probe, and a liveness check.
 package httpapi
 
 import (
@@ -36,12 +24,6 @@ import (
 )
 
 // StatusOverloaded is served by the capacity probe when the service is full.
-//
-// It exists because a browser can never see it. A *refused* WebSocket handshake
-// surfaces in the tab as onclose 1006 with an empty reason, which is
-// indistinguishable from the service being down — so the tab is told about
-// capacity by CloseServiceFull on an accepted socket instead, and this route is where
-// a client that can read a status code gets the readable answer.
 const StatusOverloaded = 529
 
 // tabPingInterval keeps an idle socket alive through whatever proxies sit in
@@ -81,21 +63,9 @@ type Server struct {
 	proc    *procstat.Sampler
 }
 
-// Rate limits.
-//
-// The general one is deliberately loose: an agent issues a call every few seconds,
-// but a whole office can arrive from one NAT address, so this is set to catch a
-// runaway rather than to shape traffic.
-//
-// The unknown-code one is the tight one, and it is what turns 8 characters of
-// Crockford base32 into a credential. 2^40 at a guess every five seconds is a
-// number of years with six digits in it.
-// statsPath is the operator's census endpoint.
-//
-// It lives here rather than in internal/protocol because no browser tab ever calls
-// it: everything in that package is mirrored by hand in app/lib/agentProtocol.ts and
-// owes a fixture in testdata/frames, and an operator-only route has no business
-// taking on that obligation.
+// Rate limits. The general one is deliberately loose: an agent issues a call every few seconds, but
+// a whole office can arrive from one NAT address, so this is set to catch a runaway rather than to
+// shape traffic.
 const statsPath = "/v1/stats"
 
 const (
@@ -128,40 +98,19 @@ func New(opts Options) (*Server, error) {
 	s.mcpHTTP = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return opts.MCP },
 		&mcp.StreamableHTTPOptions{
-			// Stateless: every request carries its own pairing code, so there is
-			// nothing for an Mcp-Session-Id to identify that the code does not
-			// already. Dropping the session map takes a whole lifecycle with it —
-			// and the attachment idle timeout, which a stateful server would have
-			// got for free from client teardown, is wanted anyway: a client can
-			// vanish without ever tearing down cleanly.
+			// Stateless: every request carries its own pairing code, so there is nothing for an
+			// Mcp-Session-Id to identify that the code does not already.
 			Stateless: true,
 			Logger:    opts.Logger,
-			// The SDK applies its own body limit (4MiB by default) *before* the
-			// handler sees anything, so MAX_BODY_BYTES has to be set here or it
-			// silently does nothing and the smaller default quietly wins. Wrapping
-			// the body in a second MaxBytesReader of our own does not fix that —
-			// the tighter of the two limits is always the one that speaks, and two
-			// limits with different numbers means a 413 that names neither.
+			// The SDK applies its own body limit (4MiB by default) *before* the handler sees anything, so
+			// MAX_BODY_BYTES has to be set here or it silently does nothing and the smaller default quietly
+			// wins.
 			MaxRequestBodyBytes: opts.Config.MaxBodyBytes,
-			// The SDK's DNS-rebinding guard refuses any request whose *local*
-			// address is loopback while its Host header is not — and that is every
-			// proxied deployment of this service, not an attack: a tunnel or ingress
-			// on the same host dials 127.0.0.1:7391 while the client's Host stays the
-			// public name, so the guard answers the one shape protocol 3 exists to
-			// serve with "Forbidden: invalid Host header". It cannot be narrowed to
-			// an allowlist of hostnames; the option is a boolean.
-			//
-			// Turning it off is not a trade here, because the attack it names cannot
-			// reach anything. It protects a *local* MCP server whose only
-			// authentication is that the caller reached loopback at all: rebind a
-			// hostname to 127.0.0.1 and a hostile page is same-origin with the
-			// server, so it can both call it and read the reply. This service
-			// authenticates every tool call with the pairing code instead, which
-			// puts a rebound page in exactly the position of any other stranger on
-			// the internet — the position the whole design already assumes. It
-			// cannot read the code (that lives in the app origin's sessionStorage,
-			// per rule 3) and it cannot guess one, for the same reason nobody else
-			// can: 2^40 against the unknown-code limiter.
+			// The SDK's DNS-rebinding guard refuses any request whose *local* address is loopback while its
+			// Host header is not — and that is every proxied deployment of this service, not an attack: a
+			// tunnel or ingress on the same host dials 127.0.0.1:7391 while the client's Host stays the
+			// public name, so the guard answers the one shape protocol 3 exists to serve with "Forbidden:
+			// invalid Host header".
 			DisableLocalhostProtection: true,
 		},
 	)
@@ -186,12 +135,7 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// Sweep drops idle rate-limiter keys and advances the CPU-usage window. Called
-// from the same ticker as the registry's.
-//
-// The CPU sample rides along here rather than being taken per request so that the
-// percentage always covers one sweep interval, whoever is polling and however often
-// — see procstat.Sampler.
+// Sweep drops idle rate-limiter keys and advances the CPU-usage window.
 func (s *Server) Sweep() {
 	s.general.Sweep()
 	s.unknown.Sweep()
@@ -203,12 +147,6 @@ func (s *Server) Sweep() {
 /* ------------------------------------------------------------------ */
 
 // rateLimited rations by client address and carries that address onward.
-//
-// It runs **before** the body is read, and it has to: the pairing code arrives as a
-// tool argument, so nothing can be keyed on it until the request has already been
-// parsed — which is the work this exists to avoid paying for. The per-IP limit is
-// therefore what guards against a flood, and the code's own length is what guards
-// against a guess.
 func (s *Server) rateLimited(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := ratelimit.ClientIP(r)
@@ -314,12 +252,7 @@ func (s *Server) handleTab(w http.ResponseWriter, r *http.Request) {
 // readHello waits for the tab's first frame. Anything else, or nothing at all
 // inside the deadline, and the socket is dropped rather than left holding a slot.
 func (s *Server) readHello(ctx context.Context, conn *websocket.Conn) (string, bool) {
-	// The deadline is a timer beside the read, not a context *on* it. Cancelling a
-	// context mid-read makes coder/websocket tear the connection down itself —
-	// there is no way to resynchronize a half-read frame — so a Close afterwards is
-	// a no-op and the tab sees a bare 1006 instead of CloseBadHello. That is the
-	// difference between "the service refused my hello" and "the service is down",
-	// which is the whole reason these private-use codes exist.
+	// The deadline is a timer beside the read, not a context *on* it.
 	type readResult struct {
 		raw []byte
 		err error
@@ -421,11 +354,6 @@ func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn) {
 /* ------------------------------------------------------------------ */
 
 // statsAuth gates the census endpoint on basic auth.
-//
-// With no credentials configured the route **does not exist** rather than being open
-// or answering 401: an operator who never set STATS_USER has not opted into
-// publishing these counts, and a 401 would still tell an unauthenticated caller that
-// this instance has numbers worth asking for.
 func (s *Server) statsAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg.StatsUser == "" || s.cfg.StatsPassword == "" {
@@ -448,24 +376,13 @@ func (s *Server) statsAuth(next http.Handler) http.Handler {
 }
 
 // statsResponse is the census plus what the process is costing the box.
-//
-// session.Stats is **embedded**, so its fields stay at the top level of the JSON
-// and a caller that already reads live/max/withTab/inGrace/attached keeps working.
-// The process figures are nested instead of flattened because they answer a
-// different question — "is this instance healthy" rather than "is it busy" — and
-// because a name like `total` means something else on each side.
 type statsResponse struct {
 	session.Stats
 	Process procstat.Snapshot `json:"process"`
 }
 
-// handleStats answers how many tab sessions this process is handling right now,
-// and what that is costing it.
-//
-// Unlike /v1/capacity — which exists so a client can find out whether pairing will
-// work at all, and is therefore public — this breaks the number down, so it is the
-// operator's view: see session.Stats for why the halves are worth separating, and
-// procstat for why the CPU number does not come from runtime/metrics.
+// handleStats answers how many tab sessions this process is handling right now, and what that is
+// costing it.
 func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	// The counts change by the second and the response is credentialed. Nothing
 	// should be holding a copy of it, least of all a CDN sitting in front.

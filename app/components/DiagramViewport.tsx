@@ -8,18 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useInnerHtml } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 
-/**
- * A zoomable, pannable box around one rendered mermaid SVG.
- *
- * Extracted from `Preview` so the diagram pane and the diagrams embedded in a
- * markdown document share one implementation of the interaction — two copies of
- * the fit/zoom/drag math would inevitably drift.
- *
- * The two call sites differ in exactly two ways, both parameterized below:
- * a full-pane preview fills its parent and zooms on a bare wheel, while an
- * embedded figure is sized from the diagram and only zooms on Ctrl/⌘+wheel —
- * otherwise scrolling the document would get trapped by every diagram in it.
- */
+/** A zoomable, pannable box around a rendered SVG or repository image. */
 
 interface View {
   scale: number
@@ -52,8 +41,11 @@ function clampScale(s: number): number {
 }
 
 export interface DiagramViewportProps {
-  /** Rendered mermaid SVG markup. */
-  svg: string
+  /** Rendered mermaid SVG markup. Omit when `imageSrc` is supplied. */
+  svg?: string
+  /** Inert image URL for raster files and repository SVGs. */
+  imageSrc?: string
+  imageAlt?: string
   /** Painted behind the diagram — also fills the screen when maximized. May be
    *  omitted (or `'transparent'`) for an inline figure that should show the
    *  document through it; maximizing then falls back to {@link OPAQUE_FALLBACK}. */
@@ -62,23 +54,24 @@ export interface DiagramViewportProps {
    *  height from the diagram and sits inline in a document. */
   variant?: 'pane' | 'embedded'
   className?: string
-  /** For a diagram embedded in a markdown document: the 1-based source line its
-   *  ```mermaid fence opens on, published as `data-md-line` so the editor ↔
-   *  preview scroll sync can find it alongside the prose blocks, which carry the
-   *  same attribute (`lib/markdown.ts`). A figure is a block of the document like
-   *  any other; being a React component rather than a run of HTML shouldn't make
-   *  it invisible to the sync. */
+  /**
+   * For a diagram embedded in a markdown document: the 1-based source line its ```mermaid fence
+   * opens on, published as `data-md-line` so the editor ↔ preview scroll sync can find it alongside
+   * the prose blocks, which carry the same attribute (`lib/markdown.ts`).
+   */
   sourceLine?: number | null
-  /** The mermaid text that produced `svg`. Given one, the toolbar offers to copy
-   *  it — the source is the half of the pair that can be pasted back into a
-   *  document, and it is what a reader who wants "this diagram" actually wants.
-   *  Omitted by the standalone preview pane, where the source is already the
-   *  other half of the screen. */
+  /**
+   * The mermaid text that produced `svg`. Given one, the toolbar offers to copy it — the source is
+   * the half of the pair that can be pasted back into a document, and it is what a reader who wants
+   * "this diagram" actually wants.
+   */
   source?: string | null
 }
 
 export default function DiagramViewport({
   svg,
+  imageSrc,
+  imageAlt = '',
   background,
   variant = 'pane',
   className,
@@ -112,14 +105,11 @@ export default function DiagramViewport({
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const svgHostRef = useRef<HTMLDivElement | null>(null)
-  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read
-  // and mirrored into state so the host box is sized in React-controlled px —
-  // this must not depend on mutating the mermaid <svg> node, whose attributes are
-  // wiped whenever React re-inserts the dangerouslySetInnerHTML subtree.
-  // Stable, so a zoom or a pan does not rewrite the SVG subtree — see
-  // `useInnerHtml`. This is what makes the note above a belt rather than a fix:
-  // the subtree is now re-inserted only when the diagram itself changes.
-  const svgHtml = useInnerHtml(svg)
+  // Natural (unscaled) diagram size. Kept in a ref for `fit()`'s synchronous read and mirrored into
+  // state so the host box is sized in React-controlled px — this must not depend on mutating the
+  // mermaid <svg> node, whose attributes are wiped whenever React re-inserts the
+  // dangerouslySetInnerHTML subtree.
+  const svgHtml = useInnerHtml(svg ?? '')
   const naturalRef = useRef({ w: 0, h: 0 })
   const [natural, setNatural] = useState({ w: 0, h: 0 })
   // Once the user zooms/pans, stop auto-refitting on resize so we don't fight them.
@@ -169,6 +159,14 @@ export default function DiagramViewport({
     naturalRef.current = { w, h }
     setNatural({ w, h })
   }, [svg])
+
+  const measureImage = useCallback((image: HTMLImageElement) => {
+    const w = image.naturalWidth
+    const h = image.naturalHeight
+    if (!w || !h) return
+    naturalRef.current = { w, h }
+    setNatural({ w, h })
+  }, [])
 
   // Fit once the measured size has actually been committed to the DOM — an
   // embedded box takes its height from `natural`, so fitting inside the effect
@@ -227,11 +225,8 @@ export default function DiagramViewport({
     const vp = viewportRef.current
     if (!vp) return
     const onWheel = (e: WheelEvent) => {
-      // An embedded diagram sits in the middle of a scrolling document, so a bare
-      // wheel has to keep scrolling the page — trapping it would make every
-      // diagram a scroll dead-zone. Ctrl/⌘ is the platform's zoom modifier (and
-      // is what a trackpad pinch reports), so that is the opt-in. Maximized, the
-      // figure owns the screen and behaves like the full pane again.
+      // An embedded diagram sits in the middle of a scrolling document, so a bare wheel has to keep
+      // scrolling the page — trapping it would make every diagram a scroll dead-zone.
       if (isEmbedded && !isMaximized && !e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = vp.getBoundingClientRect()
@@ -284,6 +279,11 @@ export default function DiagramViewport({
       Math.max(EMBEDDED_MIN_HEIGHT, natural.h || EMBEDDED_MIN_HEIGHT),
     )
   }
+  const contentStyle: CSSProperties = {
+    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+    width: natural.w || undefined,
+    height: natural.h || undefined,
+  }
 
   return (
     <div
@@ -308,19 +308,25 @@ export default function DiagramViewport({
         onPointerCancel={endDrag}
         onDoubleClick={fit}
       >
-        <div
-          ref={svgHostRef}
-          className="preview-svg absolute top-0 left-0 origin-top-left"
-          style={{
-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-            // Explicit natural-size box so the SVG (forced to 100% in CSS)
-            // renders at full size regardless of mermaid's own width/max-width.
-            width: natural.w || undefined,
-            height: natural.h || undefined,
-          }}
-          // eslint-disable-next-line react/no-danger
-          dangerouslySetInnerHTML={svgHtml}
-        />
+        {imageSrc ? (
+          <div className="absolute top-0 left-0 origin-top-left" style={contentStyle}>
+            <img
+              src={imageSrc}
+              alt={imageAlt}
+              draggable={false}
+              onLoad={(event) => measureImage(event.currentTarget)}
+              className="block h-full w-full max-w-none select-none"
+            />
+          </div>
+        ) : (
+          <div
+            ref={svgHostRef}
+            className="preview-svg absolute top-0 left-0 origin-top-left"
+            style={contentStyle}
+            // eslint-disable-next-line react/no-danger
+            dangerouslySetInnerHTML={svgHtml}
+          />
+        )}
       </div>
 
       {/* An embedded figure keeps its controls out of the way until the diagram is
@@ -343,15 +349,17 @@ export default function DiagramViewport({
         >
           <ZoomOut />
         </Button>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
           onClick={resetZoom}
           onDoubleClick={fit}
-          className="min-w-11 rounded px-1 text-center text-xs tabular-nums text-muted-foreground hover:text-foreground"
+          className="h-6 min-w-11 px-1 text-xs tabular-nums text-muted-foreground"
           title="Reset to 100% (double-click to fit)"
         >
           {Math.round(view.scale * 100)}%
-        </button>
+        </Button>
         <Button
           size="icon-xs"
           variant="ghost"

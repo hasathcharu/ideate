@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/diff.ts, app/components/DiffView.tsx, app/components/Editor.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -43,9 +43,11 @@ It feeds three surfaces:
   whole pane row) and by version history's Preview/Diff toggle, which compares the
   selected version either with the one before it or with the working copy.
 
-Scenes are excluded everywhere: a `.excalidraw` file is JSON whose bytes churn
+Scenes and raster images are excluded everywhere: a `.excalidraw` file is JSON whose bytes churn
 without the drawing changing (rule 9), so a line diff of one shows changes that
-aren't there.
+aren't there, while PNG/JPG/GIF revisions are binary and have no meaningful line
+representation. Raster history is preview-only and reads revisions as Blobs;
+SVG remains text-backed and supports preview and diff.
 
 In version history, "previous version" is the next commit in the **loaded** page.
 "No older commit here" is ambiguous — first commit of the path, or next page not

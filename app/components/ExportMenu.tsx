@@ -1,7 +1,15 @@
 'use client'
 
 import { useState, type CSSProperties } from 'react'
-import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react'
+import {
+  ChevronDown,
+  Copy,
+  Download,
+  FolderInput,
+  Loader2,
+  SquareDashedTopSolid,
+  SquareRoundCorner,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   copyMarkdownSource,
@@ -12,6 +20,8 @@ import {
   exportPNG,
   exportSource,
   exportSVG,
+  renderPngBlob,
+  resolveStandaloneSvg,
 } from '@/lib/export'
 import {
   copySceneSource,
@@ -20,10 +30,12 @@ import {
   exportSceneSource,
   exportScenePNG,
   exportSceneSVG,
+  renderScenePngBlob,
+  resolveSceneSvg,
 } from '@/lib/exportScene'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { EXCALIDRAW_EXTENSION, type FileKind } from '@/lib/tree'
-import type { ExportBackground, PngScale } from '@/lib/types'
+import type { ExportBackground, PngScale, SvgThemeMode } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -33,7 +45,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { cn } from '@/lib/utils'
+import { cn, HEADER_ACTION_BUTTON } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const BACKGROUND_OPTIONS: ReadonlyArray<{ value: ExportBackground; label: string }> = [
@@ -71,11 +83,8 @@ function swatchStyle(
 /* PNG resolution                                                      */
 /* ------------------------------------------------------------------ */
 
-/** The one-click densities. `auto` is first and is the default: it is the only
- *  option that reads the diagram's own size, and it is right far more often than
- *  any fixed multiplier. */
+/** The one-click densities. 2× is the default. */
 const SCALE_PRESETS: ReadonlyArray<{ label: string; title: string; spec: PngScale }> = [
-  { label: 'Auto', title: 'Size-aware — small diagrams are scaled up, large ones stay dense', spec: { mode: 'auto' } },
   { label: '1×', title: 'The diagram’s natural pixel size', spec: { mode: 'multiplier', value: 1 } },
   { label: '2×', title: 'Twice the diagram’s natural pixel size', spec: { mode: 'multiplier', value: 2 } },
   { label: '3×', title: 'Three times the diagram’s natural pixel size', spec: { mode: 'multiplier', value: 3 } },
@@ -103,7 +112,7 @@ function isCustomScale(spec: PngScale): spec is PngScale & { mode: CustomUnit } 
 
 function scaleMatches(spec: PngScale, preset: PngScale): boolean {
   if (spec.mode !== preset.mode) return false
-  return spec.mode === 'auto' || preset.mode === 'auto' || spec.value === preset.value
+  return spec.value === preset.value
 }
 
 export interface ExportMenuProps {
@@ -116,11 +125,20 @@ export interface ExportMenuProps {
   /** How dense a PNG export is rasterized. */
   pngScale: PngScale
   onPngScaleChange: (value: PngScale) => void
+  svgTheme: SvgThemeMode
+  onSvgThemeChange: (value: SvgThemeMode) => void
+  exportFrame: boolean
+  onExportFrameChange: (value: boolean) => void
   /** Global mermaid config (theme, layout, per-diagram settings) to render exports with. */
   config?: MermaidUserConfig | null
   /** Which exporter to use. Excalidraw ships its own, so scenes don't go through
    *  the mermaid render path at all. */
   kind?: FileKind
+  onSaveToRepository?: (
+    format: 'SVG' | 'PNG',
+    extension: '.svg' | '.png',
+    create: () => Promise<{ content: string | Blob; encoding: 'utf8' | 'binary' }>,
+  ) => void
 }
 
 export default function ExportMenu({
@@ -131,8 +149,13 @@ export default function ExportMenu({
   onBackgroundChange,
   pngScale,
   onPngScaleChange,
+  svgTheme,
+  onSvgThemeChange,
+  exportFrame,
+  onExportFrameChange,
   config = null,
   kind = 'mermaid',
+  onSaveToRepository,
 }: ExportMenuProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const isScene = kind === 'excalidraw'
@@ -142,21 +165,7 @@ export default function ExportMenu({
   const custom = isCustomScale(pngScale)
   const customUnit: CustomUnit = custom ? pngScale.mode : 'dpi'
 
-  /**
-   * What the custom field is showing, when that is not simply the committed spec.
-   *
-   * A number input has states a `PngScale` cannot represent — empty, and
-   * mid-typing values like `"30"` on the way to `"300"` — so the field cannot be
-   * driven by the spec alone: the first backspace would commit something and snap
-   * the value back. But it cannot be *seeded* from the spec either, which is what
-   * a plain `useState` initializer did. `AppConfig` is hydrated from localStorage
-   * one render after mount, so the initializer always ran against the default
-   * `auto` and left this at `''` — a user who had set 2560px reopened the menu to
-   * an empty field above a control insisting it was in width mode.
-   *
-   * `null` means "whatever is committed", which is the honest answer except while
-   * the user is actually typing. So there is no copy to fall out of date.
-   */
+  /** What the custom field is showing, when that is not simply the committed spec. */
   const [customDraft, setCustomDraft] = useState<string | null>(null)
   const customValue = customDraft ?? (custom ? String(pngScale.value) : '')
 
@@ -192,20 +201,7 @@ export default function ExportMenu({
       ? config.themeVariables.background
       : undefined
 
-  /**
-   * PNG density, rendered directly under the PNG row it belongs to.
-   *
-   * Placed there rather than beside the background swatches because it modifies
-   * exactly one of the formats in the list: next to the shared Background control
-   * it read as another global setting, and the SVG row above it was silently
-   * exempt. Under the PNG row the scope is the position.
-   *
-   * The toggles are `Button`s in the same secondary/ghost pairing the toolbar's
-   * kind switch uses, rather than hand-rolled classes. Hand-rolled, the pressed
-   * state picked `bg-secondary` straight while the surface under it is
-   * `--popover`, and the two tokens are close enough in the light theme to look
-   * deliberate and far enough apart in the dark one to look broken.
-   */
+  /** PNG density, rendered directly under the PNG row it belongs to. */
   const pngResolution = (
     <div className="px-2 pt-0.5 pb-2">
       <div className="flex items-center gap-0.5 rounded-md border p-0.5">
@@ -285,42 +281,90 @@ export default function ExportMenu({
     </div>
   )
 
+  const svgThemeControl = (
+    <div className="flex items-center justify-between gap-2 px-2 pt-0.5 pb-2">
+      <span className="text-xs text-muted-foreground">Theme</span>
+      <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+        {(['forced', 'dynamic'] as const).map((mode) => (
+          <Button
+            key={mode}
+            size="sm"
+            variant={svgTheme === mode ? 'secondary' : 'ghost'}
+            className="h-6 px-2 text-xs capitalize"
+            aria-pressed={svgTheme === mode}
+            onClick={() => onSvgThemeChange(mode)}
+          >
+            {mode}
+          </Button>
+        ))}
+      </div>
+    </div>
+  )
+
   const Row = ({
     label,
     format,
     onDownload,
     onCopy,
+    onSave,
   }: {
     label: string
     format: string
     onDownload: () => Promise<void>
     onCopy?: () => Promise<void>
+    onSave?: () => void
   }) => (
     <div className="flex items-center justify-between gap-2 px-2 py-1.5">
       <span className="text-sm">{label}</span>
       <div className="flex items-center gap-1">
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          disabled={busy !== null}
-          title={`Download ${format}`}
-          onClick={() => run(`dl-${format}`, `${format} downloaded`, onDownload)}
-        >
-          {busy === `dl-${format}` ? <Loader2 className="animate-spin" /> : <Download />}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              disabled={busy !== null}
+              aria-label={`Download ${format}`}
+              onClick={() => run(`dl-${format}`, `${format} downloaded`, onDownload)}
+            >
+              {busy === `dl-${format}` ? <Loader2 className="animate-spin" /> : <Download />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Download {format}</TooltipContent>
+        </Tooltip>
         {onCopy ? (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            disabled={busy !== null}
-            title={`Copy ${format} to clipboard`}
-            onClick={() => run(`cp-${format}`, `${format} copied to clipboard`, onCopy)}
-          >
-            {busy === `cp-${format}` ? <Loader2 className="animate-spin" /> : <Copy />}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                disabled={busy !== null}
+                aria-label={`Copy ${format} to clipboard`}
+                onClick={() => run(`cp-${format}`, `${format} copied to clipboard`, onCopy)}
+              >
+                {busy === `cp-${format}` ? <Loader2 className="animate-spin" /> : <Copy />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy {format}</TooltipContent>
+          </Tooltip>
         ) : (
           <span className="inline-block size-6" />
         )}
+        {onSave ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                disabled={busy !== null}
+                aria-label={`Save ${format} to repository`}
+                onClick={onSave}
+              >
+                <FolderInput />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Save {format} to repository</TooltipContent>
+          </Tooltip>
+        ) : null}
       </div>
     </div>
   )
@@ -328,7 +372,7 @@ export default function ExportMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="secondary" disabled={disabled}>
+        <Button size="sm" variant="secondary" className={HEADER_ACTION_BUTTON} disabled={disabled}>
           Export <ChevronDown />
         </Button>
       </DropdownMenuTrigger>
@@ -365,6 +409,41 @@ export default function ExportMenu({
                 ))}
               </div>
             </div>
+            {/* Background and Frame are one decision — what the exported image sits
+                on — so they share a section rather than being ruled apart. */}
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5">
+              <span className="text-sm">Frame</span>
+              <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon-xs"
+                      variant={!exportFrame ? 'secondary' : 'ghost'}
+                      aria-label="Plain frame"
+                      aria-pressed={!exportFrame}
+                      onClick={() => onExportFrameChange(false)}
+                    >
+                      <SquareDashedTopSolid />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Plain</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon-xs"
+                      variant={exportFrame ? 'secondary' : 'ghost'}
+                      aria-label="Padded rounded frame"
+                      aria-pressed={exportFrame}
+                      onClick={() => onExportFrameChange(true)}
+                    >
+                      <SquareRoundCorner />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Padded and rounded</TooltipContent>
+                </Tooltip>
+              </div>
+            </div>
             <DropdownMenuSeparator />
           </>
         )}
@@ -382,14 +461,21 @@ export default function ExportMenu({
             <Row
               label="SVG"
               format="SVG"
-              onDownload={() => exportSceneSVG(text, `${name}.svg`, background, config)}
-              onCopy={() => copySceneSVG(text, background, config)}
+              onDownload={() => exportSceneSVG(text, `${name}.svg`, background, config, svgTheme, exportFrame)}
+              onCopy={() => copySceneSVG(text, background, config, svgTheme, exportFrame)}
+              onSave={onSaveToRepository ? () => onSaveToRepository('SVG', '.svg', async () => ({
+                content: (await resolveSceneSvg(text, background, config, svgTheme, exportFrame)).markup, encoding: 'utf8',
+              })) : undefined}
             />
+            {svgThemeControl}
             <Row
               label="PNG"
               format="PNG"
-              onDownload={() => exportScenePNG(text, `${name}.png`, background, config, pngScale)}
-              onCopy={() => copyScenePNG(text, background, config, pngScale)}
+              onDownload={() => exportScenePNG(text, `${name}.png`, background, config, pngScale, exportFrame)}
+              onCopy={() => copyScenePNG(text, background, config, pngScale, exportFrame)}
+              onSave={onSaveToRepository ? () => onSaveToRepository('PNG', '.png', async () => ({
+                content: await renderScenePngBlob(text, background, config, pngScale, exportFrame), encoding: 'binary',
+              })) : undefined}
             />
             {pngResolution}
             <DropdownMenuSeparator />
@@ -405,14 +491,21 @@ export default function ExportMenu({
             <Row
               label="SVG"
               format="SVG"
-              onDownload={() => exportSVG(text, `${name}.svg`, background, config)}
-              onCopy={() => copySVG(text, background, config)}
+              onDownload={() => exportSVG(text, `${name}.svg`, background, config, { themeMode: svgTheme, framed: exportFrame })}
+              onCopy={() => copySVG(text, background, config, { themeMode: svgTheme, framed: exportFrame })}
+              onSave={onSaveToRepository ? () => onSaveToRepository('SVG', '.svg', async () => ({
+                content: (await resolveStandaloneSvg(text, { background, config, themeMode: svgTheme, framed: exportFrame })).markup, encoding: 'utf8',
+              })) : undefined}
             />
+            {svgThemeControl}
             <Row
               label="PNG"
               format="PNG"
-              onDownload={() => exportPNG(text, `${name}.png`, background, config, pngScale)}
-              onCopy={() => copyPNG(text, background, config, pngScale)}
+              onDownload={() => exportPNG(text, `${name}.png`, background, config, pngScale, exportFrame)}
+              onCopy={() => copyPNG(text, background, config, pngScale, exportFrame)}
+              onSave={onSaveToRepository ? () => onSaveToRepository('PNG', '.png', async () => ({
+                content: await renderPngBlob(text, background, config, pngScale, exportFrame), encoding: 'binary',
+              })) : undefined}
             />
             {pngResolution}
             <DropdownMenuSeparator />

@@ -1,11 +1,12 @@
 'use client'
 
-import { ChevronDown, ChevronRight, Pencil, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, ImageIcon, Pencil, Plus, Trash2 } from 'lucide-react'
 import NewFileMenu from './NewFileMenu'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
-import { DIAGRAM_EXTENSIONS, fileKind, type FileKind } from '@/lib/tree'
+import { DIAGRAM_EXTENSIONS, fileKind, isRasterImageFile, isSvgFile, type FileKind } from '@/lib/tree'
 import type { TreeNode } from '@/lib/types'
 
 /** Shared styling for the hover-revealed row actions. Extracted so the "new file"
@@ -35,13 +36,7 @@ const SKELETON_ROWS = [
   { depth: 0, width: 'w-32' },
 ] as const
 
-/**
- * Placeholder shown while the first tree for a repo/branch loads.
- *
- * Geometry deliberately mirrors `TreeItem`: same `depth * 12 + 8` indent, same
- * `py-1` row height, `gap-1.5` and inter-row `space-y-px`, so the real list
- * doesn't visibly jump when it replaces this.
- */
+/** Placeholder shown while the first tree for a repo/branch loads. */
 export function FileTreeSkeleton() {
   return (
     <ul className="space-y-px text-sm" aria-hidden>
@@ -78,6 +73,7 @@ export interface FileTreeProps {
   onDelete: (node: TreeNode) => void
   /** Create a new file of `kind` inside this directory (path prefilled). */
   onNewFile: (dirPath: string, kind: FileKind) => void
+  onUploadImage: (dirPath: string) => void
   onRename: (node: TreeNode) => void
 }
 
@@ -93,6 +89,7 @@ export default function FileTree({
   onDelete,
   onNewFile,
   onRename,
+  onUploadImage,
 }: FileTreeProps) {
   if (nodes.length === 0 && searchQuery) {
     return (
@@ -124,11 +121,9 @@ export default function FileTree({
     )
   }
   return (
-    // `space-y-px` is load-bearing, not spacing taste: a row's hover fill and the
-    // active row's tint are both full-width rounded rectangles, so with the rows
-    // flush the two backgrounds met edge to edge and read as one selected block.
-    // A single pixel of gap is enough to separate them and doesn't change the
-    // list's density.
+    // `space-y-px` is load-bearing, not spacing taste: a row's hover fill and the active row's tint
+    // are both full-width rounded rectangles, so with the rows flush the two backgrounds met edge
+    // to edge and read as one selected block.
     <ul className="space-y-px text-sm">
       {nodes.map((node) => (
         <TreeItem
@@ -143,6 +138,7 @@ export default function FileTree({
           onDelete={onDelete}
           onNewFile={onNewFile}
           onRename={onRename}
+          onUploadImage={onUploadImage}
         />
       ))}
     </ul>
@@ -160,6 +156,7 @@ interface ItemProps {
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string, kind: FileKind) => void
   onRename: (node: TreeNode) => void
+  onUploadImage: (dirPath: string) => void
 }
 
 function TreeItem(props: ItemProps) {
@@ -174,6 +171,7 @@ function TreeItem(props: ItemProps) {
     onDelete,
     onNewFile,
     onRename,
+    onUploadImage,
   } = props
   const pad = { paddingLeft: `${depth * 12 + 8}px` }
 
@@ -199,11 +197,14 @@ function TreeItem(props: ItemProps) {
           </button>
           <div className="relative flex shrink-0 items-center">
             {dirty ? <UnsavedDot /> : null}
-            <NewFileMenu onSelect={(kind) => onNewFile(node.path, kind)}>
+            <NewFileMenu
+              onSelect={(kind) => onNewFile(node.path, kind)}
+              onUploadImage={() => onUploadImage(node.path)}
+              triggerTooltip={`New file in ${node.name}`}
+            >
               <button
                 type="button"
                 className={ICON_ACTION_CLASS}
-                title={`New file in ${node.name}`}
                 aria-label={`New file in ${node.name}`}
               >
                 <Plus className="size-3.5" />
@@ -239,16 +240,22 @@ function TreeItem(props: ItemProps) {
           active && 'bg-primary/15 text-primary hover:bg-primary/20',
         )}
       >
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
-          style={pad}
-          title={node.path}
-          onClick={() => onOpenFile(node.path)}
-        >
-          <FileKindIcon kind={fileKind(node.path)} />
-          <span className="truncate">{node.name}</span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
+              style={pad}
+              onClick={() => onOpenFile(node.path)}
+            >
+              {isRasterImageFile(node.path) || isSvgFile(node.path)
+                ? <ImageIcon className="size-3.5 shrink-0" />
+                : <FileKindIcon kind={fileKind(node.path)} />}
+              <span className="truncate">{node.name}</span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{node.path}</TooltipContent>
+        </Tooltip>
         <div className="relative flex shrink-0 items-center">
           {dirty ? <UnsavedDot /> : null}
           <IconAction title={`Rename ${node.name}`} onClick={() => onRename(node)}>
@@ -266,13 +273,17 @@ function TreeItem(props: ItemProps) {
 /** Amber dot marking unsaved changes; overlays the action buttons, hidden on hover to reveal them. */
 function UnsavedDot() {
   return (
-    <span
-      className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
-      title="Unsaved changes"
-      aria-label="Unsaved changes"
-    >
-      <span className="size-1.5 rounded-full bg-amber-500" />
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="absolute inset-0 z-10 flex items-center justify-center group-hover:hidden"
+          aria-label="Unsaved changes"
+        >
+          <span className="size-1.5 rounded-full bg-amber-500" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>Unsaved changes</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -288,20 +299,24 @@ function IconAction({
   children: React.ReactNode
 }) {
   return (
-    <button
-      type="button"
-      className={cn(
-        ICON_ACTION_CLASS,
-        danger && 'hover:bg-destructive/15 hover:text-destructive',
-      )}
-      title={title}
-      aria-label={title}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
-    >
-      {children}
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            ICON_ACTION_CLASS,
+            danger && 'hover:bg-destructive/15 hover:text-destructive',
+          )}
+          aria-label={title}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          {children}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{title}</TooltipContent>
+    </Tooltip>
   )
 }

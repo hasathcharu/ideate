@@ -1,27 +1,4 @@
-// Package tools registers the fourteen MCP tools an agent drives the editor with.
-//
-// The whole point of these, and the reason the feature exists at all, is that they
-// act on a document **in a browser right now** rather than on a file on disk. An
-// edit lands in CodeMirror as a real transaction, mermaid re-renders, and the
-// renderer's verdict comes back in the result of the agent's own tool call — so a
-// broken diagram is fixed in the same turn. An agent editing files finds out its
-// diagram is broken when a human next opens it.
-//
-// From protocol 4 that document need not be the one on screen: every tool that
-// names a document takes an optional path (docPathArgs), and only the *default* is
-// the open one. The renderer still has the last word either way, because the tab is
-// still what runs the command.
-//
-// Two rules shape everything here:
-//
-//   - **Nothing writes to GitHub.** There is no commit tool, and rename and delete
-//     are deliberately not exposed either, because in this app those *are* commits.
-//     An agent's blast radius is the uncommitted working copy: on screen, and one
-//     ⌘Z away.
-//   - **Failures are tool errors with a readable message, never exceptions.** A
-//     missing edit anchor, a wrong path, a scene tool aimed at a markdown document
-//     — every one of them is something the agent can act on, and an exception
-//     reaches the model with the useful part stripped off.
+// Package tools registers the seventeen MCP tools an agent drives the editor with.
 package tools
 
 import (
@@ -64,22 +41,7 @@ type Deps struct {
 /* Argument shapes                                                     */
 /* ------------------------------------------------------------------ */
 
-// codeArgs is embedded in every tool's input, and its description is doing more
-// work than it looks.
-//
-// The pairing code is a tool *argument* rather than an `Authorization` header, and
-// that was the central design choice of this transport. A header is the more
-// standard remote-MCP shape and would keep the credential out of the model's
-// context — but a header lives in client config, so pointing the agent at a
-// different tab would mean re-running `claude mcp add` and tearing down the MCP
-// connection. Switching tabs mid-session is a hard requirement, and only an
-// argument gives it: the human names another code and the very next call lands on
-// a different tab.
-//
-// The last clause of the description below is what makes that work in practice —
-// an agent that has not been told the argument is the tab selector will keep using
-// whichever code it saw first. Keep it. (It cannot be factored into a constant:
-// struct tags must be literals.)
+// codeArgs is embedded in every tool's input, and its description is doing more work than it looks.
 type codeArgs struct {
 	Code string `json:"code" jsonschema:"The pairing code shown in the browser tab's Agent Link dialog (the plug icon in the toolbar), e.g. \"K7QM-4XZP\". Case and the dash are ignored. Change this when the human names a different tab's code — that is how you switch which tab you are driving, mid-session, with no reconfiguration."`
 }
@@ -90,34 +52,11 @@ type connectArgs struct {
 }
 
 // docPathArgs names the document a *reading* tool acts on, and may be omitted.
-//
-// Before this existed the tools meant "whatever the human is looking at", so an
-// agent asked to fix six diagrams had to ideate_open each one — which drags the
-// human's editor to a different file six times and loses their cursor each time.
-// The path makes that work invisible to them.
-//
-// Optional here because "what is on screen" is a real question, and reading the
-// wrong document costs one wasted call. The mutating tools take targetPathArgs
-// below instead, where it is not optional at all.
 type docPathArgs struct {
 	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Omit it to read the open document. A path leaves the editor where it is, so prefer it to ideate_open for work across several files."`
 }
 
 // targetPathArgs names the document a *mutating* tool changes, and is required.
-//
-// Required because the open document is not a stable address. The human keeps
-// browsing their files while the agent works, so "the open document" means whichever
-// one they clicked last — and an edit that lands on the wrong file is not something
-// reading it again can undo. Naming the path costs one ideate_status call and makes
-// the target the agent's own decision.
-//
-// The field stays a pointer, and the schema stays permissive, for one case: the
-// **untitled** document has no path yet, so omission is the only way to name it. That
-// is a state of the tab, not a mode of the app — local mode has its own files, and a
-// connected repo still has an untitled document until the human saves it somewhere.
-// Only the tab knows which document is open, so the tab is where the refusal lives
-// (AppShell's requirePath) — one implementation, and the one that cannot be wrong. Do
-// not add a second here against the pushed state.
 type targetPathArgs struct {
 	Path *string `json:"path,omitempty" jsonschema:"Repository-relative path, as listed by ideate_list_files. Required: the open document changes as the human browses, so an unnamed target can be a file you never read. Call ideate_status for the open path. Omit it only when ideate_status reports no open path, which means the untitled document has no path to name yet."`
 }
@@ -125,6 +64,38 @@ type targetPathArgs struct {
 type readArgs struct {
 	codeArgs
 	docPathArgs
+}
+
+type searchArgs struct {
+	codeArgs
+	Query         string   `json:"query" jsonschema:"Literal text to find. Regular expressions are not accepted."`
+	Globs         []string `json:"globs,omitempty" jsonschema:"Optional repository-relative path globs. * stays within one directory; ** crosses directories."`
+	CaseSensitive *bool    `json:"caseSensitive,omitempty"`
+	ContextLines  *int     `json:"contextLines,omitempty" jsonschema:"Lines of context on each side, from 0 to 5."`
+	Limit         *int     `json:"limit,omitempty" jsonschema:"Maximum matches, from 1 to 200."`
+}
+
+type readManyFileArg struct {
+	Path      string `json:"path" jsonschema:"Repository-relative path."`
+	StartLine *int   `json:"startLine,omitempty" jsonschema:"First line to return, 1-based."`
+	EndLine   *int   `json:"endLine,omitempty" jsonschema:"Last line to return, inclusive."`
+}
+
+type readManyArgs struct {
+	codeArgs
+	Files []readManyFileArg `json:"files" jsonschema:"One to 32 text documents or line ranges. Results preserve this order and report failures per path."`
+}
+
+type revisionExpectationArg struct {
+	Path     string `json:"path"`
+	Revision any    `json:"revision" jsonschema:"Working revision returned by connect, search or read_many; use the string absent for a new file."`
+}
+
+type applyPatchArgs struct {
+	codeArgs
+	Workspace string                   `json:"workspace" jsonschema:"Opaque workspace identity returned by ideate_connect."`
+	Patch     string                   `json:"patch" jsonschema:"Unified diff for text documents. Deletions, renames and scene JSON patches are refused."`
+	Expected  []revisionExpectationArg `json:"expected" jsonschema:"Exactly one expected working revision for every path touched by the patch."`
 }
 
 type editArgs struct {
@@ -162,11 +133,6 @@ type createFileArgs struct {
 }
 
 // createCanvasArgs is create_file's path plus scene_edit's ops.
-//
-// Path is required and non-pointer, like openArgs and createFileArgs: a command
-// whose purpose is to make a *new* document has nothing to default to. Ops is
-// optional, because "give me a blank canvas to draw on next" is a reasonable thing
-// to ask for and refusing it would only push the agent into two calls.
 type createCanvasArgs struct {
 	codeArgs
 	Path string       `json:"path" jsonschema:"Repo-relative path. It must end in .excalidraw, and no file can hold that path already. To change a canvas that exists, use ideate_scene_edit."`
@@ -189,17 +155,11 @@ type sceneRenderArgs struct {
 type sceneEditArgs struct {
 	codeArgs
 	targetPathArgs
-	Ops []sceneOpArg `json:"ops" jsonschema:"Applied in order, with all adds first."`
+	Ops              []sceneOpArg `json:"ops" jsonschema:"Applied in order, with all adds first."`
+	ExpectedRevision any          `json:"expectedRevision,omitempty" jsonschema:"Working revision returned by ideate_scene_get, or the string absent when creating a new canvas. A stale value is refused."`
 }
 
 // sceneOpArg is the add/update/delete union flattened into one object.
-//
-// The old Node server declared it as a zod union of three shapes, which a JSON
-// Schema generated from a Go struct cannot express. Flattening loses the schema's
-// ability to say "id is required for update"; the handler says it instead, in a
-// message that names the op and the missing field. That is a worse schema and a
-// better error, and the error is what the agent actually reads when it gets it
-// wrong.
 type sceneOpArg struct {
 	Op              string     `json:"op" jsonschema:"One of \"add\", \"update\", \"delete\", \"align\" or \"distribute\"."`
 	ID              *string    `json:"id,omitempty" jsonschema:"For add: your own id for this element, so arrows in the same call can bind to it and a later call can update it; generated when omitted. For update and delete: the element id, from ideate_scene_get."`
@@ -244,7 +204,8 @@ func Register(server *mcp.Server, deps *Deps) {
 		Description: "Attach to the Ideate browser tab holding this pairing code. Required " +
 			"before any tool can read or change the document — attaching to a human's open " +
 			"editor is a deliberate step, not something that happens because a code exists. " +
-			"Returns what you attached to (repository, branch, open file, kind), and the app " +
+			"Returns a content-free workspace manifest: full workspace identity, active path, " +
+			"file kinds and sizes, working revisions, and dirty/new state. The app " +
 			"shows the human that an agent is now connected. Call ideate_status first if you " +
 			"want to check what is open before committing to it.",
 	}, deps.connect)
@@ -289,8 +250,37 @@ func Register(server *mcp.Server, deps *Deps) {
 		Description: "Read a document. Omit `path` for the open document. A path reads that file " +
 			"and does not open it. You always get the working copy. A file with unsaved edits " +
 			"in this browser answers with those edits. The `committed` field tells you if the " +
-			"text matches the saved copy.",
+			"text matches the saved copy; kind and working revision support a later patch.",
 	}, deps.read)
+
+	add(server, &surface, &mcp.Tool{
+		Name:  "ideate_search",
+		Title: "Ideate: search workspace",
+		Description: "Search literal text across the browser's effective working copies, including " +
+			"background drafts. Optional globs narrow paths. Results include the path, line, context " +
+			"and working revision needed for a later atomic patch. Scenes are excluded; use " +
+			"ideate_scene_get for canvases. The result says when scan or match limits truncated it.",
+	}, deps.search)
+
+	add(server, &surface, &mcp.Tool{
+		Name:  "ideate_read_many",
+		Title: "Ideate: read several files",
+		Description: "Read up to 32 text working copies or bounded line ranges in one call. Results " +
+			"stay in request order and report failures per path. Each success includes kind, working " +
+			"revision and whether the working copy matches saved content. Drafts are never replaced " +
+			"with committed content. Use ideate_scene_get for canvases.",
+	}, deps.readMany)
+
+	add(server, &surface, &mcp.Tool{
+		Name:  "ideate_apply_patch",
+		Title: "Ideate: apply atomic patch",
+		Description: "Apply one unified diff atomically to one or more text working copies. Pass the " +
+			"workspace identity from ideate_connect and every path's expected revision from connect, " +
+			"search or read_many; use absent for a new file. Every hunk applies or nothing changes. " +
+			"Stale or mismatched hunks return the current revision and a bounded excerpt for rebasing. " +
+			"The result includes compact line counts and renderer diagnostics. This never commits, " +
+			"renames, deletes or patches scene JSON.",
+	}, deps.applyPatch)
 
 	add(server, &surface, &mcp.Tool{
 		Name:  "ideate_edit",
@@ -371,7 +361,7 @@ func Register(server *mcp.Server, deps *Deps) {
 			"these ids, and the colors are there so an addition can match what is already " +
 			"drawn. Ask for `full` to get the whole scene JSON. It is large and mostly " +
 			"bookkeeping. The result also carries `warnings`: layout problems found in the " +
-			"drawing as it stands, which is where to start when you have been asked to tidy " +
+			"drawing as it stands, plus the working revision required by scene_edit, which is where to start when you have been asked to tidy " +
 			"a canvas up.",
 	}, deps.sceneGet)
 
@@ -394,6 +384,8 @@ func Register(server *mcp.Server, deps *Deps) {
 			"failed — a canvas has no renderer to refuse it, which is exactly why you cannot " +
 			"see any of it — so read them and fix what they name. To tidy a drawing up, " +
 			"reach for the align and distribute ops before you compute coordinates: they " +
+			"Pass the working revision from ideate_scene_get as expectedRevision; stale geometry " +
+			"is refused before it can overwrite a human edit. Layout operations " +
 			"work from the geometry the app holds, and the numbers you hold came from a " +
 			"scene_get that is now several edits old.",
 	}, deps.sceneEdit)
@@ -427,10 +419,6 @@ func Register(server *mcp.Server, deps *Deps) {
 }
 
 // toolSurface is what Register accumulates as it registers.
-//
-// readd re-registers one tool — whichever came first — and is the only way to make
-// the SDK emit notifications/tools/list_changed, which is why it is captured here
-// instead of a tool definition being repeated somewhere for the purpose.
 type toolSurface struct {
 	names []string
 	readd func()
@@ -457,11 +445,27 @@ func (d *Deps) connect(ctx context.Context, _ *mcp.CallToolRequest, in connectAr
 	if in.Agent != nil {
 		agent = *in.Agent
 	}
-	state, err := s.Attach(agent)
+	_, err = s.Attach(agent)
 	if err != nil {
 		return nil, nil, translate(err)
 	}
-	return jsonResult(map[string]any{"attached": true, "tab": state})
+	manifest, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdManifest})
+	if err != nil {
+		s.Detach("The initial workspace manifest could not be read.")
+		return nil, nil, translate(err)
+	}
+	var workspace any
+	if err := json.Unmarshal(manifest, &workspace); err != nil {
+		s.Detach("The initial workspace manifest was invalid.")
+		return nil, nil, fmt.Errorf("the tab's workspace manifest could not be read: %w", err)
+	}
+	if object, ok := workspace.(map[string]any); ok {
+		if files, ok := object["files"].([]any); ok && len(files) > protocol.MaxManifestFiles {
+			s.Detach("The initial workspace manifest exceeded its file limit.")
+			return nil, nil, fmt.Errorf("the tab returned more than %d manifest entries", protocol.MaxManifestFiles)
+		}
+	}
+	return jsonResult(map[string]any{"attached": true, "manifest": workspace})
 }
 
 func (d *Deps) disconnect(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) (*mcp.CallToolResult, any, error) {
@@ -474,11 +478,6 @@ func (d *Deps) disconnect(ctx context.Context, _ *mcp.CallToolRequest, in codeAr
 }
 
 // status is the one tool allowed through unattached.
-//
-// It returns metadata about *which* document is open and never its content, which
-// is precisely what lets an agent describe what attaching would give it without
-// first helping itself to it. Widening this to anything that reads the document
-// would collapse the distinction that makes ideate_connect mean something.
 func (d *Deps) status(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) (*mcp.CallToolResult, any, error) {
 	s, err := d.resolve(ctx, in.Code)
 	if err != nil {
@@ -501,10 +500,6 @@ func (d *Deps) status(ctx context.Context, _ *mcp.CallToolRequest, in codeArgs) 
 }
 
 // forwardStatus is forward plus this build's own identity.
-//
-// Folded into the tab's object rather than sent as a second content block: an agent
-// reads one JSON document here, and a status answer split across two of them is a
-// worse trade than losing the tab's key order to a re-encode.
 func (d *Deps) forwardStatus(ctx context.Context, s *session.Session) (*mcp.CallToolResult, any, error) {
 	data, err := s.Call(ctx, protocol.Command{Cmd: protocol.CmdStatus})
 	if err != nil {
@@ -535,6 +530,85 @@ func (d *Deps) read(ctx context.Context, _ *mcp.CallToolRequest, in readArgs) (*
 		return nil, nil, err
 	}
 	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdRead, Path: in.Path})
+}
+
+func (d *Deps) search(ctx context.Context, _ *mcp.CallToolRequest, in searchArgs) (*mcp.CallToolResult, any, error) {
+	if in.Query == "" {
+		return nil, nil, errors.New("query is empty — literal search needs at least one character.")
+	}
+	if in.ContextLines != nil && (*in.ContextLines < 0 || *in.ContextLines > protocol.MaxSearchContext) {
+		return nil, nil, fmt.Errorf("contextLines must be from 0 to %d", protocol.MaxSearchContext)
+	}
+	if in.Limit != nil && (*in.Limit < 1 || *in.Limit > protocol.MaxSearchResults) {
+		return nil, nil, fmt.Errorf("limit must be from 1 to %d", protocol.MaxSearchResults)
+	}
+	if len(in.Globs) > protocol.MaxSearchGlobs {
+		return nil, nil, fmt.Errorf("globs accepts at most %d patterns", protocol.MaxSearchGlobs)
+	}
+	for index, glob := range in.Globs {
+		if len(glob) > 256 {
+			return nil, nil, fmt.Errorf("globs[%d] exceeds 256 bytes", index)
+		}
+	}
+	return d.attached(ctx, in.Code, protocol.Command{
+		Cmd: protocol.CmdSearch, Query: &in.Query, Globs: in.Globs,
+		CaseSensitive: in.CaseSensitive, ContextLines: in.ContextLines, Limit: in.Limit,
+	})
+}
+
+func (d *Deps) readMany(ctx context.Context, _ *mcp.CallToolRequest, in readManyArgs) (*mcp.CallToolResult, any, error) {
+	if len(in.Files) == 0 || len(in.Files) > protocol.MaxReadManyPaths {
+		return nil, nil, fmt.Errorf("files must contain from 1 to %d entries", protocol.MaxReadManyPaths)
+	}
+	files := make([]protocol.ReadManyFile, len(in.Files))
+	seen := make(map[string]bool, len(in.Files))
+	for i, file := range in.Files {
+		if file.Path == "" {
+			return nil, nil, fmt.Errorf("files[%d].path is empty", i)
+		}
+		if seen[file.Path] {
+			return nil, nil, fmt.Errorf("files[%d].path repeats %q", i, file.Path)
+		}
+		seen[file.Path] = true
+		if file.StartLine != nil && *file.StartLine < 1 {
+			return nil, nil, fmt.Errorf("files[%d].startLine must be positive", i)
+		}
+		if file.EndLine != nil && (file.StartLine == nil || *file.EndLine < *file.StartLine) {
+			return nil, nil, fmt.Errorf("files[%d].endLine needs startLine and must not precede it", i)
+		}
+		files[i] = protocol.ReadManyFile{Path: file.Path, StartLine: file.StartLine, EndLine: file.EndLine}
+	}
+	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdReadMany, Files: files})
+}
+
+func (d *Deps) applyPatch(ctx context.Context, _ *mcp.CallToolRequest, in applyPatchArgs) (*mcp.CallToolResult, any, error) {
+	if in.Workspace == "" {
+		return nil, nil, errors.New("workspace is empty — use the value returned by ideate_connect.")
+	}
+	if in.Patch == "" {
+		return nil, nil, errors.New("patch is empty.")
+	}
+	if len(in.Patch) > protocol.MaxPatchBytes {
+		return nil, nil, fmt.Errorf("patch exceeds the %d-byte limit", protocol.MaxPatchBytes)
+	}
+	if len(in.Expected) == 0 || len(in.Expected) > protocol.MaxPatchPaths {
+		return nil, nil, fmt.Errorf("expected must contain from 1 to %d paths", protocol.MaxPatchPaths)
+	}
+	expected := make([]protocol.RevisionExpectation, len(in.Expected))
+	seen := make(map[string]bool, len(in.Expected))
+	for i, item := range in.Expected {
+		if item.Path == "" || seen[item.Path] {
+			return nil, nil, fmt.Errorf("expected[%d].path is empty or duplicated", i)
+		}
+		seen[item.Path] = true
+		if err := checkRevision(item.Revision); err != nil {
+			return nil, nil, fmt.Errorf("expected[%d].revision: %w", i, err)
+		}
+		expected[i] = protocol.RevisionExpectation{Path: item.Path, Revision: item.Revision}
+	}
+	return d.attached(ctx, in.Code, protocol.Command{
+		Cmd: protocol.CmdApplyPatch, Workspace: &in.Workspace, Patch: &in.Patch, Expected: expected,
+	})
 }
 
 func (d *Deps) edit(ctx context.Context, _ *mcp.CallToolRequest, in editArgs) (*mcp.CallToolResult, any, error) {
@@ -574,10 +648,6 @@ func (d *Deps) open(ctx context.Context, _ *mcp.CallToolRequest, in openArgs) (*
 }
 
 // createFile refuses a canvas, which is the one extension it could otherwise honour.
-//
-// It would honour it badly: `content` is scene JSON an agent has no business writing
-// by hand, and omitting it opens a blank canvas nobody asked to look at. Sending the
-// agent to create_canvas costs it one retry and gets it the drawing in that call.
 func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in createFileArgs) (*mcp.CallToolResult, any, error) {
 	if in.Path == "" {
 		return nil, nil, errors.New("path is empty — pass a repo-relative path including the extension.")
@@ -594,11 +664,6 @@ func (d *Deps) createFile(ctx context.Context, _ *mcp.CallToolRequest, in create
 }
 
 // createCanvas is create_file and scene_edit in one command.
-//
-// The ops are validated here, before the tab is asked for anything, so a malformed
-// drawing does not leave a blank canvas open in the human's editor with an error in
-// the agent's transcript. The tab applies the same all-or-nothing rule internally
-// (sceneEdit resolves before it writes), but the cheap refusal belongs on this side.
 func (d *Deps) createCanvas(ctx context.Context, _ *mcp.CallToolRequest, in createCanvasArgs) (*mcp.CallToolResult, any, error) {
 	if in.Path == "" {
 		return nil, nil, errors.New(
@@ -648,7 +713,14 @@ func (d *Deps) sceneEdit(ctx context.Context, _ *mcp.CallToolRequest, in sceneEd
 	if err != nil {
 		return nil, nil, err
 	}
-	return d.attached(ctx, in.Code, protocol.Command{Cmd: protocol.CmdSceneEdit, Path: in.Path, Ops: ops})
+	if in.ExpectedRevision != nil {
+		if err := checkRevision(in.ExpectedRevision); err != nil {
+			return nil, nil, fmt.Errorf("expectedRevision: %w", err)
+		}
+	}
+	return d.attached(ctx, in.Code, protocol.Command{
+		Cmd: protocol.CmdSceneEdit, Path: in.Path, Ops: ops, ExpectedRevision: in.ExpectedRevision,
+	})
 }
 
 /* ------------------------------------------------------------------ */
@@ -656,17 +728,33 @@ func (d *Deps) sceneEdit(ctx context.Context, _ *mcp.CallToolRequest, in sceneEd
 /* ------------------------------------------------------------------ */
 
 // checkDocPath refuses a path that is present but empty.
-//
-// Absent and empty are different commands on this wire (see protocol.Command), and
-// only one of them is a decision: a model that fills in "" for an optional string
-// has not chosen the open document, it has failed to omit the field. Forwarding it
-// would reach the tab as a path naming no file, which the tab would then offer to
-// create.
 func checkDocPath(path *string) error {
 	if path != nil && *path == "" {
 		return errors.New(
 			"path is present but empty. Omit the field entirely to act on the open " +
 				"document, or pass a repo-relative path as listed by ideate_list_files.")
+	}
+	return nil
+}
+
+func checkRevision(value any) error {
+	if value == "absent" {
+		return nil
+	}
+	valid := false
+	switch number := value.(type) {
+	case float64:
+		valid = number >= 1 && number == float64(int64(number))
+	case int:
+		valid = number >= 1
+	case int64:
+		valid = number >= 1
+	case json.Number:
+		integer, err := number.Int64()
+		valid = err == nil && integer >= 1
+	}
+	if !valid {
+		return errors.New(`must be a positive integer or the string "absent"`)
 	}
 	return nil
 }
@@ -678,10 +766,6 @@ func (d *Deps) resolve(ctx context.Context, code string) (*session.Session, erro
 	s := d.Registry.Lookup(hash)
 	if s == nil {
 		// Only *unknown* codes are rationed, and only the first sighting of each.
-		// A busy agent working against a real tab must never be slowed down by the
-		// control that exists to slow down somebody guessing — and neither must
-		// the colleague sharing its public address, which is what charging an
-		// agent's repeated stale code used to do. See AllowDistinct.
 		if !d.UnknownCode.AllowDistinct(ratelimit.ClientIPFrom(ctx), hash) {
 			return nil, errors.New(
 				"Too many attempts with pairing codes that match no tab. Wait a moment, " +
@@ -727,12 +811,6 @@ func (d *Deps) claim(ctx context.Context, code string) (*session.Session, error)
 }
 
 // sceneRender is the one tool whose answer is not text.
-//
-// The picture arrives base64 in a JSON frame, because the frame is JSON. It is
-// decoded back to bytes here and handed over as an ImageContent, which the SDK
-// encodes again for its own wire — and dropped from the JSON before that is
-// rendered as the text block beside it. Leaving it in would spend the agent's
-// context twice on one image, once in a form it cannot look at.
 func (d *Deps) sceneRender(ctx context.Context, _ *mcp.CallToolRequest, in sceneRenderArgs) (*mcp.CallToolResult, any, error) {
 	if err := checkDocPath(in.Path); err != nil {
 		return nil, nil, err
@@ -786,6 +864,9 @@ func (d *Deps) forward(ctx context.Context, s *session.Session, cmd protocol.Com
 	if err != nil {
 		return nil, nil, translate(err)
 	}
+	if err := validateResponse(cmd.Cmd, data); err != nil {
+		return nil, nil, err
+	}
 	// The tab's answer is already JSON. Re-indenting it rather than passing the
 	// bytes through keeps the result readable in a transcript, which is where an
 	// agent's own diagnostics get read back by a human.
@@ -794,6 +875,38 @@ func (d *Deps) forward(ctx context.Context, s *session.Session, cmd protocol.Com
 		return textResult(string(data)), nil, nil
 	}
 	return textResult(pretty.String()), nil, nil
+}
+
+func validateResponse(command string, data json.RawMessage) error {
+	type bounded struct {
+		Matches []json.RawMessage `json:"matches"`
+		Files   []json.RawMessage `json:"files"`
+	}
+	var decoded bounded
+	switch command {
+	case protocol.CmdSearch:
+		if len(data) > protocol.MaxSearchResponseBytes {
+			return fmt.Errorf("the tab's search response exceeded %d bytes", protocol.MaxSearchResponseBytes)
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || len(decoded.Matches) > protocol.MaxSearchResults {
+			return errors.New("the tab returned an invalid or oversized search result")
+		}
+	case protocol.CmdReadMany:
+		if len(data) > protocol.MaxReadManyResponseBytes {
+			return fmt.Errorf("the tab's grouped-read response exceeded %d bytes", protocol.MaxReadManyResponseBytes)
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || len(decoded.Files) > protocol.MaxReadManyPaths {
+			return errors.New("the tab returned an invalid or oversized grouped-read result")
+		}
+	case protocol.CmdApplyPatch:
+		if len(data) > protocol.MaxPatchResponseBytes {
+			return fmt.Errorf("the tab's patch response exceeded %d bytes", protocol.MaxPatchResponseBytes)
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || len(decoded.Files) > protocol.MaxPatchPaths {
+			return errors.New("the tab returned an invalid or oversized patch result")
+		}
+	}
+	return nil
 }
 
 // translate rewrites the registry's sentinel errors into something an agent can act

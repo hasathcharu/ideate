@@ -1,4 +1,4 @@
-/** Identifies which document a localStorage draft belongs to. */
+/** Identifies which document a persisted draft belongs to. */
 export type DocId = string
 
 /** Safe, non-secret session fields passed to the client. Never a token. */
@@ -36,27 +36,22 @@ export interface Branch {
 export type ExportBackground = 'white' | 'black' | 'none' | 'theme'
 
 /**
- * How dense a PNG export is rasterized.
- *
- * Every mode resolves to a single pixel multiplier at export time, once the
- * drawing's natural size is known — which is the reason this is a *spec* rather
- * than a number. `width`/`height` cannot be turned into a multiplier before the
- * diagram has been rendered, and that is also why only one of the two is ever
- * carried: the aspect ratio fixes the other, so offering both would be offering
- * a way to state a contradiction.
- *
- *  - `auto` — the size-aware default (`rasterScale`), which pushes a small
- *    diagram up toward a target long edge and keeps a large one dense.
- *  - `multiplier` — a flat 1× / 2× / 3× of the diagram's natural size.
- *  - `dpi` — a print density, against CSS's 96px-per-inch reference.
- *  - `width` / `height` — an exact pixel size on that one axis.
+ * How dense a PNG export is rasterized. Every mode resolves to a single pixel multiplier at export
+ * time, once the drawing's natural size is known — which is the reason this is a *spec* rather than
+ * a number.
  */
 export type PngScale =
-  | { mode: 'auto' }
   | { mode: 'multiplier'; value: number }
   | { mode: 'dpi'; value: number }
   | { mode: 'width'; value: number }
   | { mode: 'height'; value: number }
+
+/** SVGs can either keep the configured Mermaid palette or carry light and dark
+ * variants that follow the viewer's `prefers-color-scheme`. */
+export type SvgThemeMode = 'forced' | 'dynamic'
+
+/** Action used by the primary half of the GitHub commit split button. */
+export type PreferredCommitAction = 'generated' | 'custom'
 
 /** Persisted app configuration (localStorage only — never secrets). */
 export interface AppConfig {
@@ -67,6 +62,10 @@ export interface AppConfig {
    *  like the background choice beside it: someone exporting for print wants the
    *  next export at the same density, not back at the default. */
   pngScale: PngScale
+  /** Whether SVG exports keep the configured palette or follow the viewer. */
+  svgTheme: SvgThemeMode
+  /** Add breathing room and rounded clipping to image exports. */
+  exportFrame: boolean
   /** Editor pane width as a fraction (0–1) of the editor/preview split. */
   splitRatio: number
   /** File-tree sidebar width in pixels. */
@@ -76,17 +75,17 @@ export interface AppConfig {
   wrapLines: boolean
   /** Show the viewfinder (minimap) column beside the text editor. */
   minimap: boolean
+  /** Last commit action chosen from the split button. */
+  preferredCommitAction: PreferredCommitAction
   /** Which editor the unsaved scratch document uses (local mode, or before a
    *  file is opened). Persisted so a reload reopens the same surface. Mirrors
    *  `FileKind` (lib/tree.ts), spelled out here so the storage layer doesn't
    *  depend on the tree module. */
   scratchKind: 'mermaid' | 'markdown' | 'excalidraw'
-  /** Origin of the Agent Link service this deployment's tabs dial, overriding
-   *  `DEFAULT_MCP_ORIGIN` (lib/config.ts). Null means "use the default"; set
-   *  from the modal's Advanced options, chiefly to point at a service you run
-   *  yourself when the shared one is at capacity. Validated on the way in by
-   *  `validateMcpOrigin` (lib/mcpOrigin.ts) — https, or http on
-   *  localhost:7391. */
+  /**
+   * Origin of the Agent Link service this deployment's tabs dial, overriding `DEFAULT_MCP_ORIGIN`
+   * (lib/config.ts).
+   */
   mcpOrigin: string | null
   /** Raw YAML text of the global mermaid config — the single source of truth for
    *  theme, layout, and per-diagram settings. Edited via the settings cogwheel;
@@ -95,24 +94,10 @@ export interface AppConfig {
   mermaidConfig: string
 }
 
-/** Two pieces of Agent Link state are deliberately **not** in `AppConfig`, and the
- *  reason is the same fact that puts `mcpOrigin` firmly *in* it: config is shared
- *  by every tab on the origin.
- *
- *  - **The on/off switch** is per-tab (`sessionStorage`, via `loadAgentLink` /
- *    `saveAgentLink` in lib/storage.ts). Persisting it here meant one switch armed
- *    every tab opened afterwards, all of them raced for the bridge, and whichever
- *    won became the tab an agent drove. That left the human no way to say *which*
- *    tab to expose — which is the entire purpose of the switch.
- *  - **The pairing code** is per-tab for the same reason and one more: it is the
- *    credential that names this tab, so sharing it across the origin would make
- *    every tab answer to the same code and reintroduce exactly that race. It lives
- *    in `sessionStorage` too (`loadPairingCode` / `savePairingCode`), which is also
- *    what lets a reload rejoin the same session instead of orphaning the agent.
- *
- *  `mcpOrigin` is the opposite case and belongs here: *where the service is* is a
- *  property of the deployment, not of one tab, and a user who has switched to their
- *  own service means it for every tab they open. It is a URL, not a credential. */
+/**
+ * Two pieces of Agent Link state are deliberately **not** in `AppConfig`, and the reason is the
+ * same fact that puts `mcpOrigin` firmly *in* it: config is shared by every tab on the origin.
+ */
 
 /** A node in the repository file tree. */
 export interface TreeNode {

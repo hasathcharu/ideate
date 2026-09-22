@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { readFile } from '@/app/actions/github'
 import { renderToSvg } from '@/lib/mermaid'
 import { renderMarkdown, type MarkdownPart, type MarkdownRepoLocator } from '@/lib/markdown'
@@ -8,34 +8,14 @@ import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { fileKind } from '@/lib/tree'
 import { sceneSummary } from '@/lib/excalidraw'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
-import { docIdForFile, loadDraft } from '@/lib/storage'
+import { docIdForFile, readDraftResult } from '@/lib/storage'
 import { useInnerHtml } from '@/lib/hooks'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 
 /**
- * The preview that appears when a repo-relative link inside a markdown document
- * is hovered — enough of the linked file to tell whether it's the one you meant,
- * without leaving the document.
- *
- * Two things keep it cheap. Fetches are **cached per repo+branch+path** for the
- * lifetime of the page, since a document usually links the same handful of files
- * repeatedly. And the rendered preview is built from a **truncated** copy of the
- * source, so a 3000-line document doesn't get laid out to fill a 300px card.
- *
- * **The card survives the pointer landing on it.** It used to be
- * `pointer-events: none`, on the theory that a preview never has to negotiate
- * hover with the link that opened it — but the card is placed *under* the link,
- * which is the direction a pointer drifts while reading, and it vanished the
- * moment it was reached. So it takes hover itself: entering it cancels the close
- * the reading pane scheduled when the pointer left the link (`HOVER_CLOSE_MS` in
- * `MarkdownPreview`), and leaving it schedules that close again.
- *
- * Its **contents** stay inert, though. The preview is rendered without a repo
- * locator, so the links inside it are still the raw relative paths the source
- * wrote — clicking one would navigate away from the editor to a path that isn't a
- * route. It is a preview, not a menu; the file itself is one click away on the
- * link that opened this.
+ * The preview that appears when a repo-relative link inside a markdown document is hovered — enough
+ * of the linked file to tell whether it's the one you meant, without leaving the document.
  */
 
 /** Longest prefix of a document that gets rendered into the card. Past this the
@@ -48,6 +28,21 @@ type Loaded =
   | { ok: false; message: string }
 
 const cache = new Map<string, Loaded>()
+
+const CARD_WIDTH = 380
+const CARD_MAX_HEIGHT = 300
+
+function cardPosition(anchor: HTMLElement): { left: number; top: number } {
+  const rect = anchor.getBoundingClientRect()
+  const left = Math.min(
+    Math.max(8, rect.left),
+    Math.max(8, window.innerWidth - CARD_WIDTH - 8),
+  )
+  const below = rect.bottom + 8
+  const flip = below + CARD_MAX_HEIGHT > window.innerHeight && rect.top > CARD_MAX_HEIGHT
+  const top = flip ? Math.max(8, rect.top - CARD_MAX_HEIGHT - 8) : below
+  return { left, top }
+}
 
 function cacheKey(repo: MarkdownRepoLocator, path: string): string {
   return `${repo.owner}/${repo.name}@${repo.branch}:${path}`
@@ -66,8 +61,9 @@ export interface FileHoverCardProps {
   repo: MarkdownRepoLocator
   /** Repo-relative path of the linked file. */
   path: string
-  /** Screen rect of the link, so the card can sit under it. */
-  anchor: DOMRect
+  /** Live link element, so the card can follow it without re-rendering the
+   *  entire Markdown document on every scroll frame. */
+  anchor: HTMLElement
   config: MermaidUserConfig | null
   /** The pointer reached the card — cancel the pending close. */
   onPointerEnter: () => void
@@ -83,6 +79,7 @@ export default function FileHoverCard({
   onPointerEnter,
   onPointerLeave,
 }: FileHoverCardProps) {
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const key = cacheKey(repo, path)
   const [loaded, setLoaded] = useState<Loaded | null>(() => cache.get(key) ?? null)
 
@@ -94,20 +91,18 @@ export default function FileHoverCard({
     }
     let cancelled = false
     setLoaded(null)
-    void readFile(repo.owner, repo.name, path, repo.branch).then((res) => {
-      // A never-committed file isn't on the branch, so the read 404s — but the
-      // file does exist here, in the sidebar and one click away, and its draft is
-      // the only copy. Falling back to it keeps the preview from claiming a file
-      // the app will happily open cannot be read. (It doubles as a fallback for a
-      // committed file whose read failed and whose working copy we still hold.)
+    void readFile(repo.owner, repo.name, path, repo.branch).then(async (res) => {
+      // A never-committed file isn't on the branch, so the read 404s — but the file does exist
+      // here, in the sidebar and one click away, and its draft is the only copy.
       const draft = res.ok
         ? null
-        : loadDraft(docIdForFile(repo.owner, repo.name, repo.branch, path))
+        : await readDraftResult(docIdForFile(repo.owner, repo.name, repo.branch, path))
       const result: Loaded = res.ok
         ? { ok: true, content: res.data.content }
-        : draft
-          ? { ok: true, content: draft.content }
-          : { ok: false, message: res.error.message }
+        : draft?.status === 'ok'
+          ? { ok: true, content: draft.value.content }
+          : { ok: false, message: draft?.status === 'invalid' || draft?.status === 'unavailable'
+            ? `Draft is ${draft.status} in browser storage.` : res.error.message }
       // A dead session is global, not local to this preview — the shared handler
       // signs out and navigates, so there is nothing to show here.
       if (!res.ok && handleExpiredSession(res.error)) return
@@ -123,19 +118,45 @@ export default function FileHoverCard({
   const Icon = kind === 'excalidraw' ? ExcalidrawIcon : kind === 'markdown' ? MarkdownIcon : MermaidIcon
 
   // Placed under the link, flipped above it when there isn't room, and clamped
-  // to the viewport horizontally. Fixed positioning, so the numbers are screen
-  // coordinates exactly as `getBoundingClientRect` reports them.
-  const width = 380
-  const maxHeight = 300
-  const left = Math.min(Math.max(8, anchor.left), Math.max(8, window.innerWidth - width - 8))
-  const below = anchor.bottom + 8
-  const flip = below + maxHeight > window.innerHeight && anchor.top > maxHeight
-  const top = flip ? Math.max(8, anchor.top - maxHeight - 8) : below
+  // to the viewport horizontally. Updating the fixed coordinates directly is
+  // important: a React state update here would reconcile the large Markdown
+  // tree on every scroll frame.
+  const initialPosition = cardPosition(anchor)
+
+  useEffect(() => {
+    let frame = 0
+    const update = () => {
+      frame = 0
+      const card = cardRef.current
+      if (!card || !anchor.isConnected) return
+      const next = cardPosition(anchor)
+      card.style.left = `${next.left}px`
+      card.style.top = `${next.top}px`
+    }
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update)
+    }
+    // Scroll doesn't bubble, but it is observable during capture from any
+    // scrolling ancestor. Resize can change both clamping and the flip point.
+    window.addEventListener('scroll', schedule, true)
+    window.addEventListener('resize', schedule)
+    return () => {
+      window.removeEventListener('scroll', schedule, true)
+      window.removeEventListener('resize', schedule)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [anchor])
 
   return (
     <div
+      ref={cardRef}
       className="fixed z-50 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
-      style={{ left, top, width, maxHeight }}
+      style={{
+        left: initialPosition.left,
+        top: initialPosition.top,
+        width: CARD_WIDTH,
+        maxHeight: CARD_MAX_HEIGHT,
+      }}
       role="tooltip"
       onMouseEnter={onPointerEnter}
       onMouseLeave={onPointerLeave}

@@ -1,0 +1,5 @@
+{
+  "t": "req",
+  "id": 21,
+  "command": { "cmd": "manifest" }
+}

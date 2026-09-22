@@ -1,16 +1,4 @@
-/**
- * Preset diagram themes for the "Theme" dropdown (next to the layout dropdown).
- *
- * Each preset is a native mermaid `themeVariables` palette layered on the `base`
- * theme — the only built-in theme that honors `themeVariables` overrides.
- * Selecting one injects `theme` + `themeVariables` into the YAML config (the
- * single source of truth) via `setThemeInYaml`, which both retunes every diagram
- * render and recolors the app chrome (see `applyThemeToSite`).
- *
- * The palettes below mirror popular editor color schemes (zinc, Tokyo Night,
- * Catppuccin, Nord, Dracula, GitHub, Solarized, One Dark, Gruvbox, Rosé Pine,
- * Everforest, Monokai).
- */
+/** Preset diagram themes for the "Theme" dropdown (next to the layout dropdown). */
 
 export interface ThemePreset {
   /** Stable id used as the Select value and for round-trip matching. */
@@ -66,24 +54,24 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
       background: '#18181B',
       primaryColor: '#27272A',
       primaryTextColor: '#FAFAFA',
-      primaryBorderColor: '#52525B',
+      primaryBorderColor: '#A1A1AA',
       lineColor: '#71717A',
       secondaryColor: '#3F3F46',
       rowOdd: '#3F3F46',
       tertiaryColor: '#52525B',
       mainBkg: '#27272A',
       rowEven: '#27272A',
-      nodeBorder: '#52525B',
+      nodeBorder: '#A1A1AA',
       clusterBkg: '#3F3F46',
-      clusterBorder: '#52525B',
+      clusterBorder: '#A1A1AA',
       edgeLabelBackground: '#18181B',
       actorBkg: '#27272A',
-      actorBorder: '#52525B',
+      actorBorder: '#A1A1AA',
       signalColor: '#FAFAFA',
       signalTextColor: '#FAFAFA',
       sequenceNumberColor: '#18181B',
       labelBoxBkgColor: '#27272A',
-      labelBoxBorderColor: '#52525B',
+      labelBoxBorderColor: '#A1A1AA',
       noteBkgColor: '#FDE68A',
       noteTextColor: '#18181B',
     },

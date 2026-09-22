@@ -5,6 +5,8 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Eye,
+  EyeOff,
   Loader2,
   OctagonAlert,
   Plug,
@@ -28,39 +30,9 @@ import type { AgentLinkStatus } from '@/lib/agentLink'
 import { DEFAULT_MCP_ORIGIN, REPO_URL } from '@/lib/config'
 import { normalizeMcpOrigin, validateMcpOrigin } from '@/lib/mcpOrigin'
 
-/**
- * Turning Agent Link on and off, and handing over the pairing code.
- *
- * Its own modal rather than a row in the diagram-config dialog: it has nothing to
- * do with diagrams, and it applies to all three document kinds. And a modal rather
- * than a plain toolbar toggle because switching this on lets a process outside the
- * browser rewrite whatever document is open — that deserves reading a sentence
- * first, not one click on a button.
- *
- * There are **two copyable things in the open and their order is deliberate**: the
- * pairing code comes first, because it is what the human does every session and what
- * they change to point an agent at a different tab. The setup command comes second,
- * because it is run once and then never again. The third — the command that runs a
- * service of your own — sits inside Advanced options, beside the field that points
- * this tab at the result.
- *
- * The code has **two** copy buttons for two different destinations: the bare code for
- * a human writing a request around it, and `connectPrompt` for an agent, which needs
- * to be told what the eight characters are for.
- *
- * "Waiting" remains the ordinary resting state rather than a fault — the service is
- * shared and always up, but no agent has claimed this tab until one decides to.
- */
+/** Turning Agent Link on and off, and handing over the pairing code. */
 
-/**
- * The one-line ask, for handing to an agent instead of the bare code.
- *
- * The code alone is what a human needs, because they are about to type a request
- * around it. An agent pasted the same eight characters has to infer what to do with
- * them, so this spells out the one thing: attach to this tab. It names the tool
- * rather than only the product, because "Ideate" is a word an agent may not have
- * seen and `ideate_connect` is in its tool list.
- */
+/** The one-line ask, for handing to an agent instead of the bare code. */
 function connectPrompt(code: string): string {
   return `Connect to Ideate with ideate_connect using the pairing code ${code}.`
 }
@@ -171,7 +143,7 @@ export default function AgentLinkModal({
             </>
           ) : null}
 
-          <div className="rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground">
+          <div className="rounded-lg border bg-background p-3 text-xs text-muted-foreground">
             <p className="mb-2">
               One-time setup: register Ideate as an MCP server in your agent. Run it once —
               after that only the pairing code changes.
@@ -213,13 +185,7 @@ export default function AgentLinkModal({
   )
 }
 
-/**
- * The code, big enough to read off the screen to somebody.
- *
- * `tracking-widest` and a monospace face are not decoration: this is a string that
- * gets transcribed, and the Crockford alphabet's whole purpose (no I, L, O or U) is
- * defeated if the glyphs are ambiguous anyway.
- */
+/** The code, big enough to read off the screen to somebody. */
 function PairingCode({
   code,
   codeRef,
@@ -231,6 +197,8 @@ function PairingCode({
   onRegenerate: () => void
   disabled: boolean
 }) {
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => setRevealed(false), [code])
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex items-center justify-between gap-2">
@@ -249,10 +217,21 @@ function PairingCode({
       <div className="flex items-center gap-2">
         <code
           ref={codeRef}
-          className="min-w-0 flex-1 overflow-x-auto rounded bg-muted px-3 py-2 font-mono text-xl tracking-widest text-foreground"
+          className="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-3 py-2 font-mono text-xl tracking-widest text-foreground"
         >
-          {code || '········'}
+          {code ? (revealed ? code : '••••-••••') : '····-····'}
         </code>
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="mt-0.5 flex-none"
+          onClick={() => setRevealed((value) => !value)}
+          disabled={!code}
+          aria-label={revealed ? 'Hide pairing code' : 'Show pairing code'}
+          title={revealed ? 'Hide pairing code' : 'Show pairing code'}
+        >
+          {revealed ? <EyeOff /> : <Eye />}
+        </Button>
         <CopyButton text={code} target={codeRef} label="pairing code" />
       </div>
       {/* A second copy affordance rather than a second thing to read: the code row
@@ -266,12 +245,9 @@ function PairingCode({
 }
 
 /**
- * Advanced options, behind a disclosure because almost nobody needs them — and
- * directly below the capacity message, because "run your own" and the field that
- * points at it should not be in different parts of the dialog.
- *
- * A native `<details>` rather than a Radix collapsible: it is one toggle with no
- * state to coordinate, and the element already does the keyboard and ARIA work.
+ * Advanced options, behind a disclosure because almost nobody needs them — and directly below the
+ * capacity message, because "run your own" and the field that points at it should not be in
+ * different parts of the dialog.
  */
 function AdvancedOptions({
   mcpOrigin,
@@ -345,7 +321,7 @@ function AdvancedOptions({
         )}
         <p className="text-muted-foreground">Run one locally:</p>
         <div className="flex items-start gap-2">
-          <pre className="min-w-0 flex-1 overflow-x-auto rounded bg-muted/50 p-2 font-mono text-foreground">
+          <pre className="min-w-0 flex-1 overflow-x-auto rounded border bg-background p-2 font-mono text-foreground">
             <code ref={dockerRef}>{MCP_DOCKER_COMMAND}</code>
           </pre>
           <CopyButton text={MCP_DOCKER_COMMAND} target={dockerRef} label="docker command" />
@@ -364,14 +340,9 @@ function AdvancedOptions({
 }
 
 /**
- * Copy `text`, with a fallback, because the async Clipboard API is refused more
- * often than it looks: it needs a secure context *and* transient user activation,
- * and some embedded or automated browsers decline it outright even then. A copy
- * button that silently does nothing is worse than no button, so this tries three
- * things in descending order of niceness and only claims success when one worked.
- *
- * The last resort is not a failure message but a **selection** of the visible text,
- * so ⌘C finishes the job the button started.
+ * Copy `text`, with a fallback, because the async Clipboard API is refused more often than it
+ * looks: it needs a secure context *and* transient user activation, and some embedded or automated
+ * browsers decline it outright even then.
  */
 async function copyText(
   text: string,
@@ -413,11 +384,10 @@ async function copyText(
   return 'selected'
 }
 
-/** Mirrors the copy affordance in `ExportMenu`: a ghost button and a toast, with a
- *  moment of acknowledgement on the icon itself so the click is not silent.
- *
- *  Icon-only unless `children` are given, and `target` is optional: text that is not
- *  rendered anywhere has nothing to fall back to selecting. */
+/**
+ * Mirrors the copy affordance in `ExportMenu`: a ghost button and a toast, with a moment of
+ * acknowledgement on the icon itself so the click is not silent.
+ */
 function CopyButton({
   text,
   target,
@@ -502,7 +472,7 @@ function Status({
   // field that does it — is directly below.
   if (status === 'full') {
     return (
-      <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+      <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-background p-3 text-sm">
         <ServerCrash className="mt-0.5 size-4 flex-none text-destructive" />
         <div className="flex min-w-0 flex-col items-start gap-2">
           <span className="wrap-break-word">

@@ -1,12 +1,44 @@
 # 0014. Conventions, and the bugs behind them
 
-**Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/hooks, app/components/AppShell.tsx, app/components/ui/skeleton.tsx`
+**Status** accepted &nbsp;·&nbsp; **Touches** `app/lib/hooks.ts, app/components/AppShell.tsx, app/components/ui/skeleton.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
 ## Conventions
+
+- `WorkspaceStore` advances working revisions synchronously when the shell edits
+  content. Async file, tree, history, and save callers capture workspace identity
+  and a request or activation generation. A stale read is discarded; a completed
+  write settles into its originating document record even if the user navigated
+  away. The sidebar's dirty and pending sets combine recovered draft metadata
+  with current workspace records, so a settled record wins over stale marker
+  state. `AppShell` orchestrates these commands and owns page-level state, while
+  `AppLayout`, `AppHeader`, `WorkspaceSidebar`, `DocumentToolbar`,
+  `DocumentSurface`, and `AppDialogs` are presentation boundaries that receive
+  display data and intent callbacks. They do not read storage or mutate
+  `WorkspaceStore` directly. Version-history request state and pagination live in
+  `useHistoryController`, keyed by the settled workspace and path identity. The
+  Agent Link capability adapter, sidebar derivation, appearance derivation, and
+  pane geometry live in `useAgentLinkController`, `useWorkspaceTree`,
+  `useAppearanceController`, and `useResizableLayout`; these hooks remain narrow
+  clients of the same document owner rather than alternate state owners.
+  Multi-document agent patches reserve every touched identity with
+  `WorkspaceStore.commandMany`, validate all working revisions and hunks before
+  mutation, persist every draft change in one IndexedDB transaction, and only then
+  advance the records. A patch never partially acknowledges.
+
+- IndexedDB document writes are asynchronous and ordered. A caller reports durability only
+  after the transaction completes. Navigation awaits the outgoing dirty draft and remains on
+  the current document when persistence fails. Key listings do not load document bodies.
+  Related local saved-file and draft changes share one transaction.
+
+- Preserve a dirty draft's original base revision across subsequent autosaves.
+  Reopening a draft compares that base with the saved revision; unknown or changed
+  bases require reconciliation. If a save succeeds while newer working edits remain,
+  rebase the remaining draft envelope to the returned saved revision without replacing
+  its newer content.
 
 - TypeScript strict; server actions return `ActionResult<T>` so the client can
   branch on errors (especially `kind: 'conflict'` for 409/422, and
@@ -16,17 +48,20 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
 - **`useDebouncedValue` must stay keyed on the open document** (`docId`). It takes a
   `resetKey` that adopts the incoming value immediately when it changes; a delay
   only makes sense while editing *one* document. Unkeyed, everything downstream
-  (preview, export, the draft autosave) sees the *outgoing* document for a full
-  delay window — which rendered mermaid's parse-error dump for the scene JSON on
-  every canvas→diagram switch, and wrote the previous file's text into the new
-  file's localStorage draft slot.
-- **The scratch/file draft is written only while the document is dirty**, and
-  cleared the moment it isn't (the autosave effect in `AppShell`). Saving
-  unconditionally persisted the auto-inserted starter template as a draft as soon
-  as it was displayed; that draft then won on every later load, so anyone who had
-  merely *opened* a scratch document was pinned to the template text of that day
-  and edits to `templateFor` never reached them. Keep the `dirty` gate on any new
-  autosave path.
+  (preview and export) sees the *outgoing* document for a full delay window.
+  That can render scene JSON as a Mermaid parse error. Keep the key and value in
+  one `{key, value}` snapshot. On a key mismatch, return the incoming value directly. Do not replace
+  this with two state setters during render: a pass can commit with the outgoing
+  value and mount a preview for the wrong document. The effect updates the snapshot
+  after the delay while the document identity stays the same.
+- **The scratch/file draft is written only while the document is dirty**, or
+  while a named file is pending its first save. Persistence uses live text,
+  independently of preview debounce. Navigation flushes an outgoing draft and
+  stays on the document if the write fails. A clean saved document clears its
+  draft (the autosave effect in `AppShell`). Saving
+  unconditionally would persist the starter template as a draft and prevent later
+  updates to `templateFor` from reaching untouched documents. Keep the dirty or
+  pending gate on any new autosave path.
 - **`refreshTree` never blanks the list.** Discarding the stale list is the caller's
   decision, and only the first load and a repo/branch switch
   (`resetForRepoSwitch`) want it; the incidental refreshes after a

@@ -8,30 +8,15 @@ import type { OrderedExcalidrawElement } from '@excalidraw/excalidraw/element/ty
 import '@excalidraw/excalidraw/index.css'
 import { parseScene, scenesEqual } from '@/lib/excalidraw'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 /**
- * The real Excalidraw editor. Loaded only through `Canvas.tsx`'s dynamic import —
- * never import this module directly, or the ~1MB editor bundle (plus its CSS)
- * lands in the main chunk for users who only ever open mermaid files.
- *
- * The contract deliberately mirrors `Editor.tsx`: `value` is the file's text and
- * `onChange` reports new text. Keeping scenes as a serialized string means every
- * piece of AppShell's plumbing — dirty tracking, localStorage drafts, commit,
- * conflict resolution, history — works on scenes with no special-casing.
+ * The real Excalidraw editor. Loaded only through `Canvas.tsx`'s dynamic import — never import this
+ * module directly, or the ~1MB editor bundle (plus its CSS) lands in the main chunk for users who
+ * only ever open mermaid files.
  */
 
-/**
- * appState the app imposes on the editor rather than reading from the file.
- *
- * `exportScale` sets the resolution of Excalidraw's *own* export actions — the
- * right-click "Copy to clipboard as PNG", Shift+Alt+C, and the copy-as-PNG entry
- * in the command palette. Its default is the display's `devicePixelRatio`, so on a
- * non-retina screen it silently falls to 1× and the copied bitmap looks soft. 3 is
- * the maximum Excalidraw offers in its own UI (its EXPORT_SCALES is [1, 2, 3]).
- *
- * Safe to force: `exportScale` is one of the keys Excalidraw excludes from
- * `serializeAsJSON`, so overriding it can never dirty a file or reach a commit.
- */
+/** appState the app imposes on the editor rather than reading from the file. */
 const IMPOSED_APP_STATE = { exportScale: 3 } as const
 
 export interface CanvasInnerProps {
@@ -56,22 +41,8 @@ export default function CanvasInner({
   backgroundColor,
 }: CanvasInnerProps) {
   /**
-   * Everything in `IMPOSED_APP_STATE`, plus the theme — imposed on *every* path
-   * into the editor, mount and external sync alike.
-   *
-   * The theme has to be spelled out here because `restore` (below) fills a scene
-   * out to a *complete* appState, `theme` included, and Excalidraw prefers the
-   * appState it is handed over the `theme` prop: `syncActionResult` resolves it as
-   * `actionResult.appState.theme || this.props.theme`. A scene file carries no
-   * theme of its own, so what `restore` hands back is its default — light. An
-   * external edit arriving while a dark palette was active therefore knocked the
-   * canvas out of dark mode, and it stayed out until the palette changed or the
-   * file was reopened. That is what an agent drawing on a canvas looked like:
-   * a scene ignoring the theme around it, fixed by navigating away and back.
-   *
-   * Safe to impose for the same reason as `exportScale`: `theme` is one of the
-   * keys Excalidraw excludes from `serializeAsJSON`, so forcing it can never
-   * dirty a file or reach a commit.
+   * Everything in `IMPOSED_APP_STATE`, plus the theme — imposed on *every* path into the editor,
+   * mount and external sync alike.
    */
   const imposedAppState = useMemo(() => ({ ...IMPOSED_APP_STATE, theme }), [theme])
 
@@ -90,18 +61,7 @@ export default function CanvasInner({
   // through the sync effect below instead.
   const [initialScene] = useState(() => parseScene(value))
 
-  /**
-   * The canvas background the *file* declares, kept separate from the one being
-   * displayed.
-   *
-   * The visible background follows the active theme, which makes it chrome rather
-   * than document content — but `viewBackgroundColor` is one of the four appState
-   * keys Excalidraw *does* persist. Serializing it as-displayed would rewrite the
-   * field on every theme change, so every scene in the repo would go dirty the
-   * moment the user picked a different palette. So the displayed color is imposed
-   * for rendering only, and the file's own value is substituted back on the way
-   * out (see `handleChange`).
-   */
+  /** The canvas background the *file* declares, kept separate from the one being displayed. */
   const storedBackgroundRef = useRef<string>(
     typeof initialScene?.appState?.viewBackgroundColor === 'string'
       ? initialScene.appState.viewBackgroundColor
@@ -112,35 +72,11 @@ export default function CanvasInner({
   const [apiReady, setApiReady] = useState(false)
 
   const hostRef = useRef<HTMLDivElement | null>(null)
-  /**
-   * "Maximized" fills the browser window instead of entering real fullscreen. The
-   * Fullscreen API hides the browser's own chrome, which is more than is wanted
-   * for expanding a pane; a fixed, inset-0 overlay gives the same working area
-   * with tabs and the URL bar still visible.
-   *
-   * Note there's deliberately no Escape binding here, unlike the mermaid preview:
-   * Escape is Excalidraw's own shortcut for clearing a selection and cancelling the
-   * active tool, so stealing it would break drawing. The toggle stays on screen in
-   * maximized mode, so there's always a visible way back.
-   */
+  /** "Maximized" fills the browser window instead of entering real fullscreen. */
   const [isMaximized, setIsMaximized] = useState(false)
   const toggleMaximized = useCallback(() => setIsMaximized((v) => !v), [])
 
-  /**
-   * What Excalidraw is told to paint as the canvas background.
-   *
-   * Not the theme color itself — `.excalidraw.theme--dark canvas` carries
-   * `filter: invert(93%) hue-rotate(180deg)`, so any color painted *into* the
-   * canvas comes back out inverted. Handing it a dark theme background produced a
-   * washed-out light canvas that didn't match the mermaid preview beside it.
-   *
-   * Instead the canvas is cleared to `transparent` (Excalidraw special-cases that
-   * string) and the real color goes on the host element behind it. The filter
-   * applies to `canvas` only, so the background renders at exactly the requested
-   * value while the *drawing* still gets inverted — which is what makes strokes
-   * legible on a dark surface. The export path composites its background outside
-   * the filter for the same reason.
-   */
+  /** What Excalidraw is told to paint as the canvas background. */
   const displayBackground = backgroundColor ? 'transparent' : undefined
 
   // Push theme background changes onto the live canvas. `NEVER` keeps a theme
@@ -157,15 +93,9 @@ export default function CanvasInner({
     })
   }, [apiReady, displayBackground])
 
-  // Frame the drawing when a scene first opens.
-  //
-  // Scroll and zoom are deliberately *not* part of the saved file — Excalidraw
-  // excludes them from `serializeAsJSON`, and persisting them would make merely
-  // panning around dirty the file. The cost is that a reopened scene would
-  // otherwise land at the canvas origin, with the drawing wherever its absolute
-  // coordinates happen to put it — frequently off-screen. `initialData`'s
-  // `scrollToContent` is unreliable here because the container is still being laid
-  // out at mount, so re-frame once the editor is actually live.
+  // Frame the drawing when a scene first opens. Scroll and zoom are deliberately *not* part of the
+  // saved file — Excalidraw excludes them from `serializeAsJSON`, and persisting them would make
+  // merely panning around dirty the file.
   useEffect(() => {
     const api = apiRef.current
     if (!apiReady || !api) return
@@ -313,15 +243,19 @@ export default function CanvasInner({
           viewMode
             ? undefined
             : () => (
-                <button
-                  type="button"
-                  className="canvas-fullscreen-button"
-                  onClick={toggleMaximized}
-                  title={isMaximized ? 'Exit full window' : 'Fill window'}
-                  aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
-                >
-                  {isMaximized ? <Minimize2 /> : <Maximize2 />}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="canvas-fullscreen-button"
+                      onClick={toggleMaximized}
+                      aria-label={isMaximized ? 'Exit full window' : 'Fill window'}
+                    >
+                      {isMaximized ? <Minimize2 /> : <Maximize2 />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{isMaximized ? 'Exit full window' : 'Fill window'}</TooltipContent>
+                </Tooltip>
               )
         }
         onChange={viewMode ? undefined : handleChange}

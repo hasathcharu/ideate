@@ -1,14 +1,9 @@
 import type { TreeNode } from './types'
 
-/** Which editor a file opens in.
- *
- *  - `mermaid` — pure diagram source, edited beside a rendered diagram.
- *  - `markdown` — a prose document, edited beside rendered HTML. Any
- *    ```mermaid fence inside it renders as a diagram (see lib/markdown.ts).
- *  - `excalidraw` — a JSON scene, edited on a full-bleed canvas.
- *
- *  All three are plain text on disk, so every GitHub read/write path treats
- *  them alike — only the editing surface and the export pipeline differ. */
+/**
+ * Which editor a file opens in. - `mermaid` — pure diagram source, edited beside a rendered
+ * diagram.
+ */
 export type FileKind = 'mermaid' | 'markdown' | 'excalidraw'
 
 /** File extensions treated as pure Mermaid diagrams. `.md` is deliberately NOT
@@ -21,11 +16,16 @@ export const MARKDOWN_EXTENSIONS = ['.md', '.markdown'] as const
 /** File extension treated as an Excalidraw scene. */
 export const EXCALIDRAW_EXTENSION = '.excalidraw'
 
+export const SVG_EXTENSION = '.svg'
+export const RASTER_IMAGE_EXTENSIONS = ['.png', '.jpg', '.gif'] as const
+export const IMAGE_EXTENSIONS = [SVG_EXTENSION, ...RASTER_IMAGE_EXTENSIONS] as const
+
 /** Every extension the file tree surfaces, across all kinds. */
 export const DIAGRAM_EXTENSIONS = [
   ...MERMAID_EXTENSIONS,
   ...MARKDOWN_EXTENSIONS,
   EXCALIDRAW_EXTENSION,
+  ...IMAGE_EXTENSIONS,
 ] as const
 
 /** Human-readable list of the accepted extensions, for validation messages. */
@@ -34,6 +34,15 @@ export const DIAGRAM_EXTENSIONS_LABEL = DIAGRAM_EXTENSIONS.join(', ')
 export function isDiagramFile(path: string): boolean {
   const lower = path.toLowerCase()
   return DIAGRAM_EXTENSIONS.some((ext) => lower.endsWith(ext))
+}
+
+export function isSvgFile(path: string): boolean {
+  return path.toLowerCase().endsWith(SVG_EXTENSION)
+}
+
+export function isRasterImageFile(path: string): boolean {
+  const lower = path.toLowerCase()
+  return RASTER_IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
 export function isExcalidrawFile(path: string): boolean {
@@ -46,13 +55,8 @@ export function isMarkdownFile(path: string): boolean {
 }
 
 /**
- * The recognized extension `path` ends with, as it is actually spelled there
- * (case preserved), or `''` for a path with none.
- *
- * Matched against {@link DIAGRAM_EXTENSIONS} rather than cut at the last `.`,
- * because the extension is what decides a file's *kind* — and only a recognized
- * one does. `notes.v2.md` ends in `.md`; `notes.v2` ends in nothing this app can
- * open, and answering `.v2` for it would invite a caller to treat it as one.
+ * The recognized extension `path` ends with, as it is actually spelled there (case preserved), or
+ * `''` for a path with none.
  */
 export function fileExtension(path: string): string {
   const lower = path.toLowerCase()
@@ -61,9 +65,9 @@ export function fileExtension(path: string): string {
 }
 
 /**
- * Which editor `path` opens in. Mermaid is the fallback: an unknown (or absent)
- * extension lands in the plain text editor, which degrades to "edit the raw
- * text" rather than to a canvas that can't parse the file.
+ * Which editor `path` opens in. Mermaid is the fallback: an unknown (or absent) extension lands in
+ * the plain text editor, which degrades to "edit the raw text" rather than to a canvas that can't
+ * parse the file.
  */
 export function fileKind(path: string | null): FileKind {
   if (!path) return 'mermaid'
@@ -72,11 +76,7 @@ export function fileKind(path: string | null): FileKind {
   return 'mermaid'
 }
 
-/**
- * Build a nested tree from a flat list of file paths (the shape returned by the
- * Git trees API). Only directories that contain diagram files are included.
- * Directories sort before files; both alphabetically (case-insensitive).
- */
+/** Build a nested tree from a flat list of file paths (the shape returned by the Git trees API). */
 export function buildTree(filePaths: string[]): TreeNode[] {
   const root: TreeNode = { name: '', path: '', type: 'dir', children: [] }
 
@@ -122,14 +122,7 @@ export function collectDirPaths(node: TreeNode): string[] {
   return [node.path, ...(node.children ?? []).flatMap(collectDirPaths)]
 }
 
-/**
- * Whether `path` matches a sidebar search `query`.
- *
- * Every whitespace-separated term has to appear somewhere in the path, in any
- * order — so `arch md` finds `docs/architecture/overview.md`. Matching the whole
- * path rather than the file name is what makes a folder name a usable search
- * term, which is most of why anyone searches a file tree at all.
- */
+/** Whether `path` matches a sidebar search `query`. */
 export function pathMatchesQuery(path: string, query: string): boolean {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return true

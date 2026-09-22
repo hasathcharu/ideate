@@ -19,6 +19,7 @@ export interface ConflictModalProps {
   busy: boolean
   onOverwrite: () => void
   onStartOver: () => void
+  reconciliation?: boolean
 }
 
 export default function ConflictModal({
@@ -29,15 +30,21 @@ export default function ConflictModal({
   busy,
   onOverwrite,
   onStartOver,
+  reconciliation = false,
 }: ConflictModalProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>This file changed on GitHub</DialogTitle>
+          <DialogTitle>{reconciliation ? 'Reconcile this saved draft' : 'This file changed on GitHub'}</DialogTitle>
           <DialogDescription>
-            <code>{path}</code> was updated on <code>{branch}</code> since you opened it, so
-            your save was rejected.
+            {reconciliation ? (
+              <><code>{path}</code> has a saved draft whose original GitHub revision is different
+              or unknown. Reconcile it with the current <code>{branch}</code> version before saving.</>
+            ) : (
+              <><code>{path}</code> was updated on <code>{branch}</code> since you opened it, so
+              your save was rejected.</>
+            )}
           </DialogDescription>
         </DialogHeader>
         <ul className="space-y-2 text-sm text-muted-foreground">

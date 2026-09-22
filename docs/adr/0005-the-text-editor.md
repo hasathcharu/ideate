@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/components/Editor.tsx, app/components/Minimap.tsx, app/components/MarkdownPreview.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -10,8 +10,16 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
 
 `components/Editor.tsx` is one CodeMirror instance for both text kinds, with every
 per-document setting swapped through a `Compartment` (language, theme, soft wrap)
-rather than by remounting — a remount drops undo history and cursor position on
-every file switch. The line-wrap toggle is an app preference
+rather than by remounting. Each full document identity retains its own `EditorState`,
+including undo history and selection, while the same `EditorView` displays the active
+state. Switching identities never records the previous document as an undoable
+replacement. A deliberate external edit or revert within one identity remains
+undoable. Leaving text mode for the canvas or entering Diff unmounts the editor and
+ends these in-memory history sessions; the working content remains in `WorkspaceStore`.
+Agent Link's whole-document writes and each open-file part of an atomic workspace
+patch dispatch one deliberate transaction through `EditorHandle`, so they are
+immediately visible to the next command and remain one undo step.
+The line-wrap toggle is an app preference
 (`AppConfig.wrapLines`), so it survives reloads.
 
 It **does not use `basicSetup`**: that bundle is spelled out as `baseSetup` because
@@ -38,6 +46,17 @@ three of its pieces need configuring rather than accepting.
 
 Anything added to that list has to keep the gutter order (line numbers → changes →
 folds) and the single `autocompletion()`.
+
+Markdown fenced blocks register their declared language's comment tokens. The
+shared Mod-/ command therefore uses `%%` in Mermaid, `//` in JavaScript, `#` in
+Python, block comments in HTML/CSS, and the corresponding syntax for the other
+registered languages instead of falling back to Markdown's HTML comment. Unknown
+languages keep the Markdown fallback. The drawn caret is two pixels wide.
+
+`createEditorExtensions` groups the stable base setup, ordered gutters,
+document-specific compartments, and interaction listeners. It only assembles
+extensions; React still owns the single view lifecycle and `WorkspaceStore` remains
+the working-content owner.
 
 ### Find/replace floats over the top-right
 
@@ -82,6 +101,11 @@ theme classes, so theme rules do reach it. Two related rules:
   translucent bright accent over a dark theme composites *toward the accent*, which
   is what washed the selection (and the selected text) out. Mixing into the page
   color keeps a dark palette's selection dark at the same visual strength.
+
+Syntax categories use the contrast-checked `--syntax-*` tokens produced by the
+theme pipeline. Keywords, strings, literals, operators, variables, comments, and
+markup remain distinguishable by color rather than relying on font weight;
+Markdown's strong/emphasis styling keeps its authored semantic weight/style.
 
 The gutter sits on `--background` rather than `--secondary` for both reasons: the
 line numbers are `--muted-foreground`, which is measured against the page (see the

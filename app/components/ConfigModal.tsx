@@ -51,15 +51,12 @@ const yamlLanguage = StreamLanguage.define<unknown>({
 })
 
 function highlightStyle(): HighlightStyle {
-  const accent = 'var(--primary)'
-  const blend = (pct: number) => `color-mix(in oklab, var(--primary) ${pct}%, var(--foreground))`
   return HighlightStyle.define([
-    { tag: t.keyword, color: accent, fontWeight: '600' },
-    { tag: t.comment, color: 'var(--muted-foreground)', fontStyle: 'italic' },
-    { tag: t.string, color: blend(55) },
-    { tag: [t.atom, t.bool], color: blend(40) },
-    { tag: t.number, color: blend(40) },
-    { tag: t.meta, color: 'var(--muted-foreground)' },
+    { tag: t.keyword, color: 'var(--syntax-keyword)' },
+    { tag: t.comment, color: 'var(--syntax-comment)', fontStyle: 'italic' },
+    { tag: t.string, color: 'var(--syntax-string)' },
+    { tag: [t.atom, t.bool, t.number], color: 'var(--syntax-literal)' },
+    { tag: t.meta, color: 'var(--syntax-markup)' },
   ])
 }
 
@@ -107,12 +104,8 @@ export default function ConfigModal({
   onChangeRef.current = onChange
   valueRef.current = value
 
-  // A callback ref mounts CodeMirror the instant the host node attaches and
-  // tears it down when it detaches. This is immune to the portal + open/close
-  // animation timing of the Radix dialog (a plain mount effect can run before
-  // the portaled node exists, leaving an empty box). The dialog only renders
-  // its content while open, so the node attaches with the current value and
-  // detaches on close.
+  // A callback ref mounts CodeMirror the instant the host node attaches and tears it down when it
+  // detaches.
   const hostRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) {
       viewRef.current?.destroy()

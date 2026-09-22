@@ -27,15 +27,12 @@ export interface PromptModalProps {
    *  file, since the kind was already chosen in the menu that opened this. */
   suffix?: string
   /**
-   * What is selected when the dialog opens.
-   *
-   * `'all'` (the default) suits a suggested value that is meant to be replaced
-   * wholesale. `'name'` selects only the part after the last `/`, which is what
-   * renaming a file wants: the directory is still there to be edited — moving a
-   * file between folders is half the point of a rename — but the name is what
-   * the user came to change, so it is what typing replaces.
+   * What is selected when the dialog opens. `'all'` (the default) suits a suggested value that is
+   * meant to be replaced wholesale.
    */
   selection?: 'all' | 'name'
+  /** Use a multi-line field, for example when editing a full commit message. */
+  multiline?: boolean
   submitLabel?: string
   validate?: (value: string) => string | null
   onSubmit: (value: string) => void
@@ -51,6 +48,7 @@ export default function PromptModal({
   prefix = '',
   suffix = '',
   selection = 'all',
+  multiline = false,
   submitLabel = 'Create',
   validate,
   onSubmit,
@@ -58,6 +56,7 @@ export default function PromptModal({
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     if (open) {
@@ -66,17 +65,11 @@ export default function PromptModal({
     }
   }, [open, defaultValue])
 
-  // Select the editable part on open, so the suggested name can be replaced by
-  // typing. Deferred a frame: the dialog moves focus itself as it opens, and
-  // selecting before that would be undone.
-  //
-  // `selection: 'name'` narrows that to the segment after the last `/` — the
-  // caret still lands in a field holding the whole path, so the directory can be
-  // edited, but typing replaces only the file name.
+  // Select the editable part on open, so the suggested name can be replaced by typing.
   useEffect(() => {
     if (!open) return
     const frame = requestAnimationFrame(() => {
-      const input = inputRef.current
+      const input = multiline ? textareaRef.current : inputRef.current
       if (!input) return
       const slash = selection === 'name' ? defaultValue.lastIndexOf('/') : -1
       if (slash === -1) input.select()
@@ -84,7 +77,7 @@ export default function PromptModal({
       input.focus()
     })
     return () => cancelAnimationFrame(frame)
-  }, [open, selection, defaultValue])
+  }, [open, selection, defaultValue, multiline])
 
   const submit = () => {
     const trimmed = value.trim()
@@ -97,8 +90,8 @@ export default function PromptModal({
     onSubmit(full)
   }
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') submit()
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && (!multiline || e.metaKey || e.ctrlKey)) submit()
   }
   // A fixed prefix/suffix is shown *around* the field rather than inside it, so
   // the parts that can't change look like they can't.
@@ -134,6 +127,19 @@ export default function PromptModal({
                 <span className="shrink-0 text-muted-foreground select-none">{suffix}</span>
               ) : null}
             </div>
+          ) : multiline ? (
+            <textarea
+              ref={textareaRef}
+              id="prompt-input"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value)
+                setError(null)
+              }}
+              onKeyDown={onKeyDown}
+              className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 min-h-28 w-full resize-y rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:ring-[3px]"
+              autoFocus
+            />
           ) : (
             <Input
               ref={inputRef}

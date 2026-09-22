@@ -1,1 +1,1 @@
-{ "t": "res", "id": 5, "ok": false, "message": "No match for \"A --> B\" in the document." }
+{ "t": "res", "id": 5, "ok": false, "message": "No match for \"A --> B\" in the document.", "metrics": { "browserMs": 3 } }

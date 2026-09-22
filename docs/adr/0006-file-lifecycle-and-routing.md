@@ -2,7 +2,7 @@
 
 **Status** accepted &nbsp;·&nbsp; **Touches** `app/app/editor/page.tsx, app/components/AppShell.tsx, app/components/NewFileMenu.tsx, app/components/RepoPicker.tsx`
 
-The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md). This file holds the reasoning behind them — read it before changing any of them, and update it here when a decision actually changes.
+[`AGENTS.md`](../../AGENTS.md) states repository-wide boundaries and required reading. This record defines the detailed subsystem contracts and their reasoning. Read it before modifying this subsystem, and update it when a decision changes.
 
 ---
 
@@ -13,12 +13,16 @@ The invariants this record justifies are listed in [`CLAUDE.md`](../../CLAUDE.md
   (sign in → `/editor`).
 - `/editor` — the app (`app/editor/page.tsx` → `AppShell`). Reads `auth()`:
   signed-in → `mode="github"` (repo features on); `?mode=local` without a session
-  → `mode="local"` (editor + export only); otherwise redirects to `/`.
+  → `mode="local"` (local files, editor, and export); otherwise redirects to `/`.
 
-With a file open, its extension picks the editing surface. With nothing open —
-local mode, or before picking a file — there is no extension to read, so the user
+Both modes have a file tree, Save, and Restore. Gate them with `hasWorkspace`
+(a selected repository or local mode), not `githubEnabled`. A signed-in user
+without a selected repository has neither workspace.
+
+With a file open, its extension picks the editing surface. With nothing open,
+there is no extension to read, so the user
 chooses via a Diagram/Markdown/Canvas toggle backed by `AppConfig.scratchKind`.
-**Each kind gets its own localStorage draft slot** (`SCRATCH_DOC_ID` /
+**Each kind gets its own IndexedDB draft slot** (`SCRATCH_DOC_ID` /
 `SCRATCH_MARKDOWN_DOC_ID` / `SCRATCH_SCENE_DOC_ID`, resolved through
 `scratchDocIdFor`), so toggling parks the current work instead of overwriting it
 with content the other surface can't read. Route every scratch-slot lookup through
@@ -71,10 +75,10 @@ returns to. The filter itself is in memory only: one left on across a reload is 
 sidebar that looks like a repo with three files in it.
 
 **Renaming a never-committed file is local only.** Such a file is spliced into the
-sidebar from `pendingPaths` and its content is a localStorage draft; GitHub has
+sidebar from `pendingPaths` and its content is an IndexedDB draft; GitHub has
 nothing under either name, so `renameFile` would ask git to move a path that isn't
 in the tree and get a 404 back. `requestRename` branches on
-`pendingPaths.has(node.path)` and moves the draft slot instead — which is the same
+`pendingPaths.has(node.path)` and moves the draft record in one IndexedDB transaction instead — which is the same
 thing creating it under the new name would have done — skipping both the API call
 and the tree refresh, since the branch didn't change. The committed path still
 lands on GitHub *first*: reordering that would leave the app pointing at a path the
@@ -88,43 +92,65 @@ instead of GitHub (which would 404 on a path the branch doesn't have), and it is
 the flag rename and delete branch on to skip the API. Three rules hold it
 together:
 
-- **It is a set, and it outlives the file being open.** Derived from `openPath`
-  alone — which it was — creating a second file or opening any other file dropped
-  the first one out of the sidebar with its draft still in localStorage and nothing
-  able to reach it: the file appeared to vanish. An agent creating two files in a
-  row hit this every time.
+- **It is a set, and it outlives the file being open.** Deriving pending files
+  from `openPath` would lose files from the sidebar as soon as another file opens.
 - **Creating a file writes its draft immediately**, rather than leaving it to the
   autosave effect. For a file with no commit behind it the draft is the only copy,
   so it must not depend on a render landing between two creates.
+- **Existence is independent of content.** An empty never-saved named file stays
+  pending and keeps an empty draft. Create and rename reject known saved and
+  pending destinations, and local operations check browser storage itself before
+  replacing a destination. A failed move keeps the source copy.
 - **The draft is the only record such a file leaves**, which is what makes it
-  recoverable after a reload (`listDraftPaths`): a draft under a path the branch
+  recoverable after a reload (`listDraftPathsResult`): a draft under a path the branch
   doesn't have can only be a file created here and never committed. That recovery
   runs **once per repo/branch**, on the first tree load — a rename or a commit
-  moves a draft before the tree proving where the path now lives has arrived, and
-  re-deriving against a stale tree would re-flag a committed path as pending, which
+  moves a draft before the updated tree arrives. Re-deriving against a stale tree
+  would re-flag a committed path as pending, which
   would send its next rename or delete down the local-only branch and skip GitHub.
   For the same reason `confirmDelete` clears the drafts of everything it deletes:
   a leftover draft *is* a pending file to the recovery pass.
 - **A commit that lands after the user moved on must not adopt itself.** A commit is
   a round trip, and picking another file during it is exactly what people do — the
   button's whole point is that they are done with this one. `commitCurrent` captures
-  the document it came from and compares `openPathRef` on the way back:
+  the full document key and activation generation:
   `baseline`/`loadedSha`/`openPath` are applied only if that document is still on
   screen (which is also what promotes an untitled one), and otherwise
-  `settleCommitted` does the half that is always right — clearing the path's draft
-  and its dirty marker. It clears them **only if the draft still matches what was
+  `settleCommitted` clears the originating path's draft and dirty marker. It clears
+  them **only if the draft still matches what was
   committed**: a user who kept typing between the click and the switch has newer text
   in there, and that text is the only copy of those keystrokes, so the file stays
-  dirty. Without the guard the editor was yanked back to the file that had just been
-  saved, and the marker for it never went out.
+  dirty.
+  Settlement also records the returned saved content and SHA under the full
+  originating workspace/document key. The current view adopts them only while
+  its activation generation still matches. A later edit keeps its working
+  content and remains dirty against the newly saved baseline.
+- **A scratch slot is spent only by its own successful promotion.** Saving an
+  already-named file or using Save All leaves parked scratch work untouched. A
+  delayed scratch save clears its draft only if the submitted working revision
+  is still current and the stored draft still contains the submitted content.
 - **A commit hands the path straight to the tree** (`treeWithPath`), in the same
   batch that drops it from `createdPaths`. Membership is what puts the file in the
   sidebar, and committing is exactly what ends it — so waiting for `refreshTree` to
-  prove the path is on the branch left one round trip in which the file belonged to
-  neither set, and it blinked out of the tree and back for that long. It is
+  prove the path is on the branch would briefly remove it from the tree. It is
   recorded as **committed**, not left pending: a pending path reads from a draft
   the commit just spent, and sends rename and delete down the local-only branch
   that skips GitHub.
+
+File and tree requests carry a selection generation. A response from an older
+repository, branch, or file selection cannot replace the current view. History
+page and version reads use the same latest-request rule.
+
+History display pages are slices of a stable upstream commit stream. The server
+uses a fixed GitHub page size, applies rename-away filtering before display
+pagination, and preserves surplus records so every commit appears exactly once.
+
+When a saved GitHub file has a draft, opening it compares the draft's recorded
+base SHA with the current file SHA. A changed or unknown base opens the working
+text in an explicit reconciliation state. Save and Save All refuse to pair that
+text with the new SHA until the user chooses to keep it on top of the latest
+revision or discard it and start from the latest content. There is no migration
+path for the unversioned development draft format because it was never released.
 
 Markdown is listed **first** in `NewFileMenu` and in the scratch-kind toggle: a
 document is the most common thing to start, and it can hold diagrams of either

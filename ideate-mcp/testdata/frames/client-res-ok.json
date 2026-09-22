@@ -8,5 +8,6 @@
     "applied": 2,
     "lineCount": 12,
     "diagnostics": []
-  }
+  },
+  "metrics": { "browserMs": 18 }
 }

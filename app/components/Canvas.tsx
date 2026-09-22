@@ -13,24 +13,13 @@ declare global {
 }
 
 /**
- * Where the vendored Excalidraw fonts live. `scripts/vendor-excalidraw-assets.mjs`
- * copies them into `public/excalidraw-assets/fonts/` on install and build; the
- * library appends `./fonts/...` to this base, so the trailing slash matters.
+ * Where the vendored Excalidraw fonts live. `scripts/vendor-excalidraw-assets.mjs` copies them into
+ * `public/excalidraw-assets/fonts/` on install and build; the library appends `./fonts/...` to this
+ * base, so the trailing slash matters.
  */
 const ASSET_PATH = '/excalidraw-assets/'
 
-/**
- * The Excalidraw canvas, split out behind a dynamic import.
- *
- * `ssr: false` isn't optional: Excalidraw touches `window` at module scope and
- * renders to a real canvas, the same reason `Editor`/`Preview` are client-only
- * (see rule 5 in CLAUDE.md). Deferring it also keeps the editor bundle — around
- * a megabyte, plus 13MB of lazily-fetched fonts — out of the path for users who
- * only open mermaid diagrams.
- *
- * The asset path is set inside the import factory rather than at module scope so
- * it's guaranteed to be in place before Excalidraw's font registry initializes.
- */
+/** The Excalidraw canvas, split out behind a dynamic import. */
 const CanvasInner = dynamic(
   async () => {
     if (typeof window !== 'undefined' && window.EXCALIDRAW_ASSET_PATH === undefined) {

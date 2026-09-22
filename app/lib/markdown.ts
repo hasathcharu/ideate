@@ -8,32 +8,10 @@ import { resolveThemeMode, type MermaidUserConfig } from './mermaidConfig'
 import { highlightCode } from './highlight'
 
 /**
- * Markdown documents (`.md` / `.markdown`).
- *
- * A markdown file is prose that may *contain* diagrams: every ```mermaid fence
- * is rendered through the same `renderToSvg` the standalone diagram editor uses,
- * with the same global config — so an embedded diagram picks up the active theme
- * and layout engine without the file itself carrying a single line of theme
- * configuration. The injection happens here at render time and is never written
- * back to the document.
- *
- * Everything else here exists to render a document the way **GitHub** renders
- * it, since that is where these files live:
- *
- * - **Raw HTML passes through**, sanitized (see {@link sanitizeHtml}). `<details>`
- *   /`<summary>`, `<kbd>`, `<sub>`/`<sup>`, alignment wrappers and inline tables
- *   are all common in real repo documents, and escaping them showed the markup
- *   instead of the content.
- * - **GFM extras**: tables, strikethrough, autolinked URLs, task lists,
- *   footnotes, `:emoji:` shortcodes, and `> [!NOTE]`-style alerts.
- * - **Code fences are syntax highlighted** (`lib/highlight.ts`, lazily loaded).
- * - **Headings get slug ids** matching GitHub's, so `#some-heading` links work —
- *   and so the reading view can offer an outline.
- * - **Relative links and images resolve against the repository**: a link to
- *   another file in the repo opens in the editor (`data-md-repo-link`), and a
- *   relative image is rewritten to its raw.githubusercontent URL.
- *
- * Rendering is therefore async and browser-only, exactly like `lib/mermaid.ts`.
+ * Markdown documents (`.md` / `.markdown`). A markdown file is prose that may *contain* diagrams:
+ * every ```mermaid fence is rendered through the same `renderToSvg` the standalone diagram editor
+ * uses, with the same global config — so an embedded diagram picks up the active theme and layout
+ * engine without the file itself carrying a single line of theme configuration.
  */
 
 /** The fence info-string that marks a code block as a mermaid diagram. */
@@ -56,14 +34,13 @@ export interface MarkdownRenderOptions {
   basePath?: string | null
   /** The repository the document lives in, for blob/raw URLs. */
   repo?: MarkdownRepoLocator | null
+  /** Resolve authenticated repository images. External URLs never pass through this hook. */
+  resolveImage?: (path: string) => Promise<string | null>
 }
 
 /**
- * `html: true` lets raw HTML through, so the output has to be sanitized before it
- * reaches the DOM — see {@link sanitizeHtml}, which every render passes through.
- *
- * `linkify` turns bare URLs into links, matching GitHub's rendering. markdown-it
- * validates every link target by default, so `javascript:` URLs never survive.
+ * `html: true` lets raw HTML through, so the output has to be sanitized before it reaches the DOM —
+ * see {@link sanitizeHtml}, which every render passes through.
  */
 const md: MarkdownItInstance = new MarkdownIt({
   html: true,
@@ -120,15 +97,10 @@ interface RenderEnv extends Env {
   repo?: MarkdownRepoLocator | null
 }
 
-/** Placeholders emitted in place of a fence, swapped for the rendered SVG or the
- *  highlighted code once the async work is done.
- *
- *  They are elements rather than HTML comments because the sanitizer strips
- *  comments — and substitution has to happen *after* sanitizing, so that our own
- *  trusted SVG and shiki markup never pass through it. A document that authors
- *  one of these attributes by hand in raw HTML could therefore duplicate one of
- *  its own diagrams; harmless (the content is still ours) and not worth
- *  defending against. */
+/**
+ * Placeholders emitted in place of a fence, swapped for the rendered SVG or the highlighted code
+ * once the async work is done.
+ */
 function mermaidPlaceholder(index: number): string {
   return `<span data-md-mermaid="${index}"></span>`
 }
@@ -145,19 +117,7 @@ function placeholderPattern(attribute: string, flags: string): RegExp {
 /* Sanitizing                                                          */
 /* ------------------------------------------------------------------ */
 
-/**
- * Strip anything executable out of the rendered HTML.
- *
- * With `html: true` the document's own markup reaches the output, so this is the
- * boundary that keeps a `.md` file from running script in the app. DOMPurify's
- * defaults already drop `<script>`, `<iframe>`, `on*` handlers and
- * `javascript:` URLs; the additions here are the two GitHub also refuses —
- * `<style>` (a document must not restyle the app around it) and `<form>` (there
- * is nothing legitimate for it to submit to).
- *
- * `<input>` is deliberately *not* forbidden: the task-list rule below renders
- * checkboxes with it, and a disabled checkbox is inert.
- */
+/** Strip anything executable out of the rendered HTML. */
 function sanitizeHtml(html: string): string {
   // Sanitizing needs a DOM. renderMarkdown is browser-only by contract (mermaid
   // measures against the live DOM), so reaching this without one is a bug in the
@@ -175,15 +135,7 @@ function sanitizeHtml(html: string): string {
 /* Task lists                                                          */
 /* ------------------------------------------------------------------ */
 
-/**
- * Render `- [ ]` / `- [x]` items as real (disabled) checkboxes.
- *
- * markdown-it is CommonMark, which has no notion of task lists, and this is a
- * ~30-line core rule rather than another dependency. It rewrites the token
- * stream after inline parsing: strip the `[ ]` marker from the item's text,
- * prepend a checkbox, and tag the item and its list so the CSS can drop the
- * bullet and hang the box in the margin.
- */
+/** Render `- [ ]` / `- [x]` items as real (disabled) checkboxes. */
 md.core.ruler.after('inline', 'md-task-lists', (state) => {
   const tokens = state.tokens
   // The most recent open bullet list, so a checkbox item can tag its own list
@@ -261,14 +213,8 @@ function alertTitle(kind: string): string {
 }
 
 /**
- * Turn a blockquote whose first line is `[!NOTE]` (or TIP / IMPORTANT / WARNING /
- * CAUTION) into a titled callout, the way GitHub does.
- *
- * The marker paragraph is rewritten in place: the `[!KIND]` text is cut from the
- * first paragraph, a title paragraph is spliced in ahead of it, and the leading
- * newline that separated the marker from the body is dropped. A marker sitting
- * alone on its line leaves an empty paragraph behind, which is removed rather
- * than rendered as a gap.
+ * Turn a blockquote whose first line is `[!NOTE]` (or TIP / IMPORTANT / WARNING / CAUTION) into a
+ * titled callout, the way GitHub does.
  */
 md.core.ruler.after('inline', 'md-alerts', (state) => {
   const tokens = state.tokens
@@ -318,11 +264,7 @@ md.core.ruler.after('inline', 'md-alerts', (state) => {
 /* Heading slugs + outline                                             */
 /* ------------------------------------------------------------------ */
 
-/**
- * GitHub's heading slug: lowercase, punctuation dropped, spaces to hyphens.
- * Letters and numbers are matched by Unicode property so non-Latin headings keep
- * a usable id instead of collapsing to an empty string.
- */
+/** GitHub's heading slug: lowercase, punctuation dropped, spaces to hyphens. */
 function slugify(text: string): string {
   const base = text
     .trim()
@@ -348,13 +290,7 @@ function headingText(inline: Token): string {
     .trim()
 }
 
-/**
- * Give every heading a unique slug id and collect the document outline.
- *
- * Both come out of the same pass because they need the same de-duplicated slug:
- * the id is the anchor a `#link` (or the reading view's outline) jumps to, and
- * the outline entry has to name that exact id.
- */
+/** Give every heading a unique slug id and collect the document outline. */
 md.core.ruler.after('inline', 'md-headings', (state) => {
   const env = state.env as RenderEnv
   const headings = (env.headings ??= [])
@@ -394,17 +330,7 @@ md.core.ruler.after('inline', 'md-headings', (state) => {
 /* Source lines (editor ↔ preview scroll sync)                         */
 /* ------------------------------------------------------------------ */
 
-/**
- * Attribute carrying the 1-based source line a rendered block came from.
- *
- * This is the whole basis of the two-way scroll sync in `MarkdownPreview`:
- * double-clicking a line in the editor scrolls to the deepest block that starts
- * at or before it, and double-clicking a block in the document puts the cursor on
- * the line it was written on. markdown-it already knows the answer — every block
- * token carries a `map` — so this is a matter of publishing it into the DOM rather
- * than re-deriving a mapping by counting rendered elements, which no amount of
- * care makes correct across raw HTML, footnotes and nested lists.
- */
+/** Attribute carrying the 1-based source line a rendered block came from. */
 export const SOURCE_LINE_ATTR = 'data-md-line'
 
 /** The line a block token starts on, 1-based to match the editor, or null when
@@ -414,19 +340,7 @@ function sourceLine(token: Token): number | null {
   return typeof start === 'number' ? start + 1 : null
 }
 
-/**
- * Stamp every rendered block with the line it came from.
- *
- * The block token stream is flat — only *inline* children nest — so one pass
- * reaches a paragraph inside a list item inside a blockquote as readily as a
- * top-level heading, and the sync gets that granularity for free.
- *
- * Skipped: closing tokens (no element of their own), `inline` tokens (they render
- * their children, not a tag, so an attribute on one goes nowhere), and the
- * synthetic tokens the alert/task-list rules splice in, which have no map. Fences
- * are stamped too, but not from here: they render as placeholders, so they carry
- * their line through {@link FoundFence} / {@link FoundCode} instead.
- */
+/** Stamp every rendered block with the line it came from. */
 md.core.ruler.push('md-source-lines', (state) => {
   for (const token of state.tokens) {
     if (token.nesting < 0 || token.type === 'inline') continue
@@ -454,12 +368,8 @@ function isExternalHref(href: string): boolean {
 }
 
 /**
- * Resolve a document-relative href to a repo-relative path, or null when it
- * isn't one (an absolute URL, a bare `#anchor`, or a path that climbs out of the
- * repository root).
- *
- * A leading `/` is repo-root-relative, matching how GitHub reads it inside a
- * repository document.
+ * Resolve a document-relative href to a repo-relative path, or null when it isn't one (an absolute
+ * URL, a bare `#anchor`, or a path that climbs out of the repository root).
  */
 export function resolveRepoPath(
   basePath: string | null | undefined,
@@ -504,21 +414,8 @@ function rawUrl(repo: MarkdownRepoLocator, path: string): string {
 }
 
 /**
- * Wire the document into its repository.
- *
- * Three kinds of link get three treatments, mirroring what GitHub does with the
- * same markup:
- *
- * - **External** — opened in a new tab, with `rel` hardened.
- * - **In-page** (`#heading`) — left alone; the reading view scrolls to the slug.
- * - **Repo-relative** — tagged with the resolved repo path in
- *   `data-md-repo-link`, which `MarkdownPreview` intercepts to open the file in
- *   the editor. `href` still points at the file's GitHub page, so ⌘-click and
- *   "open in new tab" land somewhere real instead of a 404 under `/editor`.
- *
- * Relative image sources are rewritten to raw.githubusercontent.com, since a
- * repo-relative `src` resolves against the app's own origin otherwise and never
- * loads.
+ * Wire the document into its repository. Three kinds of link get three treatments, mirroring what
+ * GitHub does with the same markup: - **External** — opened in a new tab, with `rel` hardened.
  */
 md.core.ruler.after('inline', 'md-repo-links', (state) => {
   const env = state.env as RenderEnv
@@ -532,7 +429,10 @@ md.core.ruler.after('inline', 'md-repo-links', (state) => {
         const src = attrText(child, 'src')
         if (!src || isExternalHref(src) || src.startsWith('#') || !repo) continue
         const path = resolveRepoPath(basePath, src)
-        if (path) child.attrSet('src', rawUrl(repo, path))
+        if (path) {
+          child.attrSet('src', rawUrl(repo, path))
+          child.attrSet('data-md-repo-image', path)
+        }
         continue
       }
       if (child.type !== 'link_open') continue
@@ -614,14 +514,7 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/**
- * Add the source-line attribute to markup whose outermost tag we didn't author.
- *
- * A fence renders as a placeholder, so the core rule above can't reach it — its
- * line has to be grafted onto whatever comes back from shiki (or from
- * markdown-it's fallback), both of which open with a `<pre …>`. Anything that
- * doesn't start with a tag is returned untouched rather than guessed at.
- */
+/** Add the source-line attribute to markup whose outermost tag we didn't author. */
 function withSourceLine(markup: string, line: number | null): string {
   if (line === null) return markup
   return markup.replace(/^(\s*<[a-zA-Z][^\s/>]*)/, `$1 ${SOURCE_LINE_ATTR}="${line}"`)
@@ -631,16 +524,7 @@ function withSourceLine(markup: string, line: number | null): string {
 /* Copy buttons                                                        */
 /* ------------------------------------------------------------------ */
 
-/**
- * Attribute carrying the exact source text a copy button puts on the clipboard.
- *
- * The source travels in the markup rather than in a side table keyed by index,
- * because the thing that has to find it is a click on a button inside a run of
- * `dangerouslySetInnerHTML` — the React tree above it knows nothing about which
- * block that is. An attribute on the block's own wrapper is what a delegated
- * handler can reach with one `closest`, and the HTML parser un-escapes it on the
- * way in, so what comes back out is byte-for-byte what the author wrote.
- */
+/** Attribute carrying the exact source text a copy button puts on the clipboard. */
 export const COPY_SOURCE_ATTR = 'data-md-copy'
 
 /** Marks the button itself, so the handler can tell a copy click from a click on
@@ -655,19 +539,13 @@ const COPY_ICON =
 const CHECK_ICON =
   '<svg class="md-copy-done" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>'
 
-/**
- * Wrap a rendered block so it can be copied, carrying its source line too.
- *
- * The line moves onto the wrapper rather than staying on the `<pre>`: the wrapper
- * is the outermost element of the block now, and `blockForLine` wants the element
- * whose position on screen is the block's own.
- */
+/** Wrap a rendered block so it can be copied, carrying its source line too. */
 function copyWrapper(markup: string, source: string, line: number | null): string {
   const lineAttr = line === null ? '' : ` ${SOURCE_LINE_ATTR}="${line}"`
   return (
     `<div class="md-copyable"${lineAttr} ${COPY_SOURCE_ATTR}="${escapeHtml(source)}">` +
     `<button type="button" class="md-copy-button" ${COPY_BUTTON_ATTR} ` +
-    `aria-label="Copy to clipboard" title="Copy">${COPY_ICON}${CHECK_ICON}</button>` +
+    `aria-label="Copy to clipboard">${COPY_ICON}${CHECK_ICON}</button>` +
     markup +
     `</div>`
   )
@@ -703,42 +581,29 @@ export interface MarkdownRender {
   headings: MarkdownHeading[]
 }
 
-/**
- * Render a markdown document, with every ```mermaid fence turned into a themed
- * diagram.
- *
- * The result is a *list of parts* rather than one HTML string, so that a
- * top-level diagram can be handed to React as a real element (`DiagramViewport`,
- * with its own zoom/pan state) instead of being buried inside a
- * `dangerouslySetInnerHTML` blob React can't attach state or handlers to.
- *
- * Splitting is only safe at `level === 0`. A fence nested in a list item or a
- * blockquote sits between an unclosed `<ul>`/`<blockquote>` and its closing tag,
- * so cutting the string there would hand React two fragments of invalid HTML —
- * those diagrams stay inline as plain SVG, rendered and themed identically, just
- * without the zoom controls. Fences that fail to parse likewise stay inline, as
- * an error block that keeps the offending source visible.
- *
- * The order of the passes below matters. markdown-it renders *placeholders* for
- * both mermaid fences and highlighted code; the HTML is sanitized while those
- * placeholders are still in it; only then is our own trusted markup substituted
- * in. That way the sanitizer never sees — and so can never mangle — mermaid's
- * SVG or shiki's token spans, and the document's own raw HTML never escapes it.
- *
- * Diagrams render **sequentially** rather than through `Promise.all`: mermaid
- * re-`initialize()`s a single global instance per config change and renders
- * against the live DOM, so overlapping renders are a race we gain nothing by
- * taking — a document has a handful of diagrams, not hundreds. Highlighting has
- * no such constraint and runs in parallel.
- */
+/** Render a markdown document, with every ```mermaid fence turned into a themed diagram. */
 export async function renderMarkdown(
   text: string,
   options: MarkdownRenderOptions = {},
 ): Promise<MarkdownRender> {
-  const { config = null, basePath = null, repo = null } = options
+  const { config = null, basePath = null, repo = null, resolveImage } = options
   const env: RenderEnv = { basePath, repo }
   let html = sanitizeHtml(md.render(text, env))
   const headings = env.headings ?? []
+
+  if (resolveImage && html) {
+    const container = document.createElement('div')
+    container.innerHTML = html
+    const images = Array.from(container.querySelectorAll<HTMLImageElement>('img[data-md-repo-image]'))
+    await Promise.all(images.map(async (image) => {
+      const path = image.dataset.mdRepoImage
+      if (!path) return
+      const resolved = await resolveImage(path)
+      if (resolved) image.src = resolved
+      else image.src = 'data:,'
+    }))
+    html = container.innerHTML
+  }
 
   /* Code fences: highlight in parallel, then substitute. */
   const codeFences = env.code ?? []

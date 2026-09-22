@@ -13,24 +13,9 @@ import (
 )
 
 // LocalMCPPort is the one port on which a plaintext MCP origin is allowed.
-//
-// 7391 is the old loopback bridge port, kept deliberately: it no longer means
-// anything to the protocol, but it is the number that appears in every older
-// README and in muscle memory, and reusing it for "a service you run yourself"
-// costs nothing and saves an explanation.
 const LocalMCPPort = "7391"
 
-// ValidateMCPOrigin enforces that a MCP origin is either TLS or unmistakably
-// local. It mirrors validateMcpOrigin in app/lib/mcpOrigin.ts.
-//
-// This is a security control, and the reason it is checked here as well as in the
-// browser is that the browser's copy is a courtesy to whoever types into the
-// Advanced options field — it protects that person from a typo, not the service
-// from anyone. Plaintext anywhere but loopback means the pairing code, and every
-// document the tab is asked to read, crosses the network in the clear.
-//
-// The exemption is narrow on purpose: loopback *and* the one port, because
-// "http://localhost:anything" would quietly re-admit a plaintext proxy on 80.
+// ValidateMCPOrigin enforces that a MCP origin is either TLS or unmistakably local.
 func ValidateMCPOrigin(raw string) error {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -82,11 +67,7 @@ type Config struct {
 	// advertise a plaintext service and find out from their users.
 	PublicURL string
 
-	// AllowedOrigins is a **soft** allowlist applied to the tab's WebSocket
-	// handshake. It stops the service being used as free infrastructure by pages
-	// that are nothing to do with Ideate. It is emphatically not the security
-	// control — the pairing code is. A local process can spoof Origin, and a
-	// browser page that spoofed it still could not guess a code.
+	// AllowedOrigins is a **soft** allowlist applied to the tab's WebSocket handshake.
 	AllowedOrigins []string
 
 	// RequestTimeout bounds one forwarded command. A timeout is a tool error the
@@ -99,11 +80,6 @@ type Config struct {
 	TabGrace time.Duration
 
 	// AttachIdleTimeout expires an attachment that has seen no tool calls.
-	//
-	// A stateful MCP session would detach on client teardown for free; stateless
-	// has nothing to hook. Without this, an agent that was killed leaves the
-	// toolbar claiming someone can edit the document — which is the one thing the
-	// attached/paired distinction exists to keep honest.
 	AttachIdleTimeout time.Duration
 
 	// MaxBodyBytes caps an MCP request body.
@@ -113,24 +89,11 @@ type Config struct {
 	// bucket inside its grace window still occupies one.
 	MaxWSSessions int
 
-	// StatsUser and StatsPassword gate the operator's census endpoint. Both empty
-	// means the route does not exist.
-	//
-	// Basic auth over TLS, because the thing being protected is a handful of
-	// integers and the client is a curl in a terminal or an uptime checker — a
-	// token-issuing scheme would be more apparatus than the secret is worth. It is
-	// credentials rather than nothing because the counts describe how many people
-	// are using the service and when, which is the operator's business and not the
-	// internet's.
+	// StatsUser and StatsPassword gate the operator's census endpoint.
 	StatsUser     string
 	StatsPassword string
 
 	// MaxInflightBytes is a global budget for forwarded command payloads.
-	//
-	// The memory risk here is many large frames at once, not idle sockets: an idle
-	// tab connection is around 100KB including TLS and its goroutines, so the
-	// session cap alone fits comfortably in a small box. MaxFrameBytes × the
-	// session cap does not — 250 × 8MB is a 2GB spike on a 512MB machine.
 	MaxInflightBytes int64
 }
 

@@ -13,6 +13,11 @@ function commitSha(): string {
 }
 
 const nextConfig: NextConfig = {
+  experimental: {
+    // Image uploads and generated PNGs cross the Server Action boundary as base64.
+    // 150 MB accommodates GitHub's 100 MB file ceiling plus base64 expansion.
+    serverActions: { bodySizeLimit: '150mb' },
+  },
   env: {
     NEXT_PUBLIC_COMMIT_SHA: commitSha(),
   },
