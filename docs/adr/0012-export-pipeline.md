@@ -76,14 +76,42 @@ and silently exempted the SVG row above it.
 
 ### SVG theme and the optional frame
 
-Mermaid SVG has two theme modes. **Forced** preserves the configured palette.
+Mermaid SVG has two theme modes. **Forced** is a single fixed rendering.
 **Dynamic** embeds independently rendered default-light and dark variants and a
 small `prefers-color-scheme` media rule, so it remains self-contained while
 following the viewer. Known preset families use their exact light/dark counterpart
-(for example GitHub Light and GitHub Dark). A custom or unpaired palette falls
-back to Mermaid's default light/dark pair because arbitrary literal colors cannot
-be reliably converted. Excalidraw SVG exposes the same modes and embeds its native
-light/dark renderings, using the paired palette backgrounds when Theme is selected.
+(for example GitHub Light and GitHub Dark), resolved by `counterpartPreset`. A
+custom or unpaired palette falls back to Mermaid's default light/dark pair because
+arbitrary literal colors cannot be reliably converted. Excalidraw SVG exposes the
+same modes and embeds its native light/dark renderings, using the paired palette
+backgrounds when Theme is selected.
+
+**The background decides the palette a fixed rendering uses** —
+`configForBackground`, the same rule scenes follow below. Solarized Dark's body text
+is `#839496`; painted onto a chosen White background it was very nearly invisible,
+and the export was unusable in exactly the case the swatch was picked for. So White
+yields dark-on-white and Black light-on-black whatever the editor is set to,
+swapping in the active palette's counterpart. **Theme** and transparent keep the
+configured palette untouched: one *is* the palette's own surface, and the other has
+no surface to judge. A palette already on the right side of that line is left alone,
+so this only ever fires on the mismatch. This applies to PNG as well, which has no
+theme control of its own and would otherwise have no way out of the same problem.
+
+**A dynamic SVG inverts a plain background for the other scheme** (`dynamicBranches`).
+The swatch names the surface a *light-mode* viewer should see, and a dark-mode viewer
+gets its opposite: White is white-then-black, Black is black-then-white. Holding the
+surface still instead left one branch painting the diagram in its own background
+color — White under both variants put the dark branch's light strokes on white.
+
+Within that, **the palette follows the surface, not the media query** its branch is
+named after. Pick Black and the light-mode branch is light-on-black (the dark
+palette) while the dark-mode branch is dark-on-white (the light palette). Pairing
+each branch with the palette its media query is named after would undo the inversion
+and reintroduce the same invisible rendering one step along.
+
+**Theme** and transparent need none of this: a theme background already varies per
+branch, because each branch carries its own palette's `background`, and transparent
+has no surface to invert.
 
 Image exports can add a 24px padded frame with a 16px rounded background. The
 same choice reaches SVG, PNG, Mermaid, and Excalidraw paths. Without the option,
@@ -109,7 +137,7 @@ about it are non-obvious and easy to regress:
 
 The chosen background also decides the *theme* of the export, since light-mode
 strokes on a dark surface are invisible: "Black" yields light-on-black, "White"
-dark-on-white, "Theme" follows the palette. Transparent is the one case with no
+dark-on-white, "Theme" follows the palette. Mermaid follows the same rule above. Transparent is the one case with no
 surface to judge, so it follows the active theme's mode instead — reading the
 scene's stored canvas color there would always answer "light", because that value
 is the file's own and the displayed background is theme-driven chrome the file never

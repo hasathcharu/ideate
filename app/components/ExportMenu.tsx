@@ -409,7 +409,8 @@ export default function ExportMenu({
                 ))}
               </div>
             </div>
-            <DropdownMenuSeparator />
+            {/* Background and Frame are one decision — what the exported image sits
+                on — so they share a section rather than being ruled apart. */}
             <div className="flex items-center justify-between gap-2 px-2 py-1.5">
               <span className="text-sm">Frame</span>
               <div className="flex items-center gap-0.5 rounded-md border p-0.5">

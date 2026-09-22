@@ -1,5 +1,5 @@
 import { renderToSvg } from './mermaid'
-import { buildExportSource, themeFromConfig } from './mermaidConfig'
+import { buildExportSource, resolveThemeMode, themeFromConfig } from './mermaidConfig'
 import type { MermaidUserConfig } from './mermaidConfig'
 import { THEME_PRESETS, type ThemePreset } from './themes'
 import type { ExportBackground, PngScale, SvgThemeMode } from './types'
@@ -62,13 +62,43 @@ function intrinsicSize(svg: SVGSVGElement): { width: number; height: number } {
   return { width: width || 0, height: height || 0 }
 }
 
+/**
+ * The palette a single-variant export renders with. Light-mode strokes are
+ * invisible on a dark surface and dark-mode strokes on a light one, so a chosen
+ * **White** background yields dark-on-white and **Black** light-on-black whatever
+ * the editor's palette is — the rule `exportScene.ts` already applies to canvases.
+ * **Theme** and transparent keep the configured palette: one *is* the palette's own
+ * surface, and the other has no surface to judge.
+ *
+ * A palette already on the right side of that line is returned untouched, so this
+ * only ever fires on the mismatch that made the export unreadable.
+ */
+function configForBackground(
+  background: ExportBackground,
+  config: MermaidUserConfig | null | undefined,
+): MermaidUserConfig | null | undefined {
+  if (background !== 'white' && background !== 'black') return config
+  const wanted = background === 'white' ? 'light' : 'dark'
+  if (resolveThemeMode(config ?? null) === wanted) return config
+  return dynamicThemeConfig(
+    config,
+    wanted === 'light' ? 'default' : 'dark',
+    counterpartPreset(config, wanted),
+  )
+}
+
 /** The shared step: produce a standalone SVG string + its pixel dimensions. */
 export async function resolveStandaloneSvg(
   text: string,
   opts: ResolveOptions,
 ): Promise<StandaloneSvg> {
+  // Dynamic resolves a palette per variant already, so the background rule would
+  // only overwrite the pair it just picked.
   if (opts.themeMode === 'dynamic') return resolveDynamicSvg(text, opts)
-  return resolveSvgVariant(text, opts)
+  return resolveSvgVariant(text, {
+    ...opts,
+    config: configForBackground(opts.background, opts.config),
+  })
 }
 
 async function resolveSvgVariant(text: string, opts: ResolveOptions): Promise<StandaloneSvg> {
@@ -158,11 +188,61 @@ function prependBackground(
   svg.insertBefore(rect, svg.firstChild)
 }
 
+/** The plain surfaces, each other's opposite. */
+const PLAIN_INVERSE = { white: 'black', black: 'white' } as const
+
+function isPlainBackground(background: ExportBackground): background is 'white' | 'black' {
+  return background === 'white' || background === 'black'
+}
+
+/**
+ * The surface and palette each `prefers-color-scheme` branch of a dynamic SVG gets.
+ *
+ * A plain background **inverts** for the other scheme rather than holding still: the
+ * swatch names the surface a light-mode viewer should see, and a dark-mode viewer
+ * gets its opposite, so White is white-then-black and Black is black-then-white. The
+ * palette then follows *the surface*, not the media query the branch is named after
+ * — pick Black and light mode is light-on-black while dark mode is dark-on-white.
+ * Holding the surface still instead leaves one branch painting the diagram in its own
+ * background color.
+ *
+ * **Theme** and transparent are already right as they stand: a theme background
+ * varies per branch because each branch carries its own palette's `background`, and
+ * transparent has no surface to invert.
+ */
+function dynamicBranches(
+  background: ExportBackground,
+  lightConfig: MermaidUserConfig,
+  darkConfig: MermaidUserConfig,
+): {
+  light: { background: ExportBackground; config: MermaidUserConfig }
+  dark: { background: ExportBackground; config: MermaidUserConfig }
+} {
+  if (!isPlainBackground(background)) {
+    return {
+      light: { background, config: lightConfig },
+      dark: { background, config: darkConfig },
+    }
+  }
+  const lightIsDarkSurface = background === 'black'
+  return {
+    light: {
+      background,
+      config: lightIsDarkSurface ? darkConfig : lightConfig,
+    },
+    dark: {
+      background: PLAIN_INVERSE[background],
+      config: lightIsDarkSurface ? lightConfig : darkConfig,
+    },
+  }
+}
+
 async function resolveDynamicSvg(text: string, opts: ResolveOptions): Promise<StandaloneSvg> {
   const { light: lightConfig, dark: darkConfig } = resolveDynamicThemeConfigs(opts.config)
+  const branches = dynamicBranches(opts.background, lightConfig, darkConfig)
   const [light, dark] = await Promise.all([
-    resolveSvgVariant(text, { ...opts, themeMode: 'forced', config: lightConfig }),
-    resolveSvgVariant(text, { ...opts, themeMode: 'forced', config: darkConfig }),
+    resolveSvgVariant(text, { ...opts, themeMode: 'forced', ...branches.light }),
+    resolveSvgVariant(text, { ...opts, themeMode: 'forced', ...branches.dark }),
   ])
   const width = Math.max(light.width, dark.width)
   const height = Math.max(light.height, dark.height)
@@ -202,19 +282,28 @@ const THEME_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['rose-pine-dawn', 'rose-pine'],
 ]
 
+/** The active palette's counterpart in `mode`, when its family has a known pair. A
+ *  custom or unpaired palette has none: arbitrary literal colors cannot be
+ *  reliably converted into their opposite. */
+function counterpartPreset(
+  config: MermaidUserConfig | null | undefined,
+  mode: 'light' | 'dark',
+): ThemePreset | undefined {
+  const active = themeFromConfig(config ?? null)
+  if (!active) return undefined
+  const pair = THEME_PAIRS.find(([light, dark]) => light === active.value || dark === active.value)
+  if (!pair) return undefined
+  const value = mode === 'light' ? pair[0] : pair[1]
+  return THEME_PRESETS.find((preset) => preset.value === value)
+}
+
 /** Preserve a known palette family across a dynamic SVG's light/dark variants. */
 export function resolveDynamicThemeConfigs(
   config: MermaidUserConfig | null | undefined,
 ): { light: MermaidUserConfig; dark: MermaidUserConfig } {
-  const active = themeFromConfig(config ?? null)
-  const pair = active
-    ? THEME_PAIRS.find(([light, dark]) => light === active.value || dark === active.value)
-    : undefined
-  const light = pair ? THEME_PRESETS.find((preset) => preset.value === pair[0]) : undefined
-  const dark = pair ? THEME_PRESETS.find((preset) => preset.value === pair[1]) : undefined
   return {
-    light: dynamicThemeConfig(config, 'default', light),
-    dark: dynamicThemeConfig(config, 'dark', dark),
+    light: dynamicThemeConfig(config, 'default', counterpartPreset(config, 'light')),
+    dark: dynamicThemeConfig(config, 'dark', counterpartPreset(config, 'dark')),
   }
 }
 

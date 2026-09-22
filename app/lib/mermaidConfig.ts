@@ -4,6 +4,7 @@ import {
   TEXT_CONTRAST,
   UI_CONTRAST,
   ensureContrast,
+  ensureSurfaceSeparation,
   mixColors,
   relativeLuminance,
 } from './color'
@@ -383,7 +384,7 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
   const text = first('primaryTextColor', 'textColor', 'nodeTextColor')
   const bg = first('background', 'secondaryColor', 'mainBkg')
   const surface = first('mainBkg', 'primaryColor', 'secondaryColor', 'background')
-  const secondary = first('secondaryColor', 'tertiaryColor', 'mainBkg')
+  const authoredSecondary = first('secondaryColor', 'tertiaryColor', 'mainBkg')
   const muted = first('tertiaryColor', 'secondaryColor', 'mainBkg')
   const accentLine = first('primaryBorderColor', 'lineColor', 'nodeBorder')
   const warmAccent = first('noteBkgColor', 'secondaryBorderColor', 'primaryBorderColor')
@@ -420,6 +421,16 @@ export function applyThemeToSite(config: MermaidUserConfig | null): void {
     borderColor && surfaceBg
       ? `color-mix(in srgb, ${borderColor} 35%, ${surfaceBg})`
       : borderColor
+  // `--secondary` fills the *selected* segment of the export menu's toggles, the
+  // hovered menu row and the Export button, and several palettes author
+  // `secondaryColor` as the very color they use for `mainBkg` — Solarized sets both
+  // to `#073642`. The fill then matches the popover under it and a selected segment
+  // is indistinguishable from an unselected one. Nudge it toward the palette's own
+  // text until it is visibly a fill again; palettes that already separate the two
+  // are returned untouched.
+  const secondary = authoredSecondary
+    ? ensureSurfaceSeparation(authoredSecondary, text, [surface, bg])
+    : authoredSecondary
 
   set('--background', bg)
   set('--foreground', legible(text, bg))

@@ -148,3 +148,53 @@ export function ensureContrast(
   }
   return toHex(mixRgb(fg, extreme, high))
 }
+
+/**
+ * How far a *fill* has to sit from the surface it is painted on to read as filled at all. A fill
+ * that marks a selected state answers to no WCAG floor — the floor applies to the text it carries,
+ * not to itself — but one painted the same color as the surface under it states nothing. shadcn's
+ * own palettes separate `--secondary` from `--card` by 1.09 (light) and 1.19 (dark), so this is
+ * about the least distinct a selected chip can be and still be one.
+ */
+export const SURFACE_SEPARATION = 1.2
+
+/**
+ * The nearest color to `fill` that clears `target` separation from every one of `surfaces`, found
+ * by blending it toward `toward` — the palette's own text color. Text is by definition on the far
+ * side of every surface it has to stay legible on, so this darkens fills on light themes and
+ * lightens them on dark ones with neither case special-cased.
+ */
+export function ensureSurfaceSeparation(
+  fill: string,
+  toward: string | undefined,
+  surfaces: readonly (string | undefined)[],
+  target: number = SURFACE_SEPARATION,
+): string {
+  const base = parseRgb(fill)
+  const end = toward ? parseRgb(toward) : null
+  if (!base || !end) return fill
+  const backdrops = surfaces
+    .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+    .map(parseRgb)
+    .filter((rgb): rgb is [number, number, number] => rgb !== null)
+  if (backdrops.length === 0) return fill
+
+  // Judged on the *rounded* channels, because those are what `toHex` returns and
+  // therefore what actually gets painted: searching on the unrounded blend can
+  // settle a hundredth of a ratio under the target and hand back a color that
+  // misses the floor it was asked for.
+  const round = (rgb: readonly [number, number, number]): [number, number, number] =>
+    [Math.round(rgb[0]), Math.round(rgb[1]), Math.round(rgb[2])]
+  const worst = (candidate: readonly [number, number, number]) =>
+    Math.min(...backdrops.map((bg) => contrastOf(round(candidate), bg)))
+  if (worst(base) >= target) return fill
+
+  let low = 0
+  let high = 1
+  for (let i = 0; i < 12; i++) {
+    const mid = (low + high) / 2
+    if (worst(mixRgb(base, end, mid)) >= target) high = mid
+    else low = mid
+  }
+  return toHex(mixRgb(base, end, high))
+}

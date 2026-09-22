@@ -64,6 +64,29 @@ object rather than text. Three properties to preserve:
   palette's outline color over the surface: discernible for neutral, purple, and
   blue themes without becoming high-contrast boxes around the whole UI.
 
+### A fill needs a floor of its own
+
+`--secondary` is not text, so the contrast floor above says nothing about it — but
+it is the fill that marks a **selected** state (the export menu's Frame / Theme /
+PNG-scale toggles), a hovered menu row, and the Export button. Many palettes author
+`secondaryColor` as the same value they use for `mainBkg`: Solarized sets both to
+`#073642`, and Monokai likewise. The fill then matched the popover painted under it
+exactly — a selected segment and an unselected one were the same pixels, at a
+contrast ratio of 1.000.
+
+So `--secondary` is passed through `ensureSurfaceSeparation` against both surfaces
+it can land on (`surface` and `background`) with a floor of **1.2**, for reference
+shadcn's own palettes separate `--secondary` from `--card` by 1.09 (light) and 1.19
+(dark). It shares the shape of `ensureContrast` — a passing color is returned
+untouched, and it bisects for the smallest blend that clears the floor — but blends
+toward **the palette's own text color** rather than white or black. Text is by
+definition on the far side of any surface it stays legible on, so one rule darkens
+fills on light themes and lightens them on dark ones with neither special-cased.
+Nine of the twenty-one presets are already distinct enough to pass through unchanged.
+
+`--secondary-foreground` is derived from the adjusted fill, not the authored one, so
+the text floor still holds over whatever the fill became.
+
 Unparseable notations (`hsl()`, named colors) fall through unchanged — the theme
 pipeline is best-effort, and `lib/color.ts` reads only hex and `rgb()`.
 
