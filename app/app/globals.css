@@ -539,39 +539,35 @@
   display: block;
 }
 
-/* The wrapper clips header fills to the rounded edge and scrolls wide tables
-   without forcing the whole document into a horizontal scroll. */
+/* Keep tables inside the reading column and clip header fills to rounded corners. */
 .md-prose .md-table-scroll {
   margin: 0 0 1em;
   border: 1px solid var(--border);
   border-radius: 8px;
-  width: max-content;
+  width: 100%;
   max-width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
 }
 .md-prose table {
   margin: 0 0 1em;
   border-collapse: collapse;
   border-radius: 8px;
-  display: block;
-  width: max-content;
+  table-layout: fixed;
+  width: 100%;
   max-width: 100%;
-  overflow-x: auto;
 }
 .md-prose .md-table-scroll table {
   margin: 0;
   border-collapse: separate;
   border-spacing: 0;
   border-radius: 0;
-  display: table;
-  width: max-content;
-  max-width: none;
-  overflow: visible;
+  width: 100%;
 }
 .md-prose th,
 .md-prose td {
   padding: 0.45em 0.85em;
   border: 1px solid var(--border);
+  overflow-wrap: anywhere;
 }
 .md-prose .md-table-scroll th,
 .md-prose .md-table-scroll td {
