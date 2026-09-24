@@ -544,6 +544,7 @@
 .md-prose table {
   margin: 0 0 1em;
   border-collapse: collapse;
+  border-radius: 8px;
   display: block;
   width: max-content;
   max-width: 100%;

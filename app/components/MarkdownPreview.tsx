@@ -296,7 +296,19 @@ export default function MarkdownPreview({
     setFindIndex((prev) => (prev + delta + total) % total)
   }, [])
 
-  const openFind = useCallback(() => setFindOpen(true), [])
+  const openFind = useCallback(() => {
+    const selection = window.getSelection()
+    const root = documentRef.current
+    if (selection && root && selection.anchorNode && selection.focusNode
+      && root.contains(selection.anchorNode) && root.contains(selection.focusNode)) {
+      const selectedText = selection.toString().trim()
+      if (selectedText) {
+        setFindQuery(selectedText)
+        setFindIndex(0)
+      }
+    }
+    setFindOpen(true)
+  }, [])
 
   /** Put the caret in the find field as it appears. */
   useEffect(() => {
