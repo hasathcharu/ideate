@@ -4,11 +4,12 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { forwardAuthCookies } from '@/lib/authCookies'
 
-const authProxy = auth((_request, _event: NextFetchEvent) => NextResponse.next())
+// The lazy Auth.js initializer handles a Request directly at runtime, although its
+// public type only exposes wrapper and server-side session overloads.
+const runAuthProxy = auth as unknown as (request: NextRequest, event: NextFetchEvent) => Promise<Response>
 
 export async function proxy(request: NextRequest, event: NextFetchEvent) {
-  const authResponse = await authProxy(request, event)
-  if (!(authResponse instanceof Response)) throw new Error('Auth proxy returned no response')
+  const authResponse = await runAuthProxy(request, event)
   const setCookies = authResponse.headers.getSetCookie()
   const response = NextResponse.next({
     request: { headers: forwardAuthCookies(request.headers, setCookies) },

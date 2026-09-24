@@ -3,7 +3,8 @@ import { NextRequest } from 'next/server'
 import type { NextFetchEvent } from 'next/server'
 
 vi.mock('@/auth', () => ({
-  auth: () => async () => {
+  auth: async (request: unknown) => {
+    if (typeof request === 'function') return async () => new Response()
     const headers = new Headers()
     headers.append('set-cookie', 'authjs.session-token=new; Path=/; HttpOnly')
     return new Response(null, { headers })
