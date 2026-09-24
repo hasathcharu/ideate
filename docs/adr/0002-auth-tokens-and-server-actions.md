@@ -36,6 +36,14 @@ route handlers), never when it is `undefined` (RSC render). Do not add a
 refresh path anywhere else, and do not add a DB/KV lock for it — see the Auth
 section below for why a lock is not possible here.
 
+The proxy must also forward Auth.js's new cookies into the **current request's**
+`Cookie` header, while returning every `Set-Cookie` to the browser. Otherwise a
+Server Action triggered after eight idle hours reads the expired incoming JWT
+even when the proxy has just renewed it, reports `unauthenticated`, and signs
+the user out. This is especially easy to hit when Save is the first request
+after an idle tab. Forward all cookie chunks and removals, since Auth.js splits
+large session JWTs across cookies.
+
 ## Auth
 
 A **GitHub App** (not an OAuth App), so users choose which repositories the app
@@ -69,7 +77,7 @@ may touch at install time and can change that later. Consequences to keep in min
   bite, a failed refresh clears the credentials and stamps `token.error`, which
   `getGitHubToken()` reads as signed-out → every action returns
   `kind: 'unauthenticated'` → `handleExpiredSession` signs the user out and
-  lands them on `/`. No work is lost; the draft is in localStorage.
+  lands them on `/`. No work is lost; the draft is in IndexedDB.
 - **`NEXT_PUBLIC_GITHUB_APP_SLUG`** (→ `GITHUB_APP_SLUG` /
   `GITHUB_APP_INSTALL_URL` in `lib/config.ts`) builds the install links. It's the
   App's public URL name, not a secret.
@@ -109,4 +117,3 @@ the stale cookie survives to fail the next call; and the flag is module-level, s
 concurrent failing actions collapse into one sign-out and one toast. That toast
 outlives the navigation because the `Toaster` is in the root layout and
 `redirectTo` is a client-side nav. Add the guard to every new action-error site.
-
