@@ -52,6 +52,12 @@ const md: MarkdownItInstance = new MarkdownIt({
 md.use(footnotePlugin)
 md.use(emojiPlugin)
 
+// A normal block wrapper owns the rounded border and clips table-cell backgrounds.
+md.renderer.rules.table_open = (tokens, idx, options, _env, self) =>
+  `<div class="md-table-scroll">${self.renderToken(tokens, idx, options)}`
+md.renderer.rules.table_close = (tokens, idx, options, _env, self) =>
+  `${self.renderToken(tokens, idx, options)}</div>`
+
 /* ------------------------------------------------------------------ */
 /* Per-render state                                                    */
 /* ------------------------------------------------------------------ */

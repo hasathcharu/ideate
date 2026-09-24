@@ -59,6 +59,10 @@ embedded figure owns the screen and reverts to bare-wheel zoom.
 The prose itself is styled by `.md-prose` in `app/globals.css`, written against
 the shadcn tokens rather than literal colors, so a rendered document follows
 `applyThemeToSite` like the rest of the chrome. Diagrams render **sequentially**.
+Markdown tables get a scrollable `.md-table-scroll` wrapper. It owns the outer
+border and rounded clipping; separate table cells draw only internal grid lines.
+This keeps header fills inside the corners and avoids a square table border
+showing through the rounded wrapper while wide tables still scroll horizontally.
 The shared Mermaid wrapper also serializes its complete global-config lifecycle,
 so previews, diagnostics, hover cards, exports, and separate Markdown renders
 cannot race it. Code fences have no such constraint and are highlighted in parallel.

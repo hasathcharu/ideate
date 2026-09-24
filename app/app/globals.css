@@ -539,8 +539,16 @@
   display: block;
 }
 
-/* `display: block` + `width: max-content` lets a wide table scroll inside itself
-   instead of forcing the whole document into a horizontal scroll. */
+/* The wrapper clips header fills to the rounded edge and scrolls wide tables
+   without forcing the whole document into a horizontal scroll. */
+.md-prose .md-table-scroll {
+  margin: 0 0 1em;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
 .md-prose table {
   margin: 0 0 1em;
   border-collapse: collapse;
@@ -550,10 +558,32 @@
   max-width: 100%;
   overflow-x: auto;
 }
+.md-prose .md-table-scroll table {
+  margin: 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 0;
+  display: table;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+}
 .md-prose th,
 .md-prose td {
   padding: 0.45em 0.85em;
   border: 1px solid var(--border);
+}
+.md-prose .md-table-scroll th,
+.md-prose .md-table-scroll td {
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.md-prose .md-table-scroll tr > :last-child {
+  border-right: 0;
+}
+.md-prose .md-table-scroll table > :last-child > tr:last-child > * {
+  border-bottom: 0;
 }
 .md-prose th {
   font-weight: 650;
