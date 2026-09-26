@@ -8,7 +8,7 @@
 
 ## Rule 3
 
-**IndexedDB stores document content**: local-mode saved files in `local-files` and uncommitted drafts in `drafts`. **localStorage stores only app config**
+**IndexedDB stores document content**: local-mode saved files in `local-files`, uncommitted drafts in `drafts`, and disposable committed GitHub copies in `github-files`. **localStorage stores only app config**
 (selected repo, active theme, export prefs, scratch-document kind, preferred commit action, editor
 line-wrap and viewfinder, the last file open in each workspace, **and the Agent Link service
 origin**). Never
@@ -51,3 +51,15 @@ Draft values use a versioned envelope containing content, update time, and an
 explicit base revision: a known saved revision, an absent saved file, or unknown.
 The unversioned development format was never released and is not migrated. Malformed
 versioned envelopes are invalid and are neither partially adopted nor silently treated as current.
+
+`github-files` uses the existing `docIdForFile` repo/branch/path key and stores
+content plus blob SHA. It is separate from `drafts`: a clean committed copy must
+not appear as an unsaved or never-committed file during draft recovery. Version 2
+adds this store without rewriting either existing store or its records. Hover
+downloads can finish after their component unmounts and do not change the working
+copy. A successful document Save updates the cached copy; an older in-flight hover read
+cannot replace that newer cache entry.
+Each cached copy records an `expiresAt` one day after it is written. App startup
+scans `github-files` and deletes expired copies, including older cache records
+without an expiry; it does not touch `drafts` or `local-files`. Reads also treat a
+copy that expires while the app is open as a cache miss.

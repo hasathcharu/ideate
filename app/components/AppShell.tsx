@@ -27,12 +27,14 @@ import { useDebouncedValue, useIsMobile } from '@/lib/hooks'
 import { canConsumeScratchDraft, draftBaseFor, draftNeedsReconciliation, needsDraft } from '@/lib/draftLifecycle'
 import { saveLocalBatch } from '@/lib/localBatch'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
+import { downloadGitHubFile, downloadLatestGitHubFile, loadGitHubFile, prefetchGitHubFile, rememberCommittedGitHubFile } from '@/lib/githubFileCache'
 import { RequestGate, WorkspaceStore, documentKey, workspaceKey, type DocumentIdentity, type WorkspaceIdentity } from '@/lib/workspaceStore'
 import {
   loadAgentLink,
   loadConfig,
   rememberLastOpen,
   openDocumentStorage,
+  deleteExpiredGitHubFiles,
   saveAgentLink,
   saveConfig,
   clearDraft,
@@ -46,6 +48,7 @@ import {
   listLocalDraftPathsResult,
   listLocalFilesResult,
   readLocalFileResult,
+  readCachedGitHubFile,
   saveLocalFileAndClearDraft,
   moveLocalFileAndDraft,
   deleteLocalFilesAndDrafts,
@@ -69,6 +72,7 @@ import {
   commitFiles,
   listTree,
   readFile,
+  readFileRevision,
   commitFile,
   commitBinaryFile,
   replaceExportFile,
@@ -333,6 +337,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const workingRevisionRef = useRef(0)
   const openPathRef = useRef<string | null>(null)
   const openRequestRef = useRef(0)
+  const loadingPathRef = useRef<string | null>(null)
   const activeIdentityRef = useRef<DocumentIdentity>(identityFor(null))
   const setText = useCallback((next: string) => {
     liveTextRef.current = next
@@ -344,6 +349,10 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [openPath, setOpenPathState] = useState<string | null>(null)
   const setOpenPath = useCallback((next: string | null) => {
     openRequestRef.current += 1
+    loadingPathRef.current = null
+    setLoadingPath(null)
+    setVisibleLoadingPath(null)
+    setStaleRevision(null)
     openPathRef.current = next
     activeIdentityRef.current = identityFor(next)
     workspaceStore.activate(documentKey(activeIdentityRef.current))
@@ -369,6 +378,19 @@ export default function AppShell({ user, mode }: AppShellProps) {
   const [conflictOpen, setConflictOpen] = useState(false)
   const [conflictBusy, setConflictBusy] = useState(false)
   const [draftConflictKey, setDraftConflictKey] = useState<string | null>(null)
+  const [loadingPath, setLoadingPath] = useState<string | null>(null)
+  const [visibleLoadingPath, setVisibleLoadingPath] = useState<string | null>(null)
+  useEffect(() => {
+    if (loadingPath === null) {
+      setVisibleLoadingPath(null)
+      return
+    }
+    const timer = window.setTimeout(() => setVisibleLoadingPath(loadingPath), 140)
+    return () => window.clearTimeout(timer)
+  }, [loadingPath])
+  const [staleRevision, setStaleRevision] = useState<{ path: string; sha: string } | null>(null)
+  const [refreshingFile, setRefreshingFile] = useState(false)
+  const [markdownMaximized, setMarkdownMaximized] = useState(false)
   const draftBasesRef = useRef(new globalThis.Map<string, import('@/lib/storage').DraftBaseRevision>())
 
   const [deleteTarget, setDeleteTarget] = useState<TreeNode | null>(null)
@@ -574,7 +596,8 @@ export default function AppShell({ user, mode }: AppShellProps) {
    * prompt, then the document. Without a workspace there is no file list coming
    * and nothing to wait for.
    */
-  const surfaceLoading = hasWorkspace && (!hydrated || !workspaceKnown || !restoreSettled)
+  const surfaceLoading = hasWorkspace && (!hydrated || !workspaceKnown || !restoreSettled ||
+    (loadingPath !== null && visibleLoadingPath === loadingPath))
 
   /** Fetch the tree and swap it in once it arrives. */
   const treeRequestRef = useRef(new RequestGate())
@@ -627,6 +650,11 @@ export default function AppShell({ user, mode }: AppShellProps) {
   // repo (stale editor content, dirty markers, expanded folders) can linger if
   // that fetch is slow or fails.
   const resetForRepoSwitch = useCallback(() => {
+    loadingPathRef.current = null
+    setLoadingPath(null)
+    setVisibleLoadingPath(null)
+    setStaleRevision(null)
+    setMarkdownMaximized(false)
     resetHistory()
     // The incoming workspace has its own last file and its own list to check it
     // against, so the surface goes back to a skeleton rather than showing the
@@ -662,6 +690,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
     const storageReady = await openDocumentStorage()
     if (!storageReady.ok) {
       toast.error('Document storage is unavailable. Files and drafts have not been treated as empty.')
+    } else {
+      const cleanup = await deleteExpiredGitHubFiles()
+      if (!cleanup.ok) toast.error('Could not remove expired GitHub files from browser storage.')
     }
     const loaded = loadConfig()
     const stored = freshLogin ? { ...loaded, repo: null } : loaded
@@ -863,13 +894,20 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const onSelectRepo = useCallback(
     async (r: Repo) => {
-      if (!await flushOutgoingDraft()) return
       const next: RepoRef = {
         owner: r.owner,
         name: r.name,
         defaultBranch: r.defaultBranch,
         branch: r.defaultBranch,
       }
+      // The picker may return the active workspace. Resetting it would put the
+      // surface back into restoration even though that workspace was restored.
+      if (repo?.owner === next.owner && repo.name === next.name && repo.branch === next.branch) {
+        if (repo.defaultBranch !== next.defaultBranch) updateConfig({ repo: next })
+        setRepoPickerOpen(false)
+        return
+      }
+      if (!await flushOutgoingDraft()) return
       updateConfig({ repo: next })
       setRepoPickerOpen(false)
       resetForRepoSwitch()
@@ -878,12 +916,16 @@ export default function AppShell({ user, mode }: AppShellProps) {
         if (data && workspaceStore.active().generation === activation) showRepoStartState(data)
       })
     },
-    [updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
+    [repo, updateConfig, refreshTree, showRepoStartState, resetForRepoSwitch, flushOutgoingDraft, workspaceStore],
   )
 
   const onSelectBranch = useCallback(
     async (branch: string) => {
       if (!repo) return
+      if (branch === repo.branch) {
+        setBranchPickerOpen(false)
+        return
+      }
       if (!await flushOutgoingDraft()) return
       const next: RepoRef = { ...repo, branch }
       updateConfig({ repo: next })
@@ -944,21 +986,47 @@ export default function AppShell({ user, mode }: AppShellProps) {
     [repo],
   )
 
+  // Agent Link resolves background working copies from the committed browser
+  // cache first. Save All keeps using readSaved to check the branch directly.
+  const readAgentSaved = useCallback(async (path: string) => {
+    if (!repo) return readSaved(path)
+    const res = await loadGitHubFile(repo, path)
+    if (!res.ok) {
+      const expired = handleExpiredSession(res.error)
+      if (!expired && res.cacheReadError) toast.error(`Could not read ${path}'s cached copy in browser storage (${res.cacheReadError}).`)
+      return { ok: false as const, message: res.error.message,
+        expired }
+    }
+    if (res.cacheReadError) toast.error(`Could not read ${path}'s cached copy in browser storage (${res.cacheReadError}).`)
+    if (res.cacheError) toast.error(`Could not cache ${path} in browser storage (${res.cacheError}).`)
+    return { ok: true as const, content: res.data.content, sha: res.data.sha }
+  }, [repo, readSaved])
+
   const openFile = useCallback(
     async (path: string): Promise<boolean> => {
       if (!hasWorkspace) return false
-      if (path === openPathRef.current) return true
+      if (path === openPathRef.current && loadingPathRef.current === null) return true
       if (!await flushOutgoingDraft()) return false
       const request = ++openRequestRef.current
       const requestedWorkspace = workspaceSelectionRef.current
       const activation = workspaceStore.active().generation
+      loadingPathRef.current = path
+      setLoadingPath(path)
+      setVisibleLoadingPath(null)
+      setStaleRevision(null)
+      const currentRequest = () => request === openRequestRef.current &&
+        requestedWorkspace === workspaceSelectionRef.current &&
+        activation === workspaceStore.active().generation
       // A never-committed file has nothing on GitHub under its path, so reading it
       // would 404. Its draft *is* the file: reopen it exactly as it was created —
       // no sha, empty baseline, so it still reads as unsaved.
       if (pendingPaths.has(path)) {
         const draft = await readDraftResult(docIdForPath(path))
+        if (!currentRequest()) return false
         if (draft.status !== 'ok') {
           toast.error(`Could not open ${path}: its unsaved draft is ${draft.status}.`)
+          loadingPathRef.current = null
+          setLoadingPath(null)
           return false
         }
         draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
@@ -968,19 +1036,48 @@ export default function AppShell({ user, mode }: AppShellProps) {
         setText(draft.value.content)
         workspaceStore.adopt(identityFor(path), draft.value.content, '', null, workspaceStore.active().generation)
         setDraftConflictKey(null)
+        loadingPathRef.current = null
+        setLoadingPath(null)
         return true
       }
-      const res = await readSaved(path)
-      if (request !== openRequestRef.current || requestedWorkspace !== workspaceSelectionRef.current ||
-          activation !== workspaceStore.active().generation) return false
+      const cached = repo
+        ? await readCachedGitHubFile(docIdForPath(path))
+        : null
+      if (!currentRequest()) return false
+      if (cached?.status === 'invalid' || cached?.status === 'unavailable') {
+        toast.error(`Could not read ${path}'s cached copy in browser storage (${cached.status}).`)
+      }
+      const res = cached?.status === 'ok'
+        ? { ok: true as const, content: cached.value.content, sha: cached.value.sha }
+        : repo
+          ? await downloadGitHubFile(repo, path).then((result) => {
+            if (result.cacheError) toast.error(`Could not cache ${path} in browser storage (${result.cacheError}).`)
+            return result.ok
+              ? { ok: true as const, content: result.data.content, sha: result.data.sha }
+              : { ok: false as const, message: result.error.message,
+                  expired: handleExpiredSession(result.error) }
+          })
+          : await readSaved(path)
+      if (!currentRequest()) return false
       if (!res.ok) {
         if (!res.expired) toast.error(res.message)
+        loadingPathRef.current = null
+        setLoadingPath(null)
         return false
       }
-      if (!await flushOutgoingDraft()) return false
+      if (!await flushOutgoingDraft()) {
+        if (currentRequest()) {
+          loadingPathRef.current = null
+          setLoadingPath(null)
+        }
+        return false
+      }
       const draft = await readDraftResult(docIdForPath(path))
+      if (!currentRequest()) return false
       if (draft.status === 'invalid' || draft.status === 'unavailable') {
         toast.error(`Could not open ${path}: its draft is ${draft.status}.`)
+        loadingPathRef.current = null
+        setLoadingPath(null)
         return false
       }
       if (draft.status === 'ok') draftBasesRef.current.set(docIdForPath(path), draft.value.baseRevision)
@@ -996,10 +1093,80 @@ export default function AppShell({ user, mode }: AppShellProps) {
         draftNeedsReconciliation(draft.value.baseRevision, res.sha)
       setDraftConflictKey(needsReconciliation ? documentKey(identityFor(path)) : null)
       if (needsReconciliation) setConflictOpen(true)
+      loadingPathRef.current = null
+      setLoadingPath(null)
+      if (repo) {
+        const openedSha = res.sha
+        const openedGeneration = workspaceStore.active().generation
+        const key = documentKey(identityFor(path))
+        void readFileRevision(repo.owner, repo.name, path, repo.branch).then((revision) => {
+          if (!workspaceStore.isActive(key, openedGeneration)) return
+          if (workspaceStore.get(key)?.savedRevision !== openedSha) return
+          if (!revision.ok) {
+            if (!handleExpiredSession(revision.error)) toast.error(`Could not check ${path} for updates: ${revision.error.message}`)
+            return
+          }
+          if (revision.data !== openedSha) setStaleRevision({ path, sha: revision.data })
+        })
+      }
       return true
     },
-    [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText, workspaceStore, identityFor],
+    [hasWorkspace, pendingPaths, docIdForPath, readSaved, flushOutgoingDraft, setOpenPath, setText,
+      workspaceStore, identityFor, repo],
   )
+
+  /** Explicitly adopt the newer GitHub revision after a cached file was opened. */
+  const refreshOpenFile = useCallback(async () => {
+    if (!repo || !openPath || !staleRevision || staleRevision.path !== openPath) return
+    const identity = identityFor(openPath)
+    const key = documentKey(identity)
+    const generation = workspaceStore.active().generation
+    setRefreshingFile(true)
+    const fresh = await downloadLatestGitHubFile(repo, openPath)
+    setRefreshingFile(false)
+    if (!workspaceStore.isActive(key, generation)) return
+    if (!fresh.ok) {
+      if (!handleExpiredSession(fresh.error)) toast.error(fresh.error.message)
+      return
+    }
+    if (fresh.cacheError) toast.error(`Could not cache ${openPath} in browser storage (${fresh.cacheError}).`)
+    const current = workspaceStore.get(key)
+    if (current?.savedRevision === fresh.data.sha) {
+      setStaleRevision(null)
+      return
+    }
+    const changedLocally = current && contentDiffers(current.content, current.savedContent, identity.kind)
+    if (changedLocally && contentDiffers(current.content, fresh.data.content, identity.kind)) {
+      setDraftConflictKey(key)
+      setConflictOpen(true)
+      return
+    }
+    const draftId = docIdForPath(openPath)
+    const revisionBeforeClear = current?.revision
+    const cleared = await clearDraft(draftId)
+    if (!cleared.ok) {
+      toast.error(`Could not clear ${openPath}'s draft in browser storage (${cleared.reason}).`)
+      return
+    }
+    if (!workspaceStore.isActive(key, generation)) return
+    const latest = workspaceStore.get(key)
+    if (latest?.revision !== revisionBeforeClear) {
+      const base = draftBasesRef.current.get(draftId) ?? draftBaseFor(latest?.savedRevision ?? null)
+      const preserved = await writeDraftResult(draftId, latest?.content ?? '', base)
+      if (!preserved.ok) toast.error(`Could not preserve new edits to ${openPath} in browser storage.`)
+      setDraftConflictKey(key)
+      setConflictOpen(true)
+      return
+    }
+    draftBasesRef.current.delete(draftId)
+    setText(fresh.data.content)
+    setBaseline(fresh.data.content)
+    setLoadedSha(fresh.data.sha)
+    workspaceStore.adopt(identity, fresh.data.content, fresh.data.content, fresh.data.sha, generation)
+    setDraftConflictKey(null)
+    setStaleRevision(null)
+    setDirtyPaths((prev) => withoutPaths(prev, [openPath]))
+  }, [repo, openPath, staleRevision, identityFor, workspaceStore, docIdForPath, setText, setDirtyPaths])
 
   /**
    * Reopen that file once the workspace's file list has arrived — the list is what
@@ -1034,6 +1201,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
     },
     [openFile],
   )
+
+  const hoverFromTree = useCallback((path: string) => {
+    if (!repo || pendingPaths.has(path)) return
+    void prefetchGitHubFile(repo, path).then((result) => {
+      if (result && !result.ok) handleExpiredSession(result.error)
+    })
+  }, [repo, pendingPaths])
 
   /** Open a file by following a link inside the open document. */
   const openLinkedFile = useCallback(
@@ -1089,7 +1263,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     draftBasesRef,
     identityFor,
     docIdForPath,
-    readSaved,
+    readSaved: readAgentSaved,
     validatePath,
     templateFor,
     setText,
@@ -1462,6 +1636,13 @@ export default function AppShell({ user, mode }: AppShellProps) {
 
   const settleSavedRecord = useCallback(async (identity: DocumentIdentity, content: string,
     sha: string, submittedRevision: number, draftId: string) => {
+    if (identity.workspace.mode === 'github') {
+      const cached = await rememberCommittedGitHubFile({
+        owner: identity.workspace.owner, name: identity.workspace.repo,
+        branch: identity.workspace.branch,
+      }, identity.path ?? '', content, sha)
+      if (!cached.ok) toast.error(`Could not cache ${identity.path ?? 'the saved file'} in browser storage.`)
+    }
     const key = documentKey(identity)
     const current = workspaceStore.get(key)
     const draft = await readDraftResult(draftId)
@@ -1470,6 +1651,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       workspaceStore.edit(identity, draft.value.content)
     }
     workspaceStore.settleSave(identity, content, sha, submittedRevision)
+    if (workspaceStore.isActive(key)) setStaleRevision(null)
     if (draft.status === 'ok' && contentDiffers(draft.value.content, content, identity.kind)) {
       const rebased = draftBaseFor(sha)
       draftBasesRef.current.set(draftId, rebased)
@@ -1934,6 +2116,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       await settleSavedRecord(identity, submittedContent, res.data.sha, submittedRevision,
         docIdForFile(repo.owner, repo.name, repo.branch, openPath))
       setDraftConflictKey(null)
+      setStaleRevision(null)
       if (workspaceStore.isActive(key, generation)) {
         setBaseline(submittedContent)
         setLoadedSha(res.data.sha)
@@ -1962,6 +2145,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
       toast.error(fresh.error.message)
       return
     }
+    await rememberCommittedGitHubFile(repo, openPath, fresh.data.content, fresh.data.sha)
     const cleared = await clearDraft(docId)
     if (!cleared.ok) {
       toast.error(`Could not discard the draft in browser storage (${cleared.reason}).`)
@@ -1973,6 +2157,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
     workspaceStore.adopt(identityFor(openPath), fresh.data.content, fresh.data.content,
       fresh.data.sha, generation)
     setDraftConflictKey(null)
+    setStaleRevision(null)
     setConflictOpen(false)
   }, [repo, openPath, docId, setText, identityFor, workspaceStore])
 
@@ -2171,6 +2356,7 @@ export default function AppShell({ user, mode }: AppShellProps) {
             expandedPaths={visibleExpanded}
             onToggleDir={toggleVisibleDir}
             onOpenFile={openFromTree}
+            onHoverFile={hoverFromTree}
             onDelete={requestDelete}
             onRename={requestRename}
           />
@@ -2263,6 +2449,9 @@ export default function AppShell({ user, mode }: AppShellProps) {
         showDiff={showDiff}
         canDiff={canDiff}
         onToggleDiff={() => setShowDiff((value) => !value)}
+        updateAvailable={!!staleRevision && staleRevision.path === openPath}
+        refreshingFile={refreshingFile}
+        onRefreshFile={() => void refreshOpenFile()}
         config={config}
         updateConfig={updateConfig}
         currentTheme={currentTheme}
@@ -2305,9 +2494,14 @@ export default function AppShell({ user, mode }: AppShellProps) {
         config={appliedConfig}
         repo={repo}
         onOpenLinkedFile={openLinkedFile}
+        onHoverFile={hoverFromTree}
+        markdownMaximized={markdownMaximized}
+        onMarkdownMaximizedChange={setMarkdownMaximized}
         linkTrail={linkTrail}
         markdownScrollTop={markdownScrollTop}
         onBack={goBack}
+        loadingKind={loadingPath ? fileKind(loadingPath) : kind}
+        loadingRasterImage={loadingPath ? isRasterImageFile(loadingPath) : assetKind === 'raster'}
         assetKind={assetKind}
         awaitingFileChoice={awaitingFileChoice}
         loading={surfaceLoading}

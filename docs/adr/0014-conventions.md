@@ -71,6 +71,13 @@
 - Loading states for lists use `components/ui/skeleton.tsx` with per-call-site
   geometry that mirrors the real rows (indent, padding, line count), so content
   doesn't jump when it swaps in.
+- A GitHub file without a cached body, including one whose hover download is
+  still running, shows a document skeleton after a short delay so fast cache
+  reads do not flash a loading state. Mermaid uses the initial diagram
+  skeleton; Markdown has source and prose placeholders; Excalidraw has a canvas
+  placeholder. Raster images have an image placeholder; SVG keeps the Mermaid
+  editor/preview skeleton. A stale cached body remains visible while the revision
+  check runs.
 - **A list whose rows have both a hover fill and an active tint needs a pixel of
   gap between them** (`space-y-px` — the file tree, the markdown reading view's
   Contents panel). Both states paint a full-width rounded rectangle, so flush rows

@@ -240,6 +240,8 @@ export function savePairingCode(code: string | null): void {
 /* ------------------------------------------------------------------ */
 
 export interface LocalFile { path: string; content: string; updatedAt: number }
+/** A committed GitHub copy, scoped by owner, repository, branch, and path. */
+export interface CachedGitHubFile { content: string; sha: string; updatedAt: number; expiresAt: number }
 export type DraftBaseRevision =
   | { status: 'known'; revision: string }
   | { status: 'absent' }
@@ -268,9 +270,11 @@ export interface DocumentStorage {
 }
 
 const DB_NAME = 'ideate-documents'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const FILES = 'local-files'
 const DRAFTS = 'drafts'
+const GITHUB_FILES = 'github-files'
+const GITHUB_FILE_TTL_MS = 24 * 60 * 60 * 1000
 let opening: Promise<IDBDatabase | null> | null = null
 const writeTails = new Map<string, Promise<void>>()
 
@@ -292,12 +296,14 @@ export function openDocumentStorage(): Promise<StorageWrite> {
         const db = request.result
         if (!db.objectStoreNames.contains(FILES)) db.createObjectStore(FILES)
         if (!db.objectStoreNames.contains(DRAFTS)) db.createObjectStore(DRAFTS)
+        if (!db.objectStoreNames.contains(GITHUB_FILES)) db.createObjectStore(GITHUB_FILES)
       }
       request.onblocked = () => finish(null)
       request.onerror = () => finish(null)
       request.onsuccess = () => {
         const db = request.result
-        if (!db.objectStoreNames.contains(FILES) || !db.objectStoreNames.contains(DRAFTS)) {
+        if (!db.objectStoreNames.contains(FILES) || !db.objectStoreNames.contains(DRAFTS) ||
+          !db.objectStoreNames.contains(GITHUB_FILES)) {
           db.close(); finish(null); return
         }
         db.onversionchange = () => { db.close(); opening = null }
@@ -397,6 +403,47 @@ function validFile(value: unknown): value is LocalFile {
   const file = value as Partial<LocalFile> | null
   return !!file && typeof file.path === 'string' && typeof file.content === 'string' &&
     typeof file.updatedAt === 'number' && Number.isFinite(file.updatedAt)
+}
+function validCachedGitHubFile(value: unknown): value is CachedGitHubFile {
+  const file = value as Partial<CachedGitHubFile> | null
+  return !!file && typeof file.content === 'string' && typeof file.sha === 'string' &&
+    file.sha.length > 0 && typeof file.updatedAt === 'number' && Number.isFinite(file.updatedAt) &&
+    typeof file.expiresAt === 'number' && Number.isFinite(file.expiresAt)
+}
+
+export async function readCachedGitHubFile(id: string): Promise<StorageRead<CachedGitHubFile>> {
+  const result = await read(GITHUB_FILES, id, validCachedGitHubFile)
+  return result.status === 'ok' && result.value.expiresAt <= Date.now()
+    ? { status: 'missing' }
+    : result
+}
+export const writeCachedGitHubFile = (id: string, content: string, sha: string): Promise<StorageWrite> =>
+  orderedWrite(`github:${id}`, () => mutate(GITHUB_FILES, (store) => {
+    const updatedAt = Date.now()
+    store.put({ content, sha, updatedAt, expiresAt: updatedAt + GITHUB_FILE_TTL_MS }, id)
+  }))
+
+/** Remove expired committed copies on app load; drafts and local files are never in this transaction. */
+export async function deleteExpiredGitHubFiles(): Promise<StorageWrite> {
+  const db = await database()
+  if (!db) return { ok: false, reason: 'unavailable' }
+  try {
+    const tx = db.transaction(GITHUB_FILES, 'readwrite')
+    const done = transactionDone(tx)
+    const cursorRequest = tx.objectStore(GITHUB_FILES).openCursor()
+    const now = Date.now()
+    cursorRequest.onsuccess = () => {
+      const cursor = cursorRequest.result
+      if (!cursor) return
+      const file = cursor.value as Partial<CachedGitHubFile> | null
+      if (typeof file?.expiresAt !== 'number' || !Number.isFinite(file.expiresAt) || file.expiresAt <= now) {
+        cursor.delete()
+      }
+      cursor.continue()
+    }
+    await done
+    return { ok: true }
+  } catch (error) { return failure(error) }
 }
 function parseDraft(value: unknown): Draft | null {
   const draft = value as Record<string, unknown> | null

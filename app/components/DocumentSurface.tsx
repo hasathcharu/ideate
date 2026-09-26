@@ -2,6 +2,7 @@
 
 import type { KeyboardEvent, PointerEvent, RefObject } from 'react'
 import Canvas from './Canvas'
+import CanvasSkeleton from './CanvasSkeleton'
 import DiffView from './DiffView'
 import Editor, { type EditorHandle } from './Editor'
 import MarkdownPreview, { type MarkdownPreviewHandle } from './MarkdownPreview'
@@ -42,6 +43,9 @@ export interface DocumentSurfaceProps {
   config: MermaidUserConfig | null
   repo: RepoRef | null
   onOpenLinkedFile: (path: string, scrollTop: number) => void
+  onHoverFile: (path: string) => void
+  markdownMaximized: boolean
+  onMarkdownMaximizedChange: (maximized: boolean) => void
   linkTrail: ReadonlyArray<{ path: string; scrollTop: number }>
   markdownScrollTop: number
   onBack: () => void
@@ -51,6 +55,8 @@ export interface DocumentSurfaceProps {
   awaitingFileChoice: boolean
   /** Which document to show is still being resolved — see `surfaceLoading`. */
   loading: boolean
+  loadingKind: FileKind
+  loadingRasterImage: boolean
 }
 
 /** Line widths that read as source rather than prose: a couple of long runs, some
@@ -124,7 +130,30 @@ function DiagramSkeleton() {
 function SurfaceSkeleton({
   paneRowRef,
   editorRatio,
-}: Pick<DocumentSurfaceProps, 'paneRowRef' | 'editorRatio'>) {
+  kind,
+  markdownMaximized,
+  rasterImage,
+}: Pick<DocumentSurfaceProps, 'paneRowRef' | 'editorRatio' | 'markdownMaximized'> &
+  { kind: FileKind; rasterImage: boolean }) {
+  if (rasterImage) return (
+    <section className="flex min-h-0 flex-1 items-center justify-center bg-background p-8"
+      aria-busy aria-label="Loading image">
+      <Skeleton className="aspect-[4/3] max-h-[70vh] w-full max-w-xl rounded-xl" />
+    </section>
+  )
+  if (kind === 'markdown' && markdownMaximized) return (
+    <section className="fixed inset-0 z-50 overflow-hidden bg-background px-8 pt-24" aria-busy aria-label="Loading document">
+      <div className="mx-auto max-w-3xl space-y-4">
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-5/6" />
+        <Skeleton className="h-4 w-4/5" />
+        <Skeleton className="mt-10 h-6 w-2/5" />
+        <Skeleton className="h-4 w-11/12" />
+      </div>
+    </section>
+  )
+  if (kind === 'excalidraw') return <CanvasSkeleton />
   return (
     <div
       ref={paneRowRef}
@@ -141,8 +170,18 @@ function SurfaceSkeleton({
         ))}
       </section>
       <div className="bg-border/40" />
-      <section className="flex min-h-0 items-center justify-center overflow-hidden p-8">
-        <DiagramSkeleton />
+      <section className={cn('min-h-0 overflow-hidden p-8', kind === 'markdown'
+        ? 'space-y-4' : 'flex items-center justify-center')}>
+        {kind === 'markdown' ? (
+          <>
+            <Skeleton className="h-7 w-2/3" />
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="h-3.5 w-5/6" />
+            <Skeleton className="h-3.5 w-4/5" />
+            <Skeleton className="mt-8 h-5 w-2/5" />
+            <Skeleton className="h-3.5 w-11/12" />
+          </>
+        ) : <DiagramSkeleton />}
       </section>
     </div>
   )
@@ -177,16 +216,22 @@ export default function DocumentSurface({
   config,
   repo,
   onOpenLinkedFile,
+  onHoverFile,
+  markdownMaximized,
+  onMarkdownMaximizedChange,
   linkTrail,
   markdownScrollTop,
   onBack,
   assetKind = null,
   awaitingFileChoice,
   loading,
+  loadingKind,
+  loadingRasterImage,
 }: DocumentSurfaceProps) {
   // Ahead of every other branch: until the document is resolved there is no kind to
   // dispatch on, and each guess painted its own screen on the way through.
-  if (loading) return <SurfaceSkeleton paneRowRef={paneRowRef} editorRatio={editorRatio} />
+  if (loading) return <SurfaceSkeleton paneRowRef={paneRowRef} editorRatio={editorRatio}
+    kind={loadingKind} markdownMaximized={markdownMaximized} rasterImage={loadingRasterImage} />
   // Before the surface picks an editor: with files in the workspace and none of them
   // open, there is no document here to edit, and the scratch kinds are no longer
   // offered once a workspace has files of its own.
@@ -284,6 +329,9 @@ export default function DocumentSurface({
             path={openPath}
             repo={repo}
             onOpenFile={repo ? onOpenLinkedFile : undefined}
+            onHoverFile={repo ? onHoverFile : undefined}
+            maximized={markdownMaximized}
+            onMaximizedChange={onMarkdownMaximizedChange}
             navigationScrollTop={markdownScrollTop}
             onBack={linkTrail.length > 0 ? onBack : undefined}
             backLabel={linkTrail[linkTrail.length - 1]?.path}

@@ -9,6 +9,7 @@ import '@excalidraw/excalidraw/index.css'
 import { parseScene, scenesEqual } from '@/lib/excalidraw'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import CanvasSkeleton from './CanvasSkeleton'
 
 /**
  * The real Excalidraw editor. Loaded only through `Canvas.tsx`'s dynamic import — never import this
@@ -70,6 +71,23 @@ export default function CanvasInner({
 
   const [syncError, setSyncError] = useState<string | null>(null)
   const [apiReady, setApiReady] = useState(false)
+  const [sceneReady, setSceneReady] = useState(false)
+
+  // Keep the shared skeleton over Excalidraw's own loading message until its
+  // initial scene and viewport have had time to settle after the API arrives.
+  useEffect(() => {
+    if (!apiReady) return
+    let frame = 0
+    const reveal = () => {
+      if (apiRef.current?.getAppState().isLoading) {
+        frame = requestAnimationFrame(reveal)
+        return
+      }
+      frame = requestAnimationFrame(() => setSceneReady(true))
+    }
+    frame = requestAnimationFrame(reveal)
+    return () => cancelAnimationFrame(frame)
+  }, [apiReady])
 
   const hostRef = useRef<HTMLDivElement | null>(null)
   /** "Maximized" fills the browser window instead of entering real fullscreen. */
@@ -212,6 +230,7 @@ export default function CanvasInner({
           {syncError}
         </p>
       ) : null}
+      {!sceneReady ? <CanvasSkeleton overlay /> : null}
       <Excalidraw
         excalidrawAPI={(api) => {
           apiRef.current = api

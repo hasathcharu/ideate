@@ -177,6 +177,29 @@ together:
 File and tree requests carry a selection generation. A response from an older
 repository, branch, or file selection cannot replace the current view. History
 page and version reads use the same latest-request rule.
+Selecting the already-active repository and branch in a picker only closes the
+picker. It does not reset the workspace or rerun last-file restoration, which
+already completed for that workspace key. Selecting the same repository while
+on another branch still switches to its default branch.
+
+### GitHub file opening uses the browser cache
+
+Hovering a sidebar file or an in-repo Markdown link starts a full file download
+immediately if its committed copy is not already in IndexedDB. The download is
+shared per repo/branch/path and continues when the pointer leaves or the user
+opens another file. Opening a file adopts its cached body and SHA first. If a
+hover download is still in flight, the destination shows a kind-specific skeleton
+after a short delay while the same download finishes; a fast cache read never
+flashes a skeleton. The outgoing dirty draft is still persisted
+before selection changes.
+
+Every open checks the branch's current blob SHA in the background. If it differs
+from the displayed committed baseline, the toolbar offers **Refresh file**; the
+working document is not silently replaced. Refresh fetches the latest body. A
+clean document fast-forwards; a draft with different edits opens the existing
+conflict dialog, whose overwrite and start-over choices remain explicit. Draft
+base revisions keep their original SHA until reconciliation. A read for an older
+selection cannot adopt content or show its update prompt on the new selection.
 
 History display pages are slices of a stable upstream commit stream. The server
 uses a fixed GitHub page size, applies rename-away filtering before display

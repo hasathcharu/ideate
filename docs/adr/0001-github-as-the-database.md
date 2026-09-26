@@ -10,8 +10,9 @@
 
 A diagram editor that uses **the user's GitHub repo as the database** — there is
 no app database, and no server of ours ever stores a document. IndexedDB holds
-the uncommitted working copy; GitHub holds the committed state, on whichever branch
-is currently selected. Save = commit; open old version = checkout.
+the uncommitted working copy and a disposable cache of committed GitHub file
+bodies; GitHub remains the authority for committed state on the selected branch.
+Save = commit; open old version = checkout.
 
 ### Local mode has files too, and IndexedDB is their saved state
 
@@ -25,7 +26,7 @@ The shape is deliberately *the same relationship*, not a second concept:
 
 |                  | GitHub mode                | Local mode              |
 |------------------|----------------------------|-------------------------|
-| Saved state      | a commit on the branch     | `local-files[path]` in IndexedDB |
+| Saved state      | a commit on the branch (`github-files` is a browser cache) | `local-files[path]` in IndexedDB |
 | Working copy     | `drafts[owner/repo@branch:path]` | `drafts[local:file:path]` |
 | Save means       | commit                     | write the local file    |
 | `loadedSha`      | the blob sha               | `'local'` (a sentinel)  |

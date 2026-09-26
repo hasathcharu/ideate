@@ -1,14 +1,14 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { readFile } from '@/app/actions/github'
+import { downloadGitHubFile } from '@/lib/githubFileCache'
 import { renderToSvg } from '@/lib/mermaid'
 import { renderMarkdown, type MarkdownPart, type MarkdownRepoLocator } from '@/lib/markdown'
 import type { MermaidUserConfig } from '@/lib/mermaidConfig'
 import { fileKind } from '@/lib/tree'
 import { sceneSummary } from '@/lib/excalidraw'
 import { handleExpiredSession } from '@/lib/sessionExpiry'
-import { docIdForFile, readDraftResult } from '@/lib/storage'
+import { docIdForFile, readCachedGitHubFile, readDraftResult } from '@/lib/storage'
 import { useInnerHtml } from '@/lib/hooks'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
@@ -22,12 +22,10 @@ import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
  *  content is off the bottom of the card anyway. */
 const PREVIEW_SOURCE_LIMIT = 1500
 
-/** What a fetch produced, cached so repeated hovers cost nothing. */
+/** What a fetch produced for this card. */
 type Loaded =
   | { ok: true; content: string }
   | { ok: false; message: string }
-
-const cache = new Map<string, Loaded>()
 
 const CARD_WIDTH = 380
 const CARD_MAX_HEIGHT = 300
@@ -42,10 +40,6 @@ function cardPosition(anchor: HTMLElement): { left: number; top: number } {
   const flip = below + CARD_MAX_HEIGHT > window.innerHeight && rect.top > CARD_MAX_HEIGHT
   const top = flip ? Math.max(8, rect.top - CARD_MAX_HEIGHT - 8) : below
   return { left, top }
-}
-
-function cacheKey(repo: MarkdownRepoLocator, path: string): string {
-  return `${repo.owner}/${repo.name}@${repo.branch}:${path}`
 }
 
 /** First `PREVIEW_SOURCE_LIMIT` characters, cut at a line boundary so the render
@@ -80,39 +74,34 @@ export default function FileHoverCard({
   onPointerLeave,
 }: FileHoverCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const key = cacheKey(repo, path)
-  const [loaded, setLoaded] = useState<Loaded | null>(() => cache.get(key) ?? null)
+  const key = docIdForFile(repo.owner, repo.name, repo.branch, path)
+  const { owner, name, branch } = repo
+  const [loaded, setLoaded] = useState<Loaded | null>(null)
 
   useEffect(() => {
-    const cached = cache.get(key)
-    if (cached) {
-      setLoaded(cached)
-      return
-    }
     let cancelled = false
     setLoaded(null)
-    void readFile(repo.owner, repo.name, path, repo.branch).then(async (res) => {
-      // A never-committed file isn't on the branch, so the read 404s — but the file does exist
-      // here, in the sidebar and one click away, and its draft is the only copy.
-      const draft = res.ok
-        ? null
-        : await readDraftResult(docIdForFile(repo.owner, repo.name, repo.branch, path))
-      const result: Loaded = res.ok
+    void (async () => {
+      const cached = await readCachedGitHubFile(key)
+      if (cached.status === 'ok') {
+        if (!cancelled) setLoaded({ ok: true, content: cached.value.content })
+        return
+      }
+      const res = await downloadGitHubFile({ owner, name, branch }, path)
+      if (!res.ok && handleExpiredSession(res.error)) return
+      // An uncommitted file has no GitHub blob; its draft is its only body.
+      const draft = res.ok ? null : await readDraftResult(key)
+      if (!cancelled) setLoaded(res.ok
         ? { ok: true, content: res.data.content }
         : draft?.status === 'ok'
           ? { ok: true, content: draft.value.content }
           : { ok: false, message: draft?.status === 'invalid' || draft?.status === 'unavailable'
-            ? `Draft is ${draft.status} in browser storage.` : res.error.message }
-      // A dead session is global, not local to this preview — the shared handler
-      // signs out and navigates, so there is nothing to show here.
-      if (!res.ok && handleExpiredSession(res.error)) return
-      cache.set(key, result)
-      if (!cancelled) setLoaded(result)
-    })
+            ? `Draft is ${draft.status} in browser storage.` : res.error.message })
+    })()
     return () => {
       cancelled = true
     }
-  }, [key, path, repo.owner, repo.name, repo.branch])
+  }, [key, path, owner, name, branch])
 
   const kind = fileKind(path)
   const Icon = kind === 'excalidraw' ? ExcalidrawIcon : kind === 'markdown' ? MarkdownIcon : MermaidIcon

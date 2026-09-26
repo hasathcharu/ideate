@@ -30,7 +30,7 @@ Rule numbers remain stable because source comments and ADRs refer to them.
 2. **Never expose GitHub access or refresh tokens to client code.** Keep them out of
    session callback results, client props, and browser storage. Read credentials
    server-side through `getGitHubToken()`.
-3. **IndexedDB holds drafts and local-mode saved files; localStorage holds only app config.** Report
+3. **IndexedDB holds drafts, local-mode saved files, and cached GitHub copies; localStorage holds only app config.** Report
    document-storage failures. Store Agent Link's switch and pairing code in per-tab
    sessionStorage. Keep `AppConfig.mcpOrigin` in shared config.
 4. **Current-content operations take the caller's branch.** History reads take an

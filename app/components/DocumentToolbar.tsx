@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowLeft, FileDiff, Map, Plug, PlugZap, Settings2, WrapText } from 'lucide-react'
+import { ArrowLeft, FileDiff, Map, Plug, PlugZap, RefreshCw, Settings2, WrapText } from 'lucide-react'
 import { ExcalidrawIcon, MarkdownIcon, MermaidIcon } from './icons'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,6 +42,9 @@ export interface DocumentToolbarProps {
   showDiff: boolean
   canDiff: boolean
   onToggleDiff: () => void
+  updateAvailable: boolean
+  refreshingFile: boolean
+  onRefreshFile: () => void
   config: AppConfig
   updateConfig: (patch: Partial<AppConfig>) => void
   currentTheme: string
@@ -72,6 +75,9 @@ export default function DocumentToolbar({
   showDiff,
   canDiff,
   onToggleDiff,
+  updateAvailable,
+  refreshingFile,
+  onRefreshFile,
   config,
   updateConfig,
   currentTheme,
@@ -124,6 +130,12 @@ export default function DocumentToolbar({
         </div>
       ) : null}
       <div className="ml-auto flex items-center gap-1.5">
+        {updateAvailable && !loading ? (
+          <Button size="sm" variant="outline" className="h-7 gap-1.5" disabled={refreshingFile}
+            onClick={onRefreshFile} title="Load the newer GitHub version">
+            <RefreshCw className={refreshingFile ? 'animate-spin' : ''} /> Refresh file
+          </Button>
+        ) : null}
         {kind !== 'excalidraw' ? (
           <Button
             size="icon-sm"

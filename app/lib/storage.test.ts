@@ -14,7 +14,10 @@ beforeEach(async () => {
   })
   storage = await import('./storage')
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 describe('document storage boundary', () => {
   it('keeps full workspace identity in draft keys', () => {
@@ -42,6 +45,102 @@ describe('document storage boundary', () => {
     await expect(reloaded.readDraftResult('local:file:a.mmd')).resolves.toMatchObject({
       status: 'ok', value: { content: 'working' },
     })
+  })
+
+  it('upgrades a version-one database without changing saved drafts', async () => {
+    const old = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('ideate-documents', 1)
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore('local-files')
+        request.result.createObjectStore('drafts')
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const tx = old.transaction('drafts', 'readwrite')
+    tx.objectStore('drafts').put({ version: 2, content: 'unsaved', updatedAt: 1,
+      baseRevision: { status: 'known', revision: 'base' } }, 'owner/repo@main:a.mmd')
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error)
+    })
+    old.close()
+    await expect(storage.openDocumentStorage()).resolves.toEqual({ ok: true })
+    await expect(storage.readDraftResult('owner/repo@main:a.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'unsaved', baseRevision: { revision: 'base' } },
+    })
+    await expect(storage.readCachedGitHubFile('owner/repo@main:a.mmd')).resolves.toEqual({ status: 'missing' })
+  })
+
+  it('stores committed copies separately from drafts and branches', async () => {
+    const main = storage.docIdForFile('owner', 'repo', 'main', 'a.mmd')
+    const feature = storage.docIdForFile('owner', 'repo', 'feature', 'a.mmd')
+    await storage.writeDraftResult(main, 'working', { status: 'known', revision: 'old' })
+    await storage.writeCachedGitHubFile(main, 'saved', 'old')
+    await storage.writeCachedGitHubFile(feature, 'other branch', 'other')
+    await expect(storage.readCachedGitHubFile(main)).resolves.toMatchObject({
+      status: 'ok', value: { content: 'saved', sha: 'old' },
+    })
+    await expect(storage.readCachedGitHubFile(feature)).resolves.toMatchObject({
+      status: 'ok', value: { content: 'other branch', sha: 'other' },
+    })
+    await expect(storage.readDraftResult(main)).resolves.toMatchObject({
+      status: 'ok', value: { content: 'working' },
+    })
+  })
+
+  it('expires GitHub copies after one day and removes them on the next app load', async () => {
+    const clock = vi.spyOn(Date, 'now')
+    const expired = storage.docIdForFile('owner', 'repo', 'main', 'expired.mmd')
+    const fresh = storage.docIdForFile('owner', 'repo', 'main', 'fresh.mmd')
+    clock.mockReturnValue(1_000)
+    await storage.writeCachedGitHubFile(expired, 'old', 'old-sha')
+    await storage.writeDraftResult(expired, 'unsaved', { status: 'known', revision: 'old-sha' })
+    await storage.writeLocalFileResult('local.mmd', 'local content')
+
+    clock.mockReturnValue(1_000 + 24 * 60 * 60 * 1000)
+    await expect(storage.readCachedGitHubFile(expired)).resolves.toEqual({ status: 'missing' })
+    await storage.writeCachedGitHubFile(fresh, 'new', 'new-sha')
+    await expect(storage.deleteExpiredGitHubFiles()).resolves.toEqual({ ok: true })
+
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('ideate-documents', 2)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const tx = db.transaction('github-files', 'readonly')
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const request = tx.objectStore('github-files').getAllKeys()
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    db.close()
+    expect(keys).toEqual([fresh])
+    await expect(storage.readDraftResult(expired)).resolves.toMatchObject({
+      status: 'ok', value: { content: 'unsaved' },
+    })
+    await expect(storage.readLocalFileResult('local.mmd')).resolves.toMatchObject({
+      status: 'ok', value: { content: 'local content' },
+    })
+  })
+
+  it('removes older GitHub cache records without an expiry', async () => {
+    await storage.openDocumentStorage()
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('ideate-documents', 2)
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const id = storage.docIdForFile('owner', 'repo', 'main', 'legacy.mmd')
+    const tx = db.transaction('github-files', 'readwrite')
+    tx.objectStore('github-files').put({ content: 'legacy', sha: 'old', updatedAt: 1 }, id)
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error)
+    })
+    db.close()
+    await expect(storage.deleteExpiredGitHubFiles()).resolves.toEqual({ ok: true })
+    await expect(storage.readCachedGitHubFile(id)).resolves.toEqual({ status: 'missing' })
   })
 
   it('persists local files and lists paths without loading their bodies', async () => {
@@ -102,7 +201,7 @@ describe('document storage boundary', () => {
   it('does not migrate the unversioned development draft format', async () => {
     await storage.openDocumentStorage()
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('ideate-documents', 1)
+      const request = indexedDB.open('ideate-documents')
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })
@@ -119,7 +218,7 @@ describe('document storage boundary', () => {
   it('rejects a malformed versioned envelope', async () => {
     await storage.openDocumentStorage()
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('ideate-documents', 1)
+      const request = indexedDB.open('ideate-documents')
       request.onsuccess = () => resolve(request.result)
       request.onerror = () => reject(request.error)
     })

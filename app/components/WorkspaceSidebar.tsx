@@ -34,6 +34,7 @@ export interface WorkspaceSidebarProps {
   expandedPaths: ReadonlySet<string>
   onToggleDir: (path: string) => void
   onOpenFile: (path: string) => void
+  onHoverFile?: (path: string) => void
   onDelete: (node: TreeNode) => void
   onRename: (node: TreeNode) => void
 }
@@ -62,6 +63,7 @@ export default function WorkspaceSidebar({
   expandedPaths,
   onToggleDir,
   onOpenFile,
+  onHoverFile,
   onDelete,
   onRename,
 }: WorkspaceSidebarProps) {
@@ -158,6 +160,7 @@ export default function WorkspaceSidebar({
             branch={repoBranch ?? ''}
             searchQuery={searching ? fileFilter.trim() : undefined}
             onOpenFile={onOpenFile}
+            onHoverFile={onHoverFile}
             onDelete={onDelete}
             onNewFile={onNewFile}
             onUploadImage={onUploadImage}
