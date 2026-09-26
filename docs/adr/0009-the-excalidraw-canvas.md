@@ -30,6 +30,14 @@ no part of the ~1MB bundle; the woff2 files themselves stay unfetched until
 something is measured or drawn against them. See
 [ADR 0011](0011-agent-link.md) for the bug that made this necessary.
 
+`CanvasSkeleton` is the same placeholder during a slow file read, the dynamic
+editor import, and Excalidraw's initial scene setup. `CanvasInner` covers the
+library's own loading message until its API reports the scene loaded and a paint
+frame has passed. Keep this placeholder outside the lazy bundle for the import
+phase. Excalidraw's `.LoadingMessage` has z-index 999, so the canvas host hides it
+and the shared skeleton sits above that layer; no second loading message should
+appear.
+
 ## Rule 9
 
 **Scene dirty-tracking is semantic, never byte-for-byte.** Re-serializing a

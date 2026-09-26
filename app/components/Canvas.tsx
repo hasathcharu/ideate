@@ -1,7 +1,7 @@
 'use client'
 
 import dynamic from 'next/dynamic'
-import { Loader2 } from 'lucide-react'
+import CanvasSkeleton from './CanvasSkeleton'
 import type { CanvasInnerProps } from './CanvasInner'
 
 declare global {
@@ -29,11 +29,7 @@ const CanvasInner = dynamic(
   },
   {
     ssr: false,
-    loading: () => (
-      <div className="flex size-full items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" /> Loading canvas…
-      </div>
-    ),
+    loading: () => <CanvasSkeleton />,
   },
 )
 

@@ -78,6 +78,10 @@ export interface MarkdownPreviewProps {
    *  link does. Omitted (e.g. the read-only history preview) leaves such links
    *  pointing at their GitHub page. */
   onOpenFile?: (path: string, scrollTop: number) => void
+  onHoverFile?: (path: string) => void
+  /** Controlled reading view for the editor; history previews may leave this unset. */
+  maximized?: boolean
+  onMaximizedChange?: (maximized: boolean) => void
   /** Offset to apply when a link navigation changes `path`: zero when moving
    *  forward, or the saved position when returning. */
   navigationScrollTop?: number
@@ -122,9 +126,7 @@ function blockForLine(container: HTMLElement, line: number): HTMLElement | null 
   return best
 }
 
-/** How long the pointer has to rest on an in-repo link before its preview is
- *  fetched. Long enough that dragging the mouse across a paragraph of links
- *  doesn't fetch every one of them. */
+/** Delay before showing a hover card; the background download starts on entry. */
 const HOVER_DELAY_MS = 350
 
 /** How long the preview outlives the pointer leaving the link — or leaving the card. */
@@ -156,6 +158,9 @@ export default function MarkdownPreview({
   path = null,
   repo = null,
   onOpenFile,
+  onHoverFile,
+  maximized,
+  onMaximizedChange,
   navigationScrollTop = 0,
   onBack,
   backLabel,
@@ -215,7 +220,12 @@ export default function MarkdownPreview({
     [parts],
   )
 
-  const [isMaximized, setIsMaximized] = useState(false)
+  const [localMaximized, setLocalMaximized] = useState(false)
+  const isMaximized = maximized ?? localMaximized
+  const setIsMaximized = useCallback((next: boolean) => {
+    if (maximized === undefined) setLocalMaximized(next)
+    else onMaximizedChange?.(next)
+  }, [maximized, onMaximizedChange])
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   /** The document column — the subtree find-in-page searches. Narrower than
@@ -335,7 +345,7 @@ export default function MarkdownPreview({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isMaximized, openFind, findOpen, closeFind])
+  }, [isMaximized, openFind, findOpen, closeFind, setIsMaximized])
 
   /* ---------------------------------------------------------------- */
   /* Outline (full-window reading view)                                */
@@ -513,6 +523,8 @@ export default function MarkdownPreview({
       }
       const linkPath = link.dataset.mdRepoLink
       if (!linkPath) return
+      // Start the full download on entry; the preview card's delay is only visual.
+      onHoverFile?.(linkPath)
       // The same link, re-rendered into a new element under a pointer that never
       // moved (see `hoveredPathRef`). Adopt the node and leave everything else —
       // whatever is on screen or already on its way is still the right preview.
@@ -535,7 +547,7 @@ export default function MarkdownPreview({
         setHover({ path: linkPath, anchor: link })
       }, HOVER_DELAY_MS)
     },
-    [repo, scheduleClose, cancelClose, clearHoverTimer, hide],
+    [repo, onHoverFile, scheduleClose, cancelClose, clearHoverTimer, hide],
   )
 
   /** Copy a code block or an embedded diagram's source. */
@@ -805,7 +817,7 @@ export default function MarkdownPreview({
         <Button
           size="icon-xs"
           variant="ghost"
-          onClick={() => setIsMaximized((v) => !v)}
+          onClick={() => setIsMaximized(!isMaximized)}
           title={isMaximized ? 'Exit full window (Esc)' : 'Fill window'}
         >
           {isMaximized ? <Minimize2 /> : <Maximize2 />}

@@ -288,6 +288,10 @@ too.
 
 `useAgentLinkController`'s `resolveTarget` is where a path becomes a document, and there are three places one can be
 living: React state (the open one), an IndexedDB draft (never saved), or the saved store.
+For a background GitHub file, the saved-store read takes an unexpired
+`github-files` copy first and downloads into that cache on a miss. A draft still
+overlays that committed copy. Save All separately reads GitHub to verify its
+base revision before committing.
 A draft is layered over the saved content whenever it differs, because the draft is what
 the human would see if they opened it — answering with saved bytes is how an agent talks
 itself into re-doing an edit it made one call earlier. It reads the draft *straight from

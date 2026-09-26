@@ -128,7 +128,8 @@ relative links and images the way GitHub does:
   link navigation pushes onto it — opening a file from the tree clears it, because
   a Back button that then jumped to an unrelated file is worse than none.
 - **Resting on such a link previews the file** (`components/FileHoverCard.tsx`):
-  fetched through `readFile`, cached per repo+branch+path, rendered from a
+  pointer entry starts the shared IndexedDB download before the card delay;
+  the card reads the committed cache (or a never-committed file's draft), and renders a
   truncated copy of the source, and `pointer-events: none` so the card never has
   to negotiate hover with the link that opened it. A scene shows its element
   count — drawing a real thumbnail would mean pulling in the Excalidraw bundle
@@ -169,6 +170,11 @@ wants an animated scroll.
 Filling the window covers the toolbar, so the reading view carries its own **Back**
 button (`onBack`/`backLabel`) for the link trail described above. Anything else the
 toolbar owns and a reader needs has to be repeated there for the same reason.
+The shell owns whether the active Markdown preview fills the window. Linked-file
+navigation and Back may briefly show a loading skeleton or switch through another
+document kind; remounting the preview must restore the reading view. A slow linked
+Markdown load uses a full-window prose skeleton while reading, and a fast cached
+load keeps the previous view until the new document is ready.
 
 ### Find-in-document, and why nothing may decorate the DOM
 

@@ -821,6 +821,12 @@
 }
 
 /* Dress Excalidraw's UI in the app's active palette. */
+/* The shared canvas skeleton covers initialization. Excalidraw's own absolute
+   LoadingMessage has z-index: 999 and otherwise paints "Loading scene…" over it. */
+body .canvas-host .LoadingMessage {
+  display: none;
+}
+
 body .excalidraw,
 body .excalidraw.theme--dark {
   /* Surfaces */

@@ -292,6 +292,26 @@ export async function readFile(
   }
 }
 
+/** Check the current blob revision without sending the file body to the browser. */
+export async function readFileRevision(
+  owner: string,
+  repo: string,
+  path: string,
+  branch: string,
+): Promise<ActionResult<string>> {
+  const octokit = await getOctokit()
+  if (!octokit) return err(UNAUTHENTICATED)
+  try {
+    const { data } = await octokit.repos.getContent({ owner, repo, path, ref: branch })
+    if (Array.isArray(data) || data.type !== 'file') {
+      return err({ kind: 'not_found', message: 'That path is not a file.', status: 404 })
+    }
+    return ok(data.sha)
+  } catch (error) {
+    return err(mapError(error))
+  }
+}
+
 /** Open a binary repository file without decoding it as UTF-8. */
 export async function readBinaryFile(
   owner: string,

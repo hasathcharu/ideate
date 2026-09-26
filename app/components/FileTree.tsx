@@ -70,6 +70,7 @@ export interface FileTreeProps {
    *  different situations and only one of them is fixed by making a file. */
   searchQuery?: string
   onOpenFile: (path: string) => void
+  onHoverFile?: (path: string) => void
   onDelete: (node: TreeNode) => void
   /** Create a new file of `kind` inside this directory (path prefilled). */
   onNewFile: (dirPath: string, kind: FileKind) => void
@@ -86,6 +87,7 @@ export default function FileTree({
   branch,
   searchQuery,
   onOpenFile,
+  onHoverFile,
   onDelete,
   onNewFile,
   onRename,
@@ -131,6 +133,7 @@ export default function FileTree({
           expandedPaths={expandedPaths}
           onToggleDir={onToggleDir}
           onOpenFile={onOpenFile}
+          onHoverFile={onHoverFile}
           onDelete={onDelete}
           onNewFile={onNewFile}
           onRename={onRename}
@@ -149,6 +152,7 @@ interface ItemProps {
   expandedPaths: ReadonlySet<string>
   onToggleDir: (path: string) => void
   onOpenFile: (path: string) => void
+  onHoverFile?: (path: string) => void
   onDelete: (node: TreeNode) => void
   onNewFile: (dirPath: string, kind: FileKind) => void
   onRename: (node: TreeNode) => void
@@ -164,6 +168,7 @@ function TreeItem(props: ItemProps) {
     expandedPaths,
     onToggleDir,
     onOpenFile,
+    onHoverFile,
     onDelete,
     onNewFile,
     onRename,
@@ -243,6 +248,8 @@ function TreeItem(props: ItemProps) {
               className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-1"
               style={pad}
               onClick={() => onOpenFile(node.path)}
+              onPointerEnter={() => onHoverFile?.(node.path)}
+              onFocus={() => onHoverFile?.(node.path)}
             >
               {isRasterImageFile(node.path) || isSvgFile(node.path)
                 ? <ImageIcon className="size-3.5 shrink-0" />
