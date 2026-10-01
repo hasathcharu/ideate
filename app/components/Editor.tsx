@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChangeSet, EditorState, Compartment, StateEffect, StateField, type Extension } from '@codemirror/state'
 import {
   EditorView,
@@ -953,6 +953,7 @@ export interface EditorHandle {
 
 export interface EditorProps {
   documentId: string
+  scrollPositions?: Map<string, { top: number; left: number }>
   value: string
   onChange: (value: string) => void
   dark: boolean
@@ -991,6 +992,7 @@ export interface EditorProps {
 
 export default function Editor({
   documentId,
+  scrollPositions,
   value,
   onChange,
   dark,
@@ -1006,6 +1008,8 @@ export default function Editor({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const viewRef = useRef<EditorView | null>(null)
   const statesRef = useRef(new Map<string, EditorState>())
+  const localScrollPositions = useRef(new Map<string, { top: number; left: number }>())
+  const positions = scrollPositions ?? localScrollPositions.current
   const currentIdRef = useRef(documentId)
   const applyingExternalRef = useRef(false)
   const extensionsRef = useRef<Extension[]>([])
@@ -1026,8 +1030,9 @@ export default function Editor({
   onChangeRef.current = onChange
   onRevealPreviewRef.current = onRevealPreview
 
+  // Layout cleanup captures the scroll offset before React detaches the scroller.
   // Mount once.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hostRef.current) return
     const documentStates = statesRef.current
     const extensions = createEditorExtensions({
@@ -1061,6 +1066,7 @@ export default function Editor({
     })
     viewRef.current = view
     return () => {
+      positions.set(currentIdRef.current, { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft })
       view.destroy()
       viewRef.current = null
       documentStates.clear()
@@ -1074,12 +1080,13 @@ export default function Editor({
   useEffect(() => {
     const view = viewRef.current
     if (!view || currentIdRef.current === documentId) return
+    positions.set(currentIdRef.current, { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft })
     statesRef.current.set(currentIdRef.current, view.state)
     currentIdRef.current = documentId
     emittedRef.current = []
     const state = statesRef.current.get(documentId) ?? EditorState.create({ doc: value, extensions: extensionsRef.current })
     view.setState(state)
-  }, [documentId, value])
+  }, [documentId, value, positions])
 
   // Reconcile external value changes (open file, recover version, start over).
   useEffect(() => {
@@ -1101,6 +1108,25 @@ export default function Editor({
     })
     applyingExternalRef.current = false
   }, [value, documentId])
+
+  // Restore after content reconciliation, once CodeMirror has measured the new document.
+  // The surface owns the map so loading placeholders and non-text views retain it.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const position = positions.get(documentId) ?? { top: 0, left: 0 }
+    let cancelled = false
+    view.requestMeasure({
+      read: () => position,
+      write: (saved) => {
+        if (cancelled || currentIdRef.current !== documentId) return
+        view.scrollDOM.scrollTop = saved.top
+        view.scrollDOM.scrollLeft = saved.left
+        measureScrollRef.current()
+      },
+    })
+    return () => { cancelled = true }
+  }, [documentId, positions])
 
   // Swap the grammar when the open document's kind changes (e.g. opening a .md
   // after a .mmd), without tearing down the editor.

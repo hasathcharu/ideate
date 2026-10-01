@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef } from 'react'
 import type { KeyboardEvent, PointerEvent, RefObject } from 'react'
 import Canvas from './Canvas'
 import CanvasSkeleton from './CanvasSkeleton'
@@ -228,6 +229,7 @@ export default function DocumentSurface({
   loadingKind,
   loadingRasterImage,
 }: DocumentSurfaceProps) {
+  const editorScrollPositions = useRef(new Map<string, { top: number; left: number }>())
   // Ahead of every other branch: until the document is resolved there is no kind to
   // dispatch on, and each guess painted its own screen on the way through.
   if (loading) return <SurfaceSkeleton paneRowRef={paneRowRef} editorRatio={editorRatio}
@@ -291,6 +293,7 @@ export default function DocumentSurface({
         <Editor
           ref={editorRef}
           documentId={documentId}
+          scrollPositions={editorScrollPositions.current}
           value={text}
           onChange={onChange}
           dark={editorDark}

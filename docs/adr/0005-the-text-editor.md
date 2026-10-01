@@ -12,7 +12,12 @@
 per-document setting swapped through a `Compartment` (language, theme, soft wrap)
 rather than by remounting. Each full document identity retains its own `EditorState`,
 including undo history and selection, while the same `EditorView` displays the active
-state. Switching identities never records the previous document as an undoable
+state. The document surface also retains vertical and horizontal source-editor
+scroll offsets by full document identity for the lifetime of the page. Switching
+files restores the saved offset after CodeMirror measures the incoming content;
+unvisited files start at the top. This scroll cache survives loading placeholders,
+canvas, and Diff, independently of the editor's shorter-lived undo cache. Reloading
+the page clears scroll positions. Switching identities never records the previous document as an undoable
 replacement. A deliberate external edit or revert within one identity remains
 undoable. Leaving text mode for the canvas or entering Diff unmounts the editor and
 ends these in-memory history sessions; the working content remains in `WorkspaceStore`.

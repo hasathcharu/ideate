@@ -149,12 +149,13 @@ relative links and images the way GitHub does:
   above 30 MB.
 - `#anchor` links scroll the reading pane, using the heading slugs.
 
-### Full-window markdown gets an outline
+### Markdown gets an outline
 
 `renderMarkdown` returns `{ parts, headings }`, and maximizing the preview turns
 it into a reading view with a Contents panel (scroll-spy on the pane's own scroll
-container). It is deliberately **only** offered when maximized: beside the editor
-the pane can't spare the width, and the document is right there in the source. The
+container). The Contents toggle is also available beside the fullscreen button in
+split view when the document has multiple headings. Split view starts with Contents
+closed; reading view starts open, with independent in-memory toggle states. The
 panel **floats over** the document rather than taking a column of it — a column
 shifts the prose and re-fits every diagram in it each time the panel is toggled —
 and it sits at the top right, directly under the window controls, so the panel and
@@ -178,7 +179,7 @@ load keeps the previous view until the new document is ready.
 
 ### Find-in-document, and why nothing may decorate the DOM
 
-Search is offered in the reading view only, for the same reason the outline is:
+Search is offered in the reading view only:
 beside the editor there is the source and CodeMirror's own ⌘F, which searches the
 thing you would then edit. Filling the window is the moment the document stops
 being something you are writing, and reading a long one is when you need to find a
