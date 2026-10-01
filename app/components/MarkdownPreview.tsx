@@ -351,13 +351,13 @@ export default function MarkdownPreview({
   /* Outline (full-window reading view)                                */
   /* ---------------------------------------------------------------- */
 
-  const [outlineOpen, setOutlineOpen] = useState(true)
+  const [readingOutlineOpen, setReadingOutlineOpen] = useState(true)
+  const [splitOutlineOpen, setSplitOutlineOpen] = useState(false)
+  const outlineOpen = isMaximized ? readingOutlineOpen : splitOutlineOpen
+  const setOutlineOpen = isMaximized ? setReadingOutlineOpen : setSplitOutlineOpen
   const [activeHeading, setActiveHeading] = useState<string | null>(null)
-  // The outline is a reading aid: beside the editor the pane is too narrow to
-  // spare the width, and the document is right there in the source anyway. It
-  // floats at the top right, directly under the window controls, so the panel and
-  // the button that opens it are in the same place.
-  const showOutline = isMaximized && outlineOpen && headings.length > 1
+  // Float beneath the window controls in both split and full-window views.
+  const showOutline = outlineOpen && headings.length > 1
 
   const scrollToHeading = useCallback((id: string) => {
     const container = scrollRef.current
@@ -637,7 +637,7 @@ export default function MarkdownPreview({
           // fill, both full-width rounded rectangles — flush against each other
           // they merged into one block whenever the hovered entry sat beside the
           // active one.
-          className="absolute top-14 right-4 z-10 hidden max-h-[calc(100%-4.5rem)] w-64 space-y-px overflow-auto rounded-lg border bg-card/90 p-2 shadow-lg backdrop-blur sm:block supports-backdrop-filter:bg-card/75"
+          className="absolute top-14 right-4 z-10 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-2rem)] space-y-px overflow-auto rounded-lg border bg-card/90 p-2 shadow-lg backdrop-blur supports-backdrop-filter:bg-card/75"
         >
           <p className="px-2 pb-2 text-sm font-medium text-muted-foreground">Contents</p>
           {headings.map((heading) => (
@@ -803,12 +803,13 @@ export default function MarkdownPreview({
             <ArrowLeft />
           </Button>
         ) : null}
-        {isMaximized && headings.length > 1 ? (
+        {headings.length > 1 ? (
           <Button
             size="icon-xs"
             variant="ghost"
             onClick={() => setOutlineOpen((v) => !v)}
             aria-pressed={outlineOpen}
+            aria-label={outlineOpen ? 'Hide contents' : 'Show contents'}
             title={outlineOpen ? 'Hide contents' : 'Show contents'}
           >
             <List />
